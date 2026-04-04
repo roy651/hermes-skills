@@ -1,0 +1,21 @@
+# Secrets
+.env
+*.pem
+*.key
+*.p12
+*.jks
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
