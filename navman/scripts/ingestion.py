@@ -41,12 +41,26 @@ def _get_docling():
     return _docling_conv
 
 
+def release_models() -> None:
+    """Release docling model weights from memory. Call after a session completes."""
+    global _docling_conv
+    if _docling_conv is not None:
+        _docling_conv = None
+        import gc
+        gc.collect()
+        print("[ingestion] docling models released from memory", file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # LLM vision helper
 # ---------------------------------------------------------------------------
 
 def call_vision_llm(image_path: str, prompt: str, api_cfg: dict) -> str:
-    """Call an OpenAI-compatible vision endpoint; return response text."""
+    """Call an OpenAI-compatible vision endpoint; return response text.
+
+    Retries on 429 with exponential backoff (5s, 15s, 45s).
+    """
+    import time
     import requests
 
     with open(image_path, "rb") as f:
@@ -72,16 +86,21 @@ def call_vision_llm(image_path: str, prompt: str, api_cfg: dict) -> str:
         ],
     }
 
-    resp = requests.post(
-        api_cfg["url"],
-        headers={
-            "Authorization": f"Bearer {api_cfg['key']}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=60,
-    )
-    resp.raise_for_status()
+    headers = {
+        "Authorization": f"Bearer {api_cfg['key']}",
+        "Content-Type": "application/json",
+    }
+
+    delays = [5, 15, 45]
+    for attempt, delay in enumerate(delays + [None]):
+        resp = requests.post(api_cfg["url"], headers=headers, json=payload, timeout=60)
+        if resp.status_code == 429 and delay is not None:
+            print(f"[ingestion] rate-limited (429), retrying in {delay}s (attempt {attempt+1}/{len(delays)})...", file=sys.stderr)
+            time.sleep(delay)
+            continue
+        resp.raise_for_status()
+        break
+
     data = resp.json()
     return data["choices"][0]["message"]["content"].strip()
 

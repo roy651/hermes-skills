@@ -65,7 +65,7 @@ def export_assignments(
     _header_row(ws, headers)
 
     for a in sorted(assignments, key=lambda x: x["index"]):
-        fill = _SI_FILL if "ס→" in a["section"] else _IF_FILL
+        fill = _SI_FILL if "נה→" in a["section"] else _IF_FILL
         pts_cells = []
         for pid in a["points"]:
             pt = pt_map.get(pid)

@@ -18,9 +18,13 @@ if [ ! -d "$VENV" ]; then
     python3 -m venv "$VENV"
 fi
 
-# Install dependencies
-"$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet -r "$SKILL_DIR/requirements.txt"
+# Install dependencies only if not already satisfied
+if ! "$VENV/bin/python" -c "import requests, openpyxl" 2>/dev/null; then
+    echo "[navman] Installing dependencies (this may take a while for first install)..."
+    "$VENV/bin/pip" install --quiet --timeout 120 -r "$SKILL_DIR/requirements.txt"
+else
+    echo "[navman] Dependencies already installed, skipping pip install."
+fi
 
 mkdir -p "$SKILL_DIR/logs" "$SKILL_DIR/data/uploads" "$SKILL_DIR/data/exports"
 

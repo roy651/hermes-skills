@@ -349,11 +349,11 @@ def generate_assignments(
 
     if len(pool_si) < n_per_nav:
         raise ValueError(
-            f"לא נמצאו נקודות מתאימות למקטע ס→נקה (ייתכן שמרחקי המסלול קצרים מדי/ארוכים מדי)"
+            f"לא נמצאו נקודות מתאימות למקטע נה→נב (ייתכן שמרחקי המסלול קצרים מדי/ארוכים מדי)"
         )
     if len(pool_if) < n_per_nav:
         raise ValueError(
-            f"לא נמצאו נקודות מתאימות למקטע נקה→ס (ייתכן שמרחקי המסלול קצרים מדי/ארוכים מדי)"
+            f"לא נמצאו נקודות מתאימות למקטע נב→נס (ייתכן שמרחקי המסלול קצרים מדי/ארוכים מדי)"
         )
 
     # Greedy seed
@@ -362,11 +362,11 @@ def generate_assignments(
 
     si_assignments = _greedy_assignment(
         pool_si, start_pt, mid_pt, dist_cache, n_per_nav, min_km, max_km,
-        n_si, usage_si, "ס→נקה",
+        n_si, usage_si, "נה→נב",
     )
     if_assignments = _greedy_assignment(
         pool_if, mid_pt, finish_pt, dist_cache, n_per_nav, min_km, max_km,
-        n_if, usage_if, "נקה→ס",
+        n_if, usage_if, "נב→נס",
     )
 
     if not si_assignments and not if_assignments:
@@ -390,7 +390,7 @@ def generate_assignments(
     unique = len({pid for a in all_assignments for pid in a["points"]})
     print(
         f"[nav_algorithm] Generated {len(all_assignments)} assignments "
-        f"({len(si_assignments)} ס→נקה, {len(if_assignments)} נקה→ס), "
+        f"({len(si_assignments)} נה→נב, {len(if_assignments)} נב→נס), "
         f"{unique} unique points used",
         file=sys.stderr,
     )
@@ -404,8 +404,8 @@ def format_assignments_preview(assignments: list[dict], points_db: list[dict]) -
     for a in assignments:
         pts_str = " → ".join(str(pid) for pid in a["points"])
         lines.append(f"  {a['index']}. [{a['section']}] {pts_str} ({a['length_km']:.2f} ק\"מ)")
-    si = [a for a in assignments if "ס→" in a["section"]]
-    fi = [a for a in assignments if "נקה→" in a["section"]]
+    si = [a for a in assignments if "נה→" in a["section"]]
+    fi = [a for a in assignments if "נב→" in a["section"]]
     unique = len({pid for a in assignments for pid in a["points"]})
-    lines.append(f"\nסיכום: {len(si)} מקטעי ס→נקה, {len(fi)} מקטעי נקה→ס, {unique} נקודות ייחודיות")
+    lines.append(f"\nסיכום: {len(si)} מקטעי נה→נב, {len(fi)} מקטעי נב→נס, {unique} נקודות ייחודיות")
     return "\n".join(lines)

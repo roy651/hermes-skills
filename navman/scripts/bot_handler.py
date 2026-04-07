@@ -167,20 +167,20 @@ def _state_label(state: dict) -> str:
 def handle_help(chat_id: int, state: dict) -> None:
     text = (
         "NavMan — מערכת הכנת משימות ניווט\n\n"
-        "פקודות (עם קיצורים):\n"
-        "/session /s — סשן חדש\n"
-        "/status /st — מצב נוכחי\n"
-        "/upload_points /up — העלאת טבלת נקודות\n"
-        "/upload_map /um — העלאת תמונת מפה (אופציונלי)\n"
-        "/skip_map /sm — דילוג על סינון מפה\n"
-        "/confirm_map /cm — אישור נקודות מפה\n"
-        "/edit_map /em <ids> — עריכה ידנית של נקודות מפה\n"
-        "/special /sp <ס> <נקה> <ס> — הגדרת נקודות מיוחדות\n"
-        "/generate /gen <נק> <ממוצע> <מינ> <מקס> <משתתפים> — יצירת משימות\n"
-        "/upload_participants /upa — העלאת טבלת משתתפים\n"
-        "/assign /a — יצירת שיבוץ זוגות\n"
-        "/export /ex — יצוא XLS\n"
-        "/done /d — סיום העלאות (מפעיל עיבוד)\n\n"
+        "פקודות:\n"
+        "/session (/s) — סשן חדש\n"
+        "/status (/st) — מצב נוכחי\n"
+        "/upload_points (/up) — העלאת טבלת נקודות\n"
+        "/upload_map (/um) — העלאת תמונת מפה (אופציונלי)\n"
+        "/skip_map (/sm) — דילוג על סינון מפה\n"
+        "/confirm_map (/cm) — אישור נקודות מפה\n"
+        "/edit_map (/em) <ids> — עריכה ידנית של נקודות מפה\n"
+        "/special (/sp) <start_id> <mid_id> <finish_id> — נקודות נה/נב/נס\n"
+        "/generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants> — יצירת משימות\n"
+        "/upload_participants (/upa) — העלאת טבלת משתתפים\n"
+        "/assign (/a) — יצירת שיבוץ זוגות\n"
+        "/export (/ex) — יצוא XLS\n"
+        "/done (/d) — סיום העלאות (מפעיל עיבוד)\n\n"
         f"מצב נוכחי: {_state_label(state)}"
     )
     send(chat_id, text)
@@ -194,7 +194,7 @@ def handle_status(chat_id: int, state: dict) -> None:
         lines.append(f"נקודות מסוננות: {len(state['filtered_point_ids'])}")
     sp = state.get("special", {})
     if any(sp.values()):
-        lines.append(f"נקודות מיוחדות: ס={sp.get('start_id')} נקה={sp.get('mid_id')} ס={sp.get('finish_id')}")
+        lines.append(f"נקודות מיוחדות: נה={sp.get('start_id')} נב={sp.get('mid_id')} נס={sp.get('finish_id')}")
     if state["assignments"]:
         lines.append(f"משימות: {len(state['assignments'])}")
     if state["participants"]:
@@ -205,7 +205,10 @@ def handle_status(chat_id: int, state: dict) -> None:
 
 
 def handle_session(chat_id: int) -> dict:
+    ingestion.release_models()
     state = sess.reset(chat_id)
+    state["state"] = "awaiting_points_upload"
+    sess.save(chat_id, state)
     send(chat_id, "סשן חדש נפתח!\nהעלה טבלת נקודות ניווט:\n/upload_points (קובץ CSV/XLS או תמונות)")
     return state
 
@@ -251,7 +254,7 @@ def handle_skip_map(chat_id: int, state: dict) -> dict:
     state["state"] = "awaiting_special"
     sess.save(chat_id, state)
     n = len(state["filtered_point_ids"])
-    send(chat_id, f"דולג על סינון מפה — כל {n} נקודות בשימוש.\nהגדר נקודות מיוחדות:\n/special <ס> <נקה> <סיום>")
+    send(chat_id, f"דולג על סינון מפה — כל {n} נקודות בשימוש.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>")
     return state
 
 
@@ -264,7 +267,7 @@ def handle_confirm_map(chat_id: int, state: dict) -> dict:
     state["state"] = "awaiting_special"
     sess.save(chat_id, state)
     n = len(state["filtered_point_ids"])
-    send(chat_id, f"אושר — {n} נקודות בסינון.\nהגדר נקודות מיוחדות:\n/special <ס> <נקה> <סיום>")
+    send(chat_id, f"אושר — {n} נקודות בסינון.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>")
     return state
 
 
@@ -291,7 +294,7 @@ def handle_edit_map(chat_id: int, state: dict, args: str) -> dict:
     if state["state"] == "map_pending_confirm":
         state["state"] = "awaiting_special"
     sess.save(chat_id, state)
-    send(chat_id, f"עודכן — {len(ids)} נקודות בסינון.\nהגדר נקודות מיוחדות:\n/special <ס> <נקה> <סיום>")
+    send(chat_id, f"עודכן — {len(ids)} נקודות בסינון.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>")
     return state
 
 
@@ -301,16 +304,16 @@ def handle_special(chat_id: int, state: dict, args: str) -> dict:
         return state
     parts = args.split()
     if len(parts) != 3:
-        send(chat_id, "שימוש: /special <ס> <נקה> <סיום>\nדוגמה: /sp 240 265 261")
+        send(chat_id, "שימוש: /special (/sp) <start_id> <mid_id> <finish_id>\nדוגמה: /sp 240 265 261")
         return state
     try:
         start_id, mid_id, finish_id = int(parts[0]), int(parts[1]), int(parts[2])
     except ValueError:
-        send(chat_id, "❌ מספרים לא תקינים. שלוש מספרי נקודות נדרשים.")
+        send(chat_id, "❌ מספרים לא תקינים. שלושה מספרי נקודות נדרשים.")
         return state
 
     db_ids = {p["id"] for p in state["points_db"]}
-    for label, pid in [("ס", start_id), ("נקה", mid_id), ("סיום", finish_id)]:
+    for label, pid in [("נה (start)", start_id), ("נב (mid)", mid_id), ("נס (finish)", finish_id)]:
         if pid not in db_ids:
             send(chat_id, f"❌ נקודה {label} (ID={pid}) לא נמצאה בבסיס הנתונים")
             return state
@@ -320,8 +323,8 @@ def handle_special(chat_id: int, state: dict, args: str) -> dict:
     sess.save(chat_id, state)
     send(
         chat_id,
-        f"נקודות מיוחדות: ס={start_id}, נקה={mid_id}, סיום={finish_id}\n"
-        "צור משימות:\n/generate <נקודות> <ממוצע-ק\"מ> <מינ-ק\"מ> <מקס-ק\"מ> <משתתפים>\n"
+        f"נקודות מיוחדות: נה={start_id}, נב={mid_id}, נס={finish_id}\n"
+        "צור משימות:\n/generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants>\n"
         "דוגמה: /gen 3 8 6 10 16"
     )
     return state
@@ -336,7 +339,7 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
     if len(parts) != 5:
         send(
             chat_id,
-            "שימוש: /generate <נקודות> <ממוצע-ק\"מ> <מינ> <מקס> <משתתפים>\n"
+            "שימוש: /generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants>\n"
             "דוגמה: /gen 3 8 6 10 16",
         )
         return state
@@ -381,7 +384,7 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
 
     preview = nav_algorithm.format_assignments_preview(assignments, state["points_db"])
     send(chat_id, preview)
-    send(chat_id, "משימות נוצרו!\nהעלה טבלת משתתפים:\n/upload_participants (/upa)")
+    send(chat_id, "משימות נוצרו!\nהעלה טבלת משתתפים:\n/upload_participants (/upa)\nאחר כך: /done (/d)")
     return state
 
 
@@ -443,6 +446,7 @@ def handle_export(chat_id: int, state: dict) -> dict:
 
     if sent_any:
         send(chat_id, "✅ הקבצים נשלחו!")
+        ingestion.release_models()
     return state
 
 

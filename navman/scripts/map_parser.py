@@ -8,6 +8,7 @@ import base64
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 
@@ -59,17 +60,25 @@ def parse_map_image(image_path: str, all_point_ids: list[int], api_cfg: dict) ->
         ],
     }
 
-    resp = requests.post(
-        api_cfg["url"],
-        headers={
-            "Authorization": f"Bearer {api_cfg['key']}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=90,
-    )
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"].strip()
+    headers = {
+        "Authorization": f"Bearer {api_cfg['key']}",
+        "Content-Type": "application/json",
+    }
+
+    delays = [5, 15, 45]
+    for attempt, delay in enumerate(delays + [None]):
+        resp = requests.post(api_cfg["url"], headers=headers, json=payload, timeout=90)
+        if resp.status_code == 429 and delay is not None:
+            print(f"[map_parser] rate-limited (429), retrying in {delay}s (attempt {attempt+1}/{len(delays)})...", file=sys.stderr)
+            time.sleep(delay)
+            continue
+        resp.raise_for_status()
+        break
+
+    data = resp.json()
+    if "choices" not in data:
+        raise ValueError(f"תגובת LLM לא תקינה: {str(data)[:200]}")
+    content = data["choices"][0]["message"]["content"].strip()
 
     print(f"[map_parser] LLM response: {content[:200]}", file=sys.stderr)
 

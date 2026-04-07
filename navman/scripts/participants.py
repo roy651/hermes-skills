@@ -106,8 +106,8 @@ def assign_tasks(pairs: list[dict], assignments: list[dict]) -> list[dict]:
 
     Returns list of pairing dicts ready for export.
     """
-    si_tasks = [a for a in assignments if "ס→" in a["section"]]
-    if_tasks = [a for a in assignments if "נקה→" in a["section"]]
+    si_tasks = [a for a in assignments if "נה→" in a["section"]]
+    if_tasks = [a for a in assignments if "נב→" in a["section"]]
 
     random.shuffle(si_tasks)
     random.shuffle(if_tasks)
