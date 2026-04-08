@@ -19,6 +19,14 @@ from pathlib import Path
 
 import requests as http
 
+# Load .env from the skill root (navman/) so the bot can be started directly
+# with `python scripts/bot_handler.py` without manually sourcing .env.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -33,10 +41,27 @@ ALLOWED_CHAT_IDS = set(
     int(x.strip()) for x in os.environ.get("ALLOWED_CHAT_IDS", "").split(",") if x.strip()
 )
 
+# Model priority list: free models first, paid fallbacks after.
+# Override via VISION_MODELS (comma-separated) or VISION_MODEL (single).
+_DEFAULT_MODELS = [
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "qwen/qwen3.5-flash-02-23",
+    "meta-llama/llama-3.2-11b-vision-instruct",
+]
+_env_models = os.environ.get("VISION_MODELS", "")
+_env_model = os.environ.get("VISION_MODEL", "")
+_models = (
+    [m.strip() for m in _env_models.split(",") if m.strip()]
+    or ([_env_model] if _env_model else _DEFAULT_MODELS)
+)
+
 VISION_CFG = {
     "url": os.environ.get("VISION_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
     "key": os.environ.get("VISION_API_KEY", ""),
-    "model": os.environ.get("VISION_MODEL", "anthropic/claude-3-5-sonnet"),
+    "model": _models[0],
+    "models": _models,
 }
 
 LOG_FILE = SKILL_DIR / "logs" / "bot_handler.log"
@@ -135,9 +160,13 @@ ALIASES = {
     "cm": "confirm_map",
     "em": "edit_map",
     "sp": "special",
+    "ups": "upload_special",
     "gen": "generate",
     "a": "assign",
     "ex": "export",
+    "cc": "clear_cache",
+    "rp": "remove_point",
+    "ap": "add_point",
 }
 
 # ---------------------------------------------------------------------------
@@ -151,7 +180,8 @@ def _state_label(state: dict) -> str:
         "points_uploaded": "נקודות נטענו — העלה מפה (/um) או דלג (/sm)",
         "awaiting_map_upload": "ממתין להעלאת תמונת מפה (/um, אז /d)",
         "map_pending_confirm": "מחכה לאישור נקודות המפה (/cm) או עריכה (/em)",
-        "awaiting_special": "הגדר נקודות מיוחדות: /sp <התחלה> <אמצע> <סיום>",
+        "awaiting_special": "הגדר נקודות מיוחדות: /sp <id> <id> <id> או העלה תמונה (/ups)",
+        "awaiting_special_upload": "ממתין לתמונת נקודות מיוחדות (/ups, אז /d)",
         "ready_for_generate": "מוכן ליצירת משימות: /gen <נקודות> <ממוצע> <מינ> <מקס> <משתתפים>",
         "assignments_generated": "משימות נוצרו — העלה משתתפים (/upa, אז /d)",
         "awaiting_participants_upload": "ממתין להעלאת טבלת משתתפים (/upa, אז /d)",
@@ -175,12 +205,16 @@ def handle_help(chat_id: int, state: dict) -> None:
         "/skip_map (/sm) — דילוג על סינון מפה\n"
         "/confirm_map (/cm) — אישור נקודות מפה\n"
         "/edit_map (/em) <ids> — עריכה ידנית של נקודות מפה\n"
-        "/special (/sp) <start_id> <mid_id> <finish_id> — נקודות נה/נב/נס\n"
+        "/special (/sp) <start_id> <mid_id> <finish_id> — נקודות נה/נב/נס ידנית\n"
+        "/upload_special (/ups) — העלאת תמונת נקודות מיוחדות (כל פורמט)\n"
         "/generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants> — יצירת משימות\n"
         "/upload_participants (/upa) — העלאת טבלת משתתפים\n"
         "/assign (/a) — יצירת שיבוץ זוגות\n"
         "/export (/ex) — יצוא XLS\n"
-        "/done (/d) — סיום העלאות (מפעיל עיבוד)\n\n"
+        "/done (/d) — סיום העלאות (מפעיל עיבוד)\n"
+        "/clear_cache (/cc) — מחיקת מטמון פרסור (לפרסור מחדש)\n"
+        "/remove_point (/rp) <id> — הסרת נקודה מהבסיס\n"
+        "/add_point (/ap) <id> <X> <Y> [תיאור] — הוספה/עדכון נקודה ידנית\n\n"
         f"מצב נוכחי: {_state_label(state)}"
     )
     send(chat_id, text)
@@ -204,12 +238,75 @@ def handle_status(chat_id: int, state: dict) -> None:
     send(chat_id, "\n".join(lines))
 
 
+def handle_remove_point(chat_id: int, state: dict, args: str) -> dict:
+    if not state.get("points_db"):
+        send(chat_id, "❌ אין נקודות בבסיס הנתונים כעת.")
+        return state
+    try:
+        pid = int(args.strip())
+    except ValueError:
+        send(chat_id, "שימוש: /remove_point (/rp) <מזהה>\nדוגמה: /rp 54")
+        return state
+    if not any(p["id"] == pid for p in state["points_db"]):
+        send(chat_id, f"❌ נקודה {pid} לא נמצאה בבסיס.")
+        return state
+    state["points_db"] = [p for p in state["points_db"] if p["id"] != pid]
+    state["filtered_point_ids"] = [i for i in state["filtered_point_ids"] if i != pid]
+    sess.save(chat_id, state)
+    send(chat_id, f"✅ נקודה {pid} הוסרה. סה\"כ {len(state['points_db'])} נקודות בבסיס.")
+    return state
+
+
+def handle_add_point(chat_id: int, state: dict, args: str) -> dict:
+    if not state.get("points_db") and state["state"] == "init":
+        send(chat_id, "❌ התחל סשן תחילה (/s).")
+        return state
+    parts = args.split()
+    if len(parts) < 3:
+        send(chat_id, "שימוש: /add_point (/ap) <מזהה> <X> <Y> [תיאור]\nדוגמה: /ap 54 665000 3408000")
+        return state
+    try:
+        pid = int(parts[0])
+        x = float(parts[1].replace(",", "."))
+        y = float(parts[2].replace(",", "."))
+    except ValueError:
+        send(chat_id, "❌ ערכים לא תקינים. דוגמה: /ap 54 665000 3408000")
+        return state
+    if not (0 < pid < 10_000):
+        send(chat_id, "❌ מזהה נקודה חייב להיות בין 1 ל-9999.")
+        return state
+    if not (620_000 <= x <= 900_000) or not (3_300_000 <= y <= 3_700_000):
+        send(chat_id, "❌ קואורדינטות מחוץ לטווח ITM תקין.")
+        return state
+    description = " ".join(parts[3:]) if len(parts) > 3 else ""
+    pt = {"id": pid, "x": x, "y": y, "description": description}
+    db = {p["id"]: p for p in state.get("points_db", [])}
+    action = "עודכנה" if pid in db else "נוספה"
+    db[pid] = pt
+    state["points_db"] = sorted(db.values(), key=lambda p: p["id"])
+    if pid not in state.get("filtered_point_ids", []):
+        state["filtered_point_ids"].append(pid)
+        state["filtered_point_ids"].sort()
+    sess.save(chat_id, state)
+    send(chat_id, f"✅ נקודה {pid} {action}: ({x:.0f}, {y:.0f}){' — ' + description if description else ''}. סה\"כ {len(state['points_db'])} נקודות.")
+    return state
+
+
+def handle_clear_cache(chat_id: int) -> None:
+    cache_file = SKILL_DIR / "data" / "parse_cache.json"
+    if cache_file.exists():
+        cache_file.unlink()
+        send(chat_id, "✅ מטמון הפרסור נמחק — הפרסור הבא יבצע קריאה חדשה ל-LLM.")
+    else:
+        send(chat_id, "אין מטמון פרסור לניקוי.")
+
+
 def handle_session(chat_id: int) -> dict:
     ingestion.release_models()
     state = sess.reset(chat_id)
     state["state"] = "awaiting_points_upload"
     sess.save(chat_id, state)
-    send(chat_id, "סשן חדש נפתח!\nהעלה טבלת נקודות ניווט:\n/upload_points (קובץ CSV/XLS או תמונות)")
+    send(chat_id, "סשן חדש נפתח!\nהעלה טבלת נקודות ניווט:\n/upload_points (/up) — קובץ CSV/XLS או תמונות")
     return state
 
 
@@ -220,7 +317,7 @@ def handle_upload_points(chat_id: int, state: dict) -> dict:
     state["state"] = "awaiting_points_upload"
     state["pending_uploads"] = []
     sess.save(chat_id, state)
-    send(chat_id, "שלח את קובץ הנקודות (CSV/XLS) או תמונות של הטבלה.\nכשסיימת: /done")
+    send(chat_id, "שלח את קובץ הנקודות (CSV/XLS) או תמונות של הטבלה.\nכשסיימת: /done (/d)")
     return state
 
 
@@ -231,18 +328,21 @@ def handle_upload_map(chat_id: int, state: dict) -> dict:
     state["state"] = "awaiting_map_upload"
     state["pending_uploads"] = []
     sess.save(chat_id, state)
-    send(chat_id, "שלח תמונת מפה עם גבול מצויר. כשסיימת: /done")
+    send(chat_id, "שלח תמונת מפה עם גבול מצויר. כשסיימת: /done (/d)")
     return state
 
 
 def handle_upload_participants(chat_id: int, state: dict) -> dict:
-    if state["state"] not in ("assignments_generated",):
+    if state["state"] not in ("assignments_generated", "participants_uploaded", "fully_assigned"):
         send(chat_id, f"❌ צור משימות תחילה (/gen). מצב: {_state_label(state)}")
         return state
+    # Re-uploading clears previous participants and pairings
+    if state.get("pairings"):
+        state["pairings"] = []
     state["state"] = "awaiting_participants_upload"
     state["pending_uploads"] = []
     sess.save(chat_id, state)
-    send(chat_id, "שלח קובץ משתתפים (CSV/XLS) או תמונה. כשסיימת: /done")
+    send(chat_id, "שלח קובץ משתתפים (CSV/XLS) או תמונה. כשסיימת: /done (/d)")
     return state
 
 
@@ -331,7 +431,7 @@ def handle_special(chat_id: int, state: dict, args: str) -> dict:
 
 
 def handle_generate(chat_id: int, state: dict, args: str) -> dict:
-    if state["state"] != "ready_for_generate":
+    if state["state"] not in ("ready_for_generate", "assignments_generated", "awaiting_participants_upload", "participants_uploaded", "fully_assigned"):
         send(chat_id, f"❌ לא ניתן כעת. מצב: {_state_label(state)}")
         return state
 
@@ -378,18 +478,37 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
         send(chat_id, f"❌ שגיאה: {e}")
         return state
 
+    # Re-generating clears forward progress
+    if state.get("pairings") or state.get("participants"):
+        state["pairings"] = []
+        state["participants"] = []
+
     state["assignments"] = assignments
     state["state"] = "assignments_generated"
     sess.save(chat_id, state)
 
     preview = nav_algorithm.format_assignments_preview(assignments, state["points_db"])
     send(chat_id, preview)
+
+    # Coverage report
+    used_ids = {pid for a in assignments for pid in a["points"]}
+    available = len(state["filtered_point_ids"])
+    by_section: dict[str, list[float]] = {}
+    for a in assignments:
+        by_section.setdefault(a["section"], []).append(a["length_km"])
+    section_lines = "  ".join(
+        f"{sec}: {len(dists)} משימות, ממוצע {sum(dists)/len(dists):.1f}ק\"מ"
+        for sec, dists in sorted(by_section.items())
+    )
+    send(chat_id,
+         f"📊 כיסוי: {len(used_ids)} נקודות בשימוש מתוך {available} זמינות\n{section_lines}")
+
     send(chat_id, "משימות נוצרו!\nהעלה טבלת משתתפים:\n/upload_participants (/upa)\nאחר כך: /done (/d)")
     return state
 
 
 def handle_assign(chat_id: int, state: dict) -> dict:
-    if state["state"] not in ("participants_uploaded",):
+    if state["state"] not in ("participants_uploaded", "fully_assigned"):
         send(chat_id, f"❌ העלה משתתפים תחילה (/upa). מצב: {_state_label(state)}")
         return state
 
@@ -457,7 +576,7 @@ def handle_export(chat_id: int, state: dict) -> dict:
 def handle_incoming_file(chat_id: int, state: dict, file_id: str, mime: str, name: str) -> dict:
     """Queue an uploaded file for processing after /done."""
     upload_state = state.get("state", "")
-    if upload_state not in ("awaiting_points_upload", "awaiting_map_upload", "awaiting_participants_upload"):
+    if upload_state not in ("awaiting_points_upload", "awaiting_map_upload", "awaiting_participants_upload", "awaiting_special_upload"):
         send(chat_id, "לא ממתין לקבצים כעת. השתמש ב-/up, /um או /upa תחילה.")
         return state
 
@@ -465,7 +584,8 @@ def handle_incoming_file(chat_id: int, state: dict, file_id: str, mime: str, nam
     pending.append({"file_id": file_id, "mime": mime, "name": name})
     state["pending_uploads"] = pending
     sess.save(chat_id, state)
-    send(chat_id, f"קובץ התקבל ({name or 'תמונה'}). שלח עוד או: /done")
+    n_pending = len(state.get("pending_uploads", []))
+    send(chat_id, f"קובץ התקבל ({name or 'תמונה'}) — סה\"כ {n_pending}. שלח עוד או: /done (/d)")
     return state
 
 
@@ -483,6 +603,8 @@ def handle_done(chat_id: int, state: dict) -> dict:
         return _process_map_upload(chat_id, state, pending)
     elif upload_state == "awaiting_participants_upload":
         return _process_participants_uploads(chat_id, state, pending)
+    elif upload_state == "awaiting_special_upload":
+        return _process_special_upload(chat_id, state, pending)
     else:
         send(chat_id, f"❌ לא ממתין להעלאות כעת. מצב: {_state_label(state)}")
         return state
@@ -525,7 +647,8 @@ def _process_points_uploads(chat_id: int, state: dict, pending: list[dict]) -> d
         send(chat_id, "❌ לא הועלו קבצים. שלח קבצים ואז /done")
         return state
 
-    send(chat_id, "מעבד קבצי נקודות... ⏳")
+    n_files = len(pending)
+    send(chat_id, f"מוריד {n_files} קבצים... ⏳")
     downloads = _download_pending(chat_id, pending)
     if not downloads:
         send(chat_id, "❌ הורדת הקבצים נכשלה")
@@ -535,14 +658,16 @@ def _process_points_uploads(chat_id: int, state: dict, pending: list[dict]) -> d
     files = [(p, m) for p, m in downloads if not _is_image(m, p)]
 
     all_points = []
+    failed_images = []
     try:
         for path, _ in files:
             pts = ingestion.parse_nav_file(str(path))
             all_points.extend(pts)
 
         if images:
+            send(chat_id, f"שולח {len(images)} תמונות לניתוח AI... ⏳ (עשוי לקחת כדקה)")
             vision_cfg = VISION_CFG if VISION_CFG.get("key") else {}
-            pts = ingestion.parse_nav_images([str(p) for p, _ in images], vision_cfg)
+            pts, failed_images = ingestion.parse_nav_images([str(p) for p, _ in images], vision_cfg)
             all_points.extend(pts)
     except Exception as e:
         send(chat_id, f"❌ שגיאה בעיבוד הקבצים: {e}")
@@ -566,7 +691,32 @@ def _process_points_uploads(chat_id: int, state: dict, pending: list[dict]) -> d
 
     preview = ingestion.format_nav_preview(all_points)
     send(chat_id, preview)
-    send(chat_id, "נקודות נטענו!\nהעלה מפה לסינון (/upload_map) או דלג (/skip_map)")
+
+    if failed_images:
+        send(chat_id, f"⚠️ לא הצלחתי לנתח {len(failed_images)} תמונות: {', '.join(failed_images)}\nניתן להוסיף נקודות חסרות ידנית.")
+
+    # Report gaps in ID sequence
+    ids = sorted(p["id"] for p in all_points)
+    gaps = [i for i in range(ids[0], ids[-1] + 1) if i not in set(ids)]
+    if gaps:
+        gap_str = ", ".join(str(g) for g in gaps[:20])
+        if len(gaps) > 20:
+            gap_str += f" ועוד {len(gaps) - 20}"
+        send(chat_id,
+             f"⚠️ חסרות {len(gaps)} נקודות ברצף: {gap_str}\n"
+             "ניתן להוסיף אותן ידנית — פשוט כתוב למשל:\n"
+             "נקודה 54: 665000, 3408000")
+
+    # Export points as XLS so user can verify
+    try:
+        out_dir = EXPORT_DIR / str(chat_id)
+        out_dir.mkdir(exist_ok=True)
+        pts_path = export_mod.export_points(all_points, str(out_dir))
+        send_doc(chat_id, pts_path, caption="טבלת נקודות — לאימות ותיקון")
+    except Exception as e:
+        log(f"points export failed: {e}")
+
+    send(chat_id, "נקודות נטענו!\nהעלה מפה לסינון (/upload_map (/um)) או דלג (/skip_map (/sm))")
     return state
 
 
@@ -645,12 +795,209 @@ def _process_participants_uploads(chat_id: int, state: dict, pending: list[dict]
 
     n_part = len(all_parts)
     n_tasks = len(state["assignments"])
+    missing_scores = [p["name"] for p in all_parts if not str(p.get("score_raw", "")).strip() or str(p.get("score_raw", "")).strip() in ("0", "None", "")]
+    if missing_scores:
+        send(chat_id, f"⚠️ חסר ציון ל-{len(missing_scores)} משתתפים: {', '.join(missing_scores[:10])}\nהשיבוץ יסתמך על ציון 0 עבורם.")
     if n_part % 2 != 0:
         send(chat_id, f"⚠️ מספר משתתפים אי-זוגי ({n_part}) — אחד יהיה יחיד")
     if n_part > n_tasks:
         send(chat_id, f"⚠️ {n_part} משתתפים אך רק {n_tasks} משימות — ייתכן שיבוץ חוזר")
 
     send(chat_id, "משתתפים נטענו! צור שיבוץ: /assign (/a)")
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Special points upload
+# ---------------------------------------------------------------------------
+
+def handle_upload_special(chat_id: int, state: dict) -> dict:
+    if state["state"] not in ("awaiting_special", "ready_for_generate"):
+        send(chat_id, f"❌ לא ניתן כעת. מצב: {_state_label(state)}")
+        return state
+    state["state"] = "awaiting_special_upload"
+    state["pending_uploads"] = []
+    sess.save(chat_id, state)
+    send(chat_id,
+         "שלח תמונה של נקודות נה/נב/נס (כל פורמט קואורדינטות).\n"
+         "סדר בתמונה: נה ראשון, נב שני, נס שלישי.\n"
+         "כשסיימת: /done (/d)")
+    return state
+
+
+def _process_special_upload(chat_id: int, state: dict, pending: list[dict]) -> dict:
+    if not pending:
+        send(chat_id, "❌ לא הועלתה תמונה. שלח תמונה ואז /done")
+        return state
+
+    send(chat_id, "מנתח נקודות מיוחדות... ⏳")
+    downloads = _download_pending(chat_id, pending)
+    if not downloads:
+        send(chat_id, "❌ הורדת התמונה נכשלה")
+        return state
+
+    img_path, _ = downloads[0]
+    try:
+        coords = ingestion.parse_special_image(str(img_path), VISION_CFG)
+    except Exception as e:
+        send(chat_id, f"❌ ניתוח נכשל: {e}\nהשתמש ב-/sp ידנית.")
+        state["state"] = "awaiting_special"
+        sess.save(chat_id, state)
+        return state
+
+    if not coords:
+        send(chat_id, "❌ לא נמצאו קואורדינטות. נסה /sp ידנית.")
+        state["state"] = "awaiting_special"
+        sess.save(chat_id, state)
+        return state
+
+    # Assign new IDs beyond current max
+    max_id = max((p["id"] for p in state["points_db"]), default=0)
+    labels = ["נה (התחלה)", "נב (אמצע)", "נס (סיום)"]
+    role_keys = ["start_id", "mid_id", "finish_id"]
+    added = []
+    db = {p["id"]: p for p in state["points_db"]}
+
+    for i, coord in enumerate(coords[:3]):
+        new_id = max_id + i + 1
+        pt = {"id": new_id, "x": coord["x"], "y": coord["y"],
+              "description": coord.get("label", labels[i])}
+        db[new_id] = pt
+        state["special"][role_keys[i]] = new_id
+        added.append(f"{labels[i]}: ID={new_id} ({coord['x']:.0f}, {coord['y']:.0f})"
+                     + (f" — {coord['label']}" if coord.get("label") else ""))
+
+    state["points_db"] = sorted(db.values(), key=lambda p: p["id"])
+    # Keep filtered list in sync
+    for pt in added:
+        pass  # IDs already added to db; rebuild filtered if not filtered yet
+    state["filtered_point_ids"] = [p["id"] for p in state["points_db"]
+                                    if p["id"] in set(state["filtered_point_ids"])
+                                    or p["id"] > max_id]
+
+    state["pending_uploads"] = []
+    state["state"] = "ready_for_generate"
+    sess.save(chat_id, state)
+
+    summary = "\n".join(added)
+    sp = state["special"]
+    send(chat_id,
+         f"✅ נקודות מיוחדות נקלטו:\n{summary}\n\n"
+         f"נה={sp['start_id']}, נב={sp['mid_id']}, נס={sp['finish_id']}\n"
+         "לשינוי ידני: /sp <start_id> <mid_id> <finish_id>\n"
+         "ליצירת משימות: /gen <pts> <avg_km> <min_km> <max_km> <participants>")
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Free-text / LLM oversight handler
+# ---------------------------------------------------------------------------
+
+def handle_free_text(chat_id: int, state: dict, text: str) -> dict:
+    """
+    LLM-mediated handler for non-command input.
+    Understands user intent and can modify state (add/correct points).
+    Falls back to a simple nudge if LLM is unavailable.
+    """
+    if not VISION_CFG.get("key"):
+        if state["state"] != "init":
+            send(chat_id, f"מצב: {_state_label(state)}\nשלח /help לרשימת פקודות")
+        return state
+
+    import requests as _req
+
+    sp = state.get("special", {})
+    ctx = "\n".join(filter(None, [
+        f"State: {state.get('state', 'init')}",
+        f"Points in DB: {len(state.get('points_db', []))}",
+        f"Filtered points: {len(state.get('filtered_point_ids', []))}",
+        f"Assignments: {len(state.get('assignments', []))}",
+        f"Participants: {len(state.get('participants', []))}",
+        (f"Special: נה={sp.get('start_id')} נב={sp.get('mid_id')} נס={sp.get('finish_id')}" if any(sp.values()) else ""),
+    ]))
+
+    system = (
+        "You are NavMan, a Hebrew-language assistant for a navigation drill coordinator bot.\n"
+        "The bot manages: uploading a nav-points table, filtering by map, setting start/mid/finish points, "
+        "generating assignments, uploading participants, and exporting results.\n\n"
+        "Commands: /session(/s), /status(/st), /upload_points(/up), /done(/d), /skip_map(/sm), "
+        "/upload_map(/um), /confirm_map(/cm), /edit_map(/em), /special(/sp) <start> <mid> <finish>, "
+        "/generate(/gen) <pts> <avg_km> <min_km> <max_km> <participants>, "
+        "/upload_participants(/upa), /assign(/a), /export(/ex).\n\n"
+        f"Current context:\n{ctx}\n\n"
+        "The user sent free text. Respond helpfully in Hebrew (1-3 sentences).\n"
+        "If the user wants to ADD or CORRECT a navigation point, extract it and reply with a JSON block:\n"
+        "```json\n{\"action\":\"add_point\",\"id\":54,\"x\":665000.0,\"y\":3408000.0,\"description\":\"\"}\n```\n"
+        "Use action 'add_point' both for new points and corrections (overwrites by ID). "
+        "If the user wants to remove a point: {\"action\":\"remove_point\",\"id\":54}.\n"
+        "If the state is 'awaiting_participants_upload' and the user pastes a list of participants "
+        "(names and scores), extract it and reply with:\n"
+        "```json\n{\"action\":\"set_participants\",\"participants\":[{\"index\":1,\"name\":\"שם\",\"score_raw\":\"85\"}]}\n```\n"
+        "Only include the JSON block when the user clearly provides data. "
+        "Always also include a natural-language Hebrew message."
+    )
+
+    try:
+        payload = {
+            "model": VISION_CFG["model"],
+            "max_tokens": 400,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": text},
+            ],
+        }
+        headers = {"Authorization": f"Bearer {VISION_CFG['key']}", "Content-Type": "application/json"}
+        resp = _req.post(VISION_CFG["url"], headers=headers, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if "choices" not in data:
+            raise ValueError("no choices")
+        reply = data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log(f"handle_free_text LLM error: {e}")
+        send(chat_id, f"מצב: {_state_label(state)}\nשלח /help לרשימת פקודות")
+        return state
+
+    # Extract and execute any structured action
+    import re as _re, json as _json
+    action_match = _re.search(r"```json\s*(\{.*?\})\s*```", reply, _re.DOTALL)
+    if action_match:
+        try:
+            action = _json.loads(action_match.group(1))
+            act = action.get("action")
+            if act == "add_point":
+                pid = int(action["id"])
+                pt = {"id": pid, "x": float(action["x"]), "y": float(action["y"]),
+                      "description": action.get("description", "")}
+                db = {p["id"]: p for p in state.get("points_db", [])}
+                db[pid] = pt
+                state["points_db"] = sorted(db.values(), key=lambda p: p["id"])
+                if pid not in state.get("filtered_point_ids", []):
+                    state["filtered_point_ids"].append(pid)
+                sess.save(chat_id, state)
+                log(f"[{chat_id}] free_text added/corrected point {pid}")
+            elif act == "remove_point":
+                pid = int(action["id"])
+                state["points_db"] = [p for p in state.get("points_db", []) if p["id"] != pid]
+                state["filtered_point_ids"] = [i for i in state.get("filtered_point_ids", []) if i != pid]
+                sess.save(chat_id, state)
+                log(f"[{chat_id}] free_text removed point {pid}")
+            elif act == "set_participants":
+                participants = action.get("participants", [])
+                if participants:
+                    state["participants"] = participants
+                    state["pairings"] = []
+                    state["state"] = "participants_uploaded"
+                    sess.save(chat_id, state)
+                    log(f"[{chat_id}] free_text set {len(participants)} participants")
+        except Exception as e:
+            log(f"handle_free_text action parse error: {e}")
+
+    # Send the natural-language part (strip the json block)
+    message = _re.sub(r"```json.*?```", "", reply, flags=_re.DOTALL).strip()
+    if message:
+        send(chat_id, message)
+
     return state
 
 
@@ -662,9 +1009,7 @@ def dispatch(chat_id: int, text: str) -> None:
     state = sess.load(chat_id)
 
     if not text.startswith("/"):
-        # Non-command text — give a gentle nudge
-        if state["state"] != "init":
-            send(chat_id, f"מצב: {_state_label(state)}\nשלח /help לרשימת פקודות")
+        handle_free_text(chat_id, state, text)
         return
 
     parts = text.split(None, 1)
@@ -696,12 +1041,20 @@ def dispatch(chat_id: int, text: str) -> None:
         state = handle_edit_map(chat_id, state, args)
     elif cmd == "special":
         state = handle_special(chat_id, state, args)
+    elif cmd == "upload_special":
+        state = handle_upload_special(chat_id, state)
     elif cmd == "generate":
         state = handle_generate(chat_id, state, args)
     elif cmd == "assign":
         state = handle_assign(chat_id, state)
     elif cmd == "export":
         state = handle_export(chat_id, state)
+    elif cmd == "clear_cache":
+        handle_clear_cache(chat_id)
+    elif cmd == "remove_point":
+        state = handle_remove_point(chat_id, state, args)
+    elif cmd == "add_point":
+        state = handle_add_point(chat_id, state, args)
     elif cmd == "start":
         if state["state"] == "init":
             send(chat_id, "ברוך הבא ל-NavMan!\nהתחל סשן: /session")
@@ -714,7 +1067,7 @@ def dispatch(chat_id: int, text: str) -> None:
 def handle_file_message(chat_id: int, message: dict) -> None:
     state = sess.load(chat_id)
     upload_state = state.get("state", "")
-    if upload_state not in ("awaiting_points_upload", "awaiting_map_upload", "awaiting_participants_upload"):
+    if upload_state not in ("awaiting_points_upload", "awaiting_map_upload", "awaiting_participants_upload", "awaiting_special_upload"):
         send(chat_id, "לא ממתין לקבצים. השתמש ב-/up, /um או /upa תחילה.")
         return
 

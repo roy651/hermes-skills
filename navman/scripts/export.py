@@ -44,6 +44,27 @@ def _rtl_sheet(ws) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Points export
+# ---------------------------------------------------------------------------
+
+def export_points(points_db: list[dict], output_dir: str) -> str:
+    """Write points.xlsx. Returns file path."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "נקודות ניווט"
+    _rtl_sheet(ws)
+    _header_row(ws, ["מזהה", "X (מזרח)", "Y (צפון)", "תיאור"])
+    for p in sorted(points_db, key=lambda x: x["id"]):
+        ws.append([p["id"], p["x"], p["y"], p.get("description", "")])
+        for cell in ws[ws.max_row]:
+            cell.alignment = _RTL
+    _auto_width(ws)
+    out_path = Path(output_dir) / "points.xlsx"
+    wb.save(str(out_path))
+    return str(out_path)
+
+
+# ---------------------------------------------------------------------------
 # Assignments export
 # ---------------------------------------------------------------------------
 
