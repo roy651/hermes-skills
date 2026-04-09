@@ -1,90 +1,50 @@
 #!/usr/bin/env bash
 # Usage: switch.sh <profile>
-# Profiles: claude, qwen, gemma, nemotron
-# Also handles Claude model tier: switch.sh claude-model <haiku|sonnet|opus>
+# Profiles: claude, qwen, qwen-coder, mimo, gpt-oss
+# Claude model tier: switch.sh claude-model <haiku|sonnet|opus>
+# Status: switch.sh status
+#
+# Claude routes through local proxy (http://localhost:8765/v1, provider: custom).
+# All OpenRouter models go direct (provider: openrouter) — they all support streaming.
 set -e
-
-HERMES_CONFIG="$HOME/.hermes/config.yaml"
-CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
 profile="${1:-}"
 
+_set_hermes_model() {
+  python3 - "$1" "$2" "$3" <<'EOF'
+import yaml, os, sys
+path = os.path.expanduser('~/.hermes/config.yaml')
+with open(path) as f:
+    config = yaml.safe_load(f)
+config['model'] = {
+    'default':  sys.argv[1],
+    'provider': sys.argv[2],
+    'base_url': sys.argv[3],
+    'api_mode': 'chat_completions',
+}
+with open(path, 'w') as f:
+    yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+with open(path) as f:
+    m = yaml.safe_load(f)['model']
+print(f"Provider switched → {m['default']} ({m['provider']})")
+EOF
+}
+
 case "$profile" in
   claude)
-    python3 - <<'EOF'
-import yaml, os
-path = os.path.expanduser('~/.hermes/config.yaml')
-with open(path) as f:
-    config = yaml.safe_load(f)
-config['model'] = {
-    'default': 'claude-code',
-    'provider': 'custom',
-    'base_url': 'http://localhost:8765/v1',
-    'api_mode': 'chat_completions',
-}
-with open(path, 'w') as f:
-    yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-with open(path) as f:
-    result = yaml.safe_load(f)
-print(f"Provider switched → {result['model']['default']} ({result['model']['provider']})")
-EOF
+    _set_hermes_model "claude-code" "custom" "http://localhost:8765/v1"
     ;;
   qwen)
-    python3 - <<'EOF'
-import yaml, os
-path = os.path.expanduser('~/.hermes/config.yaml')
-with open(path) as f:
-    config = yaml.safe_load(f)
-config['model'] = {
-    'default': 'qwen/qwen3.5-flash-02-23',
-    'provider': 'custom',
-    'base_url': 'http://localhost:8765/v1',
-    'api_mode': 'chat_completions',
-}
-with open(path, 'w') as f:
-    yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-with open(path) as f:
-    result = yaml.safe_load(f)
-print(f"Provider switched → {result['model']['default']} ({result['model']['provider']})")
-EOF
+    _set_hermes_model "qwen/qwen3.5-flash-02-23" "openrouter" "https://openrouter.ai/api/v1"
     ;;
-  gemma)
-    python3 - <<'EOF'
-import yaml, os
-path = os.path.expanduser('~/.hermes/config.yaml')
-with open(path) as f:
-    config = yaml.safe_load(f)
-config['model'] = {
-    'default': 'google/gemma-4-31b-it:free',
-    'provider': 'custom',
-    'base_url': 'http://localhost:8765/v1',
-    'api_mode': 'chat_completions',
-}
-with open(path, 'w') as f:
-    yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-with open(path) as f:
-    result = yaml.safe_load(f)
-print(f"Provider switched → {result['model']['default']} ({result['model']['provider']})")
-EOF
+  qwen-coder)
+    _set_hermes_model "qwen/qwen3-coder:free" "openrouter" "https://openrouter.ai/api/v1"
     ;;
-  nemotron)
-    python3 - <<'EOF'
-import yaml, os
-path = os.path.expanduser('~/.hermes/config.yaml')
-with open(path) as f:
-    config = yaml.safe_load(f)
-config['model'] = {
-    'default': 'nvidia/nemotron-3-super-120b-a12b:free',
-    'provider': 'custom',
-    'base_url': 'http://localhost:8765/v1',
-    'api_mode': 'chat_completions',
-}
-with open(path, 'w') as f:
-    yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-with open(path) as f:
-    result = yaml.safe_load(f)
-print(f"Provider switched → {result['model']['default']} ({result['model']['provider']})")
-EOF
+  mimo)
+    _set_hermes_model "xiaomi/mimo-v2-flash" "openrouter" "https://openrouter.ai/api/v1"
+    ;;
+  gpt-oss)
+    _set_hermes_model "openai/gpt-oss-120b" "openrouter" "https://openrouter.ai/api/v1"
     ;;
   claude-model)
     tier="${2:-sonnet}"
@@ -106,17 +66,14 @@ EOF
   status)
     python3 - <<'EOF'
 import yaml, json, os
-hermes = os.path.expanduser('~/.hermes/config.yaml')
-claude = os.path.expanduser('~/.claude/settings.json')
-with open(hermes) as f:
-    hc = yaml.safe_load(f)
-cc = json.loads(open(claude).read() or '{}')
-print(f"Provider : {hc['model']['default']} ({hc['model']['provider']})")
+hc = yaml.safe_load(open(os.path.expanduser('~/.hermes/config.yaml')))['model']
+cc = json.loads(open(os.path.expanduser('~/.claude/settings.json')).read() or '{}')
+print(f"Provider : {hc['default']} ({hc['provider']})")
 print(f"Claude   : {cc.get('model', 'default (sonnet)')}")
 EOF
     ;;
   *)
-    echo "Usage: switch.sh <claude|qwen|gemma|nemotron|claude-model <haiku|sonnet|opus>|status>"
+    echo "Usage: switch.sh <claude|qwen|qwen-coder|mimo|gpt-oss|claude-model <haiku|sonnet|opus>|status>"
     exit 1
     ;;
 esac

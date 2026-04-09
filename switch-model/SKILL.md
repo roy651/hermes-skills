@@ -24,9 +24,10 @@ bash ~/.hermes/skills/switch-model/switch.sh <command>
 | Goal | Command |
 |------|---------|
 | Switch to Claude (via proxy) | `bash ~/.hermes/skills/switch-model/switch.sh claude` |
-| Switch to Qwen (OpenRouter) | `bash ~/.hermes/skills/switch-model/switch.sh qwen` |
-| Switch to Gemma (OpenRouter) | `bash ~/.hermes/skills/switch-model/switch.sh gemma` |
-| Switch to Nemotron (OpenRouter) | `bash ~/.hermes/skills/switch-model/switch.sh nemotron` |
+| Switch to Qwen (free, reliable) | `bash ~/.hermes/skills/switch-model/switch.sh qwen` |
+| Switch to Qwen Coder (free) | `bash ~/.hermes/skills/switch-model/switch.sh qwen-coder` |
+| Switch to MiMo v2 Flash | `bash ~/.hermes/skills/switch-model/switch.sh mimo` |
+| Switch to GPT-OSS 120B | `bash ~/.hermes/skills/switch-model/switch.sh gpt-oss` |
 | Change Claude tier to Haiku | `bash ~/.hermes/skills/switch-model/switch.sh claude-model haiku` |
 | Change Claude tier to Sonnet | `bash ~/.hermes/skills/switch-model/switch.sh claude-model sonnet` |
 | Change Claude tier to Opus | `bash ~/.hermes/skills/switch-model/switch.sh claude-model opus` |
@@ -42,6 +43,6 @@ bash ~/.hermes/skills/switch-model/switch.sh <command>
 
 ## Triggers
 
-- "switch to qwen/gemma/nemotron/claude" → provider switch
+- "switch to qwen/qwen-coder/mimo/gpt-oss/claude" → provider switch
 - "use haiku/sonnet/opus" or "change Claude to [tier]" → claude-model switch
 - "what model am I on" or "show model status" → status

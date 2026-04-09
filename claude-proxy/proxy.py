@@ -236,9 +236,10 @@ def chat_completions():
             data["model"] = FALLBACK_MODEL
             model = FALLBACK_MODEL
 
-    # Forward to OpenRouter — always non-streaming to avoid provider-side
-    # streaming rate limits (e.g. Google AI Studio on free gemma tier).
-    # We fake-stream the collected response back to hermes as SSE.
+    # Forward to OpenRouter — simple pass-through.
+    # Non-streaming models (e.g. those that don't support stream=True) should
+    # be routed directly via provider: openrouter in the hermes config instead
+    # of going through this proxy.
     log.info(f"→ OpenRouter  model={model}  msgs={msg_count}")
     if not OPENROUTER_KEY:
         return jsonify({"error": {"message": "OPENROUTER_API_KEY not set", "type": "proxy_error"}}), 500
@@ -246,19 +247,12 @@ def chat_completions():
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type": "application/json",
     }
-    or_data = {k: v for k, v in data.items() if k not in ("stream", "stream_options")}
-    resp = requests.post(OPENROUTER_URL, headers=headers, json=or_data, timeout=120)
-    if resp.status_code != 200:
-        log.warning(f"OpenRouter error {resp.status_code} for {model} — falling back to {FALLBACK_MODEL}")
-        or_data["model"] = FALLBACK_MODEL
-        model = FALLBACK_MODEL
-        resp = requests.post(OPENROUTER_URL, headers=headers, json=or_data, timeout=120)
-        if resp.status_code != 200:
-            return jsonify(resp.json()), resp.status_code
-    content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    resp = requests.post(OPENROUTER_URL, headers=headers, json=data, timeout=120, stream=streaming)
     if streaming:
-        return _stream_response(content, model)
-    return jsonify(_openai_response(content, model))
+        return app.response_class(resp.iter_content(chunk_size=None),
+                                   mimetype="text/event-stream",
+                                   headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+    return jsonify(resp.json()), resp.status_code
 
 
 @app.route("/v1/models", methods=["GET"])
