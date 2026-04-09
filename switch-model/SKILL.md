@@ -82,10 +82,19 @@ Confirm with: "Switched to [name]. Takes effect on the next message."
 
 This is entirely within Claude Code's own configuration — invisible to the proxy.
 
-**CRITICAL: Use ONLY the CLI command below. Do NOT edit `~/.claude/settings.json` or any other file directly. Do NOT use the file tool. Use the terminal tool to run the command.**
+**CRITICAL: Use the terminal tool to run the bash command below. Do NOT use the file tool. Do NOT call `~/.local/bin/claude config set` (it opens an interactive session, not a command).**
+
+Run this one-liner via the terminal tool, substituting `<model-id>`:
 
 ```bash
-~/.local/bin/claude config set model <model-id>
+python3 -c "
+import json, os
+path = os.path.expanduser('~/.claude/settings.json')
+s = json.loads(open(path).read() or '{}')
+s['model'] = '<model-id>'
+open(path, 'w').write(json.dumps(s, indent=2))
+print('Done')
+"
 ```
 
 ### Model IDs
@@ -96,9 +105,9 @@ This is entirely within Claude Code's own configuration — invisible to the pro
 | sonnet  | claude-sonnet-4-6                |
 | opus    | claude-opus-4-6                  |
 
-To check the current setting:
+To check current setting:
 ```bash
-~/.local/bin/claude config get model
+python3 -c "import json,os; s=json.loads(open(os.path.expanduser('~/.claude/settings.json')).read() or '{}'); print(s.get('model','not set'))"
 ```
 
 Change takes effect immediately on the next Claude call — no proxy restart needed.
