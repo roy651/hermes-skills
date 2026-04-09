@@ -167,6 +167,30 @@ def _openai_response(content: str, model: str) -> dict:
     }
 
 
+def _stream_response(content: str, model: str):
+    """Yield SSE chunks for a complete response (hermes always requests stream=True)."""
+    from flask import Response
+    cid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    now = int(time.time())
+
+    def generate():
+        # First chunk: role + content
+        yield "data: " + json.dumps({
+            "id": cid, "object": "chat.completion.chunk", "created": now, "model": model,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}],
+        }) + "\n\n"
+        # Final chunk: finish_reason + usage
+        yield "data: " + json.dumps({
+            "id": cid, "object": "chat.completion.chunk", "created": now, "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -177,6 +201,7 @@ def chat_completions():
     model = data.get("model", "")
     messages = data.get("messages", [])
     msg_count = len(messages)
+    streaming = data.get("stream", False)
 
     if model.lower().startswith("claude"):
         # Decide whether to resume the existing session or start fresh
@@ -195,30 +220,35 @@ def chat_completions():
                 f"msg_count={msg_count} prev={sess['msg_count']})"
             )
 
-        log.info(f"→ Claude Code  model={model}  msgs={msg_count}  resume={should_resume}")
+        log.info(f"→ Claude Code  model={model}  msgs={msg_count}  resume={should_resume}  stream={streaming}")
         try:
             content, new_session_id = _call_claude(
                 messages, resume_id=sess["id"] if should_resume else None
             )
             if new_session_id:
                 _session.update({"id": new_session_id, "model": model, "msg_count": msg_count})
+            if streaming:
+                return _stream_response(content, model)
             return jsonify(_openai_response(content, model))
         except Exception as e:
             log.warning(f"Claude Code error: {e} — falling back to {FALLBACK_MODEL}")
-            # Clear stale session on error
             _session.update({"id": None, "model": None, "msg_count": 0})
             data["model"] = FALLBACK_MODEL
             model = FALLBACK_MODEL
 
     # Forward to OpenRouter
-    log.info(f"→ OpenRouter  model={model}  msgs={msg_count}")
+    log.info(f"→ OpenRouter  model={model}  msgs={msg_count}  stream={streaming}")
     if not OPENROUTER_KEY:
         return jsonify({"error": {"message": "OPENROUTER_API_KEY not set", "type": "proxy_error"}}), 500
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type": "application/json",
     }
-    resp = requests.post(OPENROUTER_URL, headers=headers, json=data, timeout=120)
+    resp = requests.post(OPENROUTER_URL, headers=headers, json=data, timeout=120, stream=streaming)
+    if streaming:
+        return app.response_class(resp.iter_content(chunk_size=None),
+                                   mimetype="text/event-stream",
+                                   headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
     return jsonify(resp.json()), resp.status_code
 
 
