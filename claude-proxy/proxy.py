@@ -249,7 +249,12 @@ def chat_completions():
     or_data = {k: v for k, v in data.items() if k not in ("stream", "stream_options")}
     resp = requests.post(OPENROUTER_URL, headers=headers, json=or_data, timeout=120)
     if resp.status_code != 200:
-        return jsonify(resp.json()), resp.status_code
+        log.warning(f"OpenRouter error {resp.status_code} for {model} — falling back to {FALLBACK_MODEL}")
+        or_data["model"] = FALLBACK_MODEL
+        model = FALLBACK_MODEL
+        resp = requests.post(OPENROUTER_URL, headers=headers, json=or_data, timeout=120)
+        if resp.status_code != 200:
+            return jsonify(resp.json()), resp.status_code
     content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
     if streaming:
         return _stream_response(content, model)
