@@ -30,6 +30,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", 8765))
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")  # path to claude CLI
+FALLBACK_MODEL = os.environ.get("FALLBACK_MODEL", "qwen/qwen3.5-flash-02-23")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -160,8 +161,9 @@ def chat_completions():
             content = _call_claude(messages)
             return jsonify(_openai_response(content, model))
         except Exception as e:
-            log.error(f"Claude Code error: {e}")
-            return jsonify({"error": {"message": str(e), "type": "proxy_error"}}), 500
+            log.warning(f"Claude Code error: {e} — falling back to {FALLBACK_MODEL}")
+            data["model"] = FALLBACK_MODEL
+            model = FALLBACK_MODEL
 
     # Forward to OpenRouter
     log.info(f"→ OpenRouter  model={model}")
@@ -185,6 +187,11 @@ def list_models():
             {"id": "claude-opus-4-6", "object": "model", "created": 0, "owned_by": "claude-code-proxy"},
         ],
     })
+
+
+@app.route("/v1/models/<path:model_id>", methods=["GET"])
+def get_model(model_id):
+    return jsonify({"id": model_id, "object": "model", "created": 0, "owned_by": "claude-code-proxy"})
 
 
 @app.route("/health", methods=["GET"])
