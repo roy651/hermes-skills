@@ -5,9 +5,17 @@ Routes requests to:
   - Claude Code CLI  (model starts with "claude")
   - OpenRouter       (everything else, forwarded transparently)
 
+Session management:
+  - Maintains one persistent Claude session per conversation.
+  - Resumes via --resume <session_id> so only the new user message is sent
+    each turn (no full-history replay, no extended-thinking blowup).
+  - Session is reset when: model changes, message count drops (new conversation),
+    or it's the first message.
+
 Hermes config to use this proxy:
   model:
-    default: claude-code          # or claude-sonnet-4-6, etc.
+    default: claude-code
+    provider: custom
     base_url: http://localhost:8765/v1
     api_mode: chat_completions
 """
@@ -29,7 +37,7 @@ load_dotenv(Path(__file__).parent / ".env")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", 8765))
-CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")  # path to claude CLI
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 FALLBACK_MODEL = os.environ.get("FALLBACK_MODEL", "qwen/qwen3.5-flash-02-23")
 
 logging.basicConfig(
@@ -45,6 +53,15 @@ log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# ---------------------------------------------------------------------------
+# Session state — one active Claude session at a time
+# ---------------------------------------------------------------------------
+_session: dict = {
+    "id": None,       # claude session_id from last response
+    "model": None,    # model that owns this session
+    "msg_count": 0,   # message count when session was last updated
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,15 +75,15 @@ def _extract_text(content) -> str:
     return str(content or "")
 
 
-def _messages_to_prompt(messages: list[dict]) -> str:
-    """
-    Convert OpenAI messages array → single prompt for `claude -p`.
+def _last_user_message(messages: list[dict]) -> str:
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            return _extract_text(msg.get("content", ""))
+    return ""
 
-    Strategy:
-    - Single user message: pass it directly (clean, no noise)
-    - Multi-turn: reconstruct conversation with Human/Assistant markers
-    - System message: prepended as context (truncated to avoid bloating)
-    """
+
+def _messages_to_prompt(messages: list[dict]) -> str:
+    """Full history → single prompt string (used only for fresh sessions)."""
     system = ""
     turns = []
 
@@ -81,20 +98,16 @@ def _messages_to_prompt(messages: list[dict]) -> str:
             turns.append(("Human", content))
         elif role == "assistant":
             turns.append(("Assistant", content))
-        # tool / tool_result roles: skip — Claude handles its own tools
 
     if not turns:
         return system
 
-    # Single-turn: pass cleanly without wrapper
     if len(turns) == 1 and turns[0][0] == "Human":
         user_msg = turns[0][1]
         if system:
-            # Prepend a condensed system context
             return f"[Context: {system[:400]}]\n\n{user_msg}"
         return user_msg
 
-    # Multi-turn: full conversation reconstruction
     parts = []
     if system:
         parts.append(f"[Context: {system[:400]}]")
@@ -103,31 +116,40 @@ def _messages_to_prompt(messages: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _call_claude(messages: list[dict]) -> str:
-    """Run `claude -p <prompt>` and return the response text."""
-    prompt = _messages_to_prompt(messages)
-    cmd = [
-        CLAUDE_BIN,
-        "--print",
-        "--dangerously-skip-permissions",
-        "--output-format", "json",
-        prompt,
-    ]
-    log.info(f"claude: prompt length={len(prompt)} chars")
+def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[str, str | None]:
+    """
+    Invoke claude CLI. Returns (response_text, session_id).
+
+    Fresh session: pass full reconstructed prompt.
+    Resumed session: pass only the latest user message — Claude already has
+    the prior context in its persisted session.
+    """
+    if resume_id:
+        prompt = _last_user_message(messages)
+        cmd = [CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
+               "--output-format", "json", "--resume", resume_id, prompt]
+        log.info(f"claude: resume={resume_id}  new_msg_len={len(prompt)}")
+    else:
+        prompt = _messages_to_prompt(messages)
+        cmd = [CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
+               "--output-format", "json", prompt]
+        log.info(f"claude: fresh session  prompt_len={len(prompt)}")
+
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
     if result.returncode != 0:
         raise RuntimeError(f"claude exited {result.returncode}: {result.stderr[:300]}")
 
-    # claude --output-format json gives {"type":"result","result":"...","session_id":"..."}
     try:
         data = json.loads(result.stdout)
         text = data.get("result") or data.get("content") or result.stdout
+        session_id = data.get("session_id")
     except (json.JSONDecodeError, AttributeError):
         text = result.stdout.strip()
+        session_id = None
 
-    log.info(f"claude: response length={len(text)} chars")
-    return text
+    log.info(f"claude: response_len={len(text)}  session_id={session_id}")
+    return text, session_id
 
 
 def _openai_response(content: str, model: str) -> dict:
@@ -154,19 +176,42 @@ def chat_completions():
     data = request.json or {}
     model = data.get("model", "")
     messages = data.get("messages", [])
+    msg_count = len(messages)
 
     if model.lower().startswith("claude"):
-        log.info(f"→ Claude Code  model={model}  msgs={len(messages)}")
+        # Decide whether to resume the existing session or start fresh
+        sess = _session
+        should_resume = (
+            sess["id"] is not None
+            and sess["model"] == model
+            and msg_count > sess["msg_count"]
+            and msg_count > 1
+        )
+
+        if not should_resume and sess["id"]:
+            log.info(
+                f"claude: session reset "
+                f"(model_changed={sess['model'] != model}, "
+                f"msg_count={msg_count} prev={sess['msg_count']})"
+            )
+
+        log.info(f"→ Claude Code  model={model}  msgs={msg_count}  resume={should_resume}")
         try:
-            content = _call_claude(messages)
+            content, new_session_id = _call_claude(
+                messages, resume_id=sess["id"] if should_resume else None
+            )
+            if new_session_id:
+                _session.update({"id": new_session_id, "model": model, "msg_count": msg_count})
             return jsonify(_openai_response(content, model))
         except Exception as e:
             log.warning(f"Claude Code error: {e} — falling back to {FALLBACK_MODEL}")
+            # Clear stale session on error
+            _session.update({"id": None, "model": None, "msg_count": 0})
             data["model"] = FALLBACK_MODEL
             model = FALLBACK_MODEL
 
     # Forward to OpenRouter
-    log.info(f"→ OpenRouter  model={model}")
+    log.info(f"→ OpenRouter  model={model}  msgs={msg_count}")
     if not OPENROUTER_KEY:
         return jsonify({"error": {"message": "OPENROUTER_API_KEY not set", "type": "proxy_error"}}), 500
     headers = {
@@ -196,7 +241,15 @@ def get_model(model_id):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "claude_bin": CLAUDE_BIN})
+    active = _session["id"] is not None
+    return jsonify({
+        "status": "ok",
+        "claude_bin": CLAUDE_BIN,
+        "session_active": active,
+        "session_id": _session["id"],
+        "session_model": _session["model"],
+        "session_msg_count": _session["msg_count"],
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -206,4 +259,5 @@ if __name__ == "__main__":
     log.info(f"Claude Code proxy starting on port {PROXY_PORT}")
     log.info(f"Claude bin: {CLAUDE_BIN}")
     log.info(f"OpenRouter key: {'set' if OPENROUTER_KEY else 'NOT SET'}")
+    log.info(f"Fallback model: {FALLBACK_MODEL}")
     app.run(host="127.0.0.1", port=PROXY_PORT, threaded=True)
