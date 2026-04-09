@@ -28,6 +28,8 @@ bash ~/.hermes/skills/switch-model/switch.sh <command>
 | Switch to Qwen Coder (free) | `bash ~/.hermes/skills/switch-model/switch.sh qwen-coder` |
 | Switch to MiMo v2 Flash | `bash ~/.hermes/skills/switch-model/switch.sh mimo` |
 | Switch to GPT-OSS 120B | `bash ~/.hermes/skills/switch-model/switch.sh gpt-oss` |
+| Switch to Gemma 4 31B (free, BYOK) | `bash ~/.hermes/skills/switch-model/switch.sh gemma` |
+| Switch to Gemini 3 Flash Preview | `bash ~/.hermes/skills/switch-model/switch.sh gemini` |
 | Change Claude tier to Haiku | `bash ~/.hermes/skills/switch-model/switch.sh claude-model haiku` |
 | Change Claude tier to Sonnet | `bash ~/.hermes/skills/switch-model/switch.sh claude-model sonnet` |
 | Change Claude tier to Opus | `bash ~/.hermes/skills/switch-model/switch.sh claude-model opus` |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: switch.sh <profile>
-# Profiles: claude, qwen, qwen-coder, mimo, gpt-oss
+# Profiles: claude, qwen, qwen-coder, mimo, gpt-oss, gemma, gemini
 # Claude model tier: switch.sh claude-model <haiku|sonnet|opus>
 # Status: switch.sh status
 #
@@ -46,6 +46,12 @@ case "$profile" in
   gpt-oss)
     _set_hermes_model "openai/gpt-oss-120b" "openrouter" "https://openrouter.ai/api/v1"
     ;;
+  gemma)
+    _set_hermes_model "google/gemma-4-31b-it:free" "openrouter" "https://openrouter.ai/api/v1"
+    ;;
+  gemini)
+    _set_hermes_model "google/gemini-3-flash-preview" "openrouter" "https://openrouter.ai/api/v1"
+    ;;
   claude-model)
     tier="${2:-sonnet}"
     case "$tier" in
@@ -73,7 +79,7 @@ print(f"Claude   : {cc.get('model', 'default (sonnet)')}")
 EOF
     ;;
   *)
-    echo "Usage: switch.sh <claude|qwen|qwen-coder|mimo|gpt-oss|claude-model <haiku|sonnet|opus>|status>"
+    echo "Usage: switch.sh <claude|qwen|qwen-coder|mimo|gpt-oss|gemma|gemini|claude-model <haiku|sonnet|opus>|status>"
     exit 1
     ;;
 esac
