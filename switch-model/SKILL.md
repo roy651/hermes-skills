@@ -80,7 +80,9 @@ Confirm with: "Switched to [name]. Takes effect on the next message."
 
 **Triggers:** "use haiku", "switch to sonnet", "change Claude to opus", "use a cheaper/faster Claude model"
 
-This is entirely within Claude Code's own configuration — invisible to the proxy. Run this command on the terminal:
+This is entirely within Claude Code's own configuration — invisible to the proxy.
+
+**CRITICAL: Use ONLY the CLI command below. Do NOT edit `~/.claude/settings.json` or any other file directly. Do NOT use the file tool. Use the terminal tool to run the command.**
 
 ```bash
 ~/.local/bin/claude config set model <model-id>
