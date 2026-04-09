@@ -37,8 +37,8 @@ with open(path) as f:
     config = yaml.safe_load(f)
 config['model'] = {
     'default': 'qwen/qwen3.5-flash-02-23',
-    'provider': 'openrouter',
-    'base_url': 'https://openrouter.ai/api/v1',
+    'provider': 'custom',
+    'base_url': 'http://localhost:8765/v1',
     'api_mode': 'chat_completions',
 }
 with open(path, 'w') as f:
@@ -56,8 +56,8 @@ with open(path) as f:
     config = yaml.safe_load(f)
 config['model'] = {
     'default': 'google/gemma-4-31b-it:free',
-    'provider': 'openrouter',
-    'base_url': 'https://openrouter.ai/api/v1',
+    'provider': 'custom',
+    'base_url': 'http://localhost:8765/v1',
     'api_mode': 'chat_completions',
 }
 with open(path, 'w') as f:
@@ -75,8 +75,8 @@ with open(path) as f:
     config = yaml.safe_load(f)
 config['model'] = {
     'default': 'nvidia/nemotron-3-super-120b-a12b:free',
-    'provider': 'openrouter',
-    'base_url': 'https://openrouter.ai/api/v1',
+    'provider': 'custom',
+    'base_url': 'http://localhost:8765/v1',
     'api_mode': 'chat_completions',
 }
 with open(path, 'w') as f:
