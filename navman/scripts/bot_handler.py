@@ -44,10 +44,9 @@ ALLOWED_CHAT_IDS = set(
 # Model priority list: free models first, paid fallbacks after.
 # Override via VISION_MODELS (comma-separated) or VISION_MODEL (single).
 _DEFAULT_MODELS = [
+    "qwen/qwen3.5-flash-02-23",
     "google/gemma-4-31b-it:free",
     "google/gemma-4-26b-a4b-it:free",
-    "nvidia/nemotron-nano-12b-v2-vl:free",
-    "qwen/qwen3.5-flash-02-23",
     "meta-llama/llama-3.2-11b-vision-instruct",
 ]
 _env_models = os.environ.get("VISION_MODELS", "")
@@ -665,7 +664,7 @@ def _process_points_uploads(chat_id: int, state: dict, pending: list[dict]) -> d
             all_points.extend(pts)
 
         if images:
-            send(chat_id, f"שולח {len(images)} תמונות לניתוח AI... ⏳ (עשוי לקחת כדקה)")
+            send(chat_id, f"שולח {len(images)} תמונות לניתוח AI... ⏳ (עשוי לקחת כדקה לכל תמונה)")
             vision_cfg = VISION_CFG if VISION_CFG.get("key") else {}
             pts, failed_images = ingestion.parse_nav_images([str(p) for p, _ in images], vision_cfg)
             all_points.extend(pts)

@@ -61,6 +61,7 @@ _session: dict = {
     "model": None,    # model that owns this session
     "msg_count": 0,   # message count when session was last updated
 }
+_active_proc: subprocess.Popen | None = None  # currently running claude subprocess
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +124,19 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
     Fresh session: pass full reconstructed prompt.
     Resumed session: pass only the latest user message — Claude already has
     the prior context in its persisted session.
+
+    Kills any previously running claude subprocess before starting a new one,
+    preventing pile-up when the gateway retries after a timeout.
     """
+    global _active_proc
+
+    # Kill any stuck subprocess from a previous request
+    if _active_proc is not None and _active_proc.poll() is None:
+        log.warning(f"claude: killing previous stuck subprocess (pid={_active_proc.pid})")
+        _active_proc.kill()
+        _active_proc.wait()
+    _active_proc = None
+
     if resume_id:
         prompt = _last_user_message(messages)
         cmd = [CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
@@ -135,17 +148,28 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
                "--output-format", "json", prompt]
         log.info(f"claude: fresh session  prompt_len={len(prompt)}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"claude exited {result.returncode}: {result.stderr[:300]}")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    _active_proc = proc
 
     try:
-        data = json.loads(result.stdout)
-        text = data.get("result") or data.get("content") or result.stdout
+        stdout, stderr = proc.communicate(timeout=300)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise RuntimeError("claude timed out after 300s")
+    finally:
+        if _active_proc is proc:
+            _active_proc = None
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"claude exited {proc.returncode}: {stderr[:300]}")
+
+    try:
+        data = json.loads(stdout)
+        text = data.get("result") or data.get("content") or stdout
         session_id = data.get("session_id")
     except (json.JSONDecodeError, AttributeError):
-        text = result.stdout.strip()
+        text = stdout.strip()
         session_id = None
 
     log.info(f"claude: response_len={len(text)}  session_id={session_id}")
