@@ -110,8 +110,13 @@ Always highlight:
 - **ims.gov.il** — Heavy Angular/JS, extracts as `{{template_variables}}`
 - **Generic web search for weather** — Too noisy, returns wrong locations
 
+## Default Location
+
+The default focus city is **Tzurit** (32.902, 35.247) — used by the daily weather job. To check a different city, specify it explicitly in your request (e.g. "weather in Tel Aviv" or "weather at 32.079, 34.781"). Always prefer coordinates over city names when querying APIs.
+
 ## Pitfalls
 
+- **Tzurit (צורית) location:** NEVER rely on Hebrew auto-correction or name-based lookup for Tzurit. Similar-sounding Hebrew place names exist and have caused wrong-data errors before. Always use exact coordinates **32.902, 35.247**.
 - Weather2day is in Hebrew — always translate to English
 - weather.com searches for "Northern District" often return Pennsylvania matches
 - ECMWF chart images are visual-only — use vision to interpret if needed
