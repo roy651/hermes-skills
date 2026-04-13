@@ -25,12 +25,13 @@ try:
 except ImportError:
     openpyxl = None
 
-try:
-    from docling.document_converter import DocumentConverter as _DoclingConverter
-    _docling_conv = None  # lazy-init singleton
-except ImportError:
-    _DoclingConverter = None
-    _docling_conv = None
+# docling disabled — uses too much memory; falls back to LLM for image parsing
+# try:
+#     from docling.document_converter import DocumentConverter as _DoclingConverter
+#     _docling_conv = None  # lazy-init singleton
+# except ImportError:
+_DoclingConverter = None
+_docling_conv = None
 
 
 def _get_docling():
