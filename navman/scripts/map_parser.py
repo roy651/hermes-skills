@@ -87,6 +87,7 @@ def parse_map_image(image_path: str, all_point_ids: list[int], api_cfg: dict) ->
         payload = {
             "model": model,
             "max_tokens": 512,
+            "temperature": 0,
             "messages": [{"role": "user", "content": msg_content}],
         }
         print(f"[map_parser] trying model: {model}", file=sys.stderr)

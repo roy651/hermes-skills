@@ -153,3 +153,69 @@ def export_pairings(
     out_path = Path(output_dir) / "pairings.xlsx"
     wb.save(str(out_path))
     return str(out_path)
+
+
+# ---------------------------------------------------------------------------
+# Combined export
+# ---------------------------------------------------------------------------
+
+def export_combined(
+    pairings: list[dict],
+    points_db: list[dict],
+    output_dir: str,
+) -> str:
+    """Write combined.xlsx with one row per pair: SI navigator then IF navigator.
+
+    Columns: pair index | SI name | SI pt1..N | IF name | IF pt1..N
+    SI = start-to-intermediate (neh->nav), IF = intermediate-to-finish (nav->nes).
+    """
+    pt_map = {p["id"]: p for p in points_db}
+
+    def _pt_label(pid: int) -> str:
+        pt = pt_map.get(pid)
+        return f"{pid}" + (f" - {pt['description']}" if pt and pt.get("description") else "")
+
+    def _is_si(section: str) -> bool:
+        return "\u05e0\u05d4" in section  # neh (start)
+
+    max_si = max(
+        (len(pr["p1_points"]) if _is_si(pr["p1_section"]) else len(pr["p2_points"]) for pr in pairings),
+        default=0,
+    )
+    max_if = max(
+        (len(pr["p2_points"]) if _is_si(pr["p1_section"]) else len(pr["p1_points"]) for pr in pairings),
+        default=0,
+    )
+
+    si_hdr = "\u05e9\u05dd \u05d0 (\u05e0\u05d4\u2192\u05e0\u05d1)"
+    if_hdr = "\u05e9\u05dd \u05d1 (\u05e0\u05d1\u2192\u05e0\u05e1)"
+    headers = (
+        ["\u05de\u05e1 \u05d6\u05d5\u05d2"]
+        + [si_hdr] + [f"\u05e0\u05e7 \u05d0{i+1}" for i in range(max_si)]
+        + [if_hdr] + [f"\u05e0\u05e7 \u05d1{i+1}" for i in range(max_if)]
+    )
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "\u05e9\u05d9\u05d1\u05d5\u05e5 \u05de\u05e9\u05d5\u05dc\u05d1"
+    _rtl_sheet(ws)
+    _header_row(ws, headers)
+
+    for pr in sorted(pairings, key=lambda x: x["pair_index"]):
+        p1_is_si = _is_si(pr["p1_section"])
+        si_name = pr["p1_name"] if p1_is_si else pr["p2_name"]
+        si_pts  = pr["p1_points"] if p1_is_si else pr["p2_points"]
+        if_name = pr["p2_name"] if p1_is_si else pr["p1_name"]
+        if_pts  = pr["p2_points"] if p1_is_si else pr["p1_points"]
+
+        si_cells = [_pt_label(pid) for pid in si_pts] + [""] * (max_si - len(si_pts))
+        if_cells = [_pt_label(pid) for pid in if_pts] + [""] * (max_if - len(if_pts))
+
+        ws.append([pr["pair_index"]] + [si_name] + si_cells + [if_name] + if_cells)
+        for cell in ws[ws.max_row]:
+            cell.alignment = _RTL
+
+    _auto_width(ws)
+    out_path = Path(output_dir) / "combined.xlsx"
+    wb.save(str(out_path))
+    return str(out_path)

@@ -321,8 +321,8 @@ def handle_upload_points(chat_id: int, state: dict) -> dict:
 
 
 def handle_upload_map(chat_id: int, state: dict) -> dict:
-    if state["state"] not in ("points_uploaded",):
-        send(chat_id, f"❌ לא ניתן כעת. מצב: {_state_label(state)}")
+    if not state.get("points_db"):
+        send(chat_id, "❌ אין נקודות בבסיס — העלה נקודות תחילה (/up)")
         return state
     state["state"] = "awaiting_map_upload"
     state["pending_uploads"] = []
@@ -346,14 +346,14 @@ def handle_upload_participants(chat_id: int, state: dict) -> dict:
 
 
 def handle_skip_map(chat_id: int, state: dict) -> dict:
-    if state["state"] not in ("points_uploaded", "awaiting_map_upload"):
+    if not state.get("points_db"):
         send(chat_id, f"❌ לא ניתן כעת. מצב: {_state_label(state)}")
         return state
     state["filtered_point_ids"] = [p["id"] for p in state["points_db"]]
     state["state"] = "awaiting_special"
     sess.save(chat_id, state)
     n = len(state["filtered_point_ids"])
-    send(chat_id, f"דולג על סינון מפה — כל {n} נקודות בשימוש.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>")
+    send(chat_id, f"דולג על סינון מפה — כל {n} נקודות בשימוש.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>\nאו העלה תמונה: /upload_special (/ups)")
     return state
 
 
@@ -366,7 +366,7 @@ def handle_confirm_map(chat_id: int, state: dict) -> dict:
     state["state"] = "awaiting_special"
     sess.save(chat_id, state)
     n = len(state["filtered_point_ids"])
-    send(chat_id, f"אושר — {n} נקודות בסינון.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>")
+    send(chat_id, f"אושר — {n} נקודות בסינון.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>\nאו העלה תמונה: /upload_special (/ups)")
     return state
 
 
@@ -393,7 +393,7 @@ def handle_edit_map(chat_id: int, state: dict, args: str) -> dict:
     if state["state"] == "map_pending_confirm":
         state["state"] = "awaiting_special"
     sess.save(chat_id, state)
-    send(chat_id, f"עודכן — {len(ids)} נקודות בסינון.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>")
+    send(chat_id, f"עודכן — {len(ids)} נקודות בסינון.\nהגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>\nאו העלה תמונה: /upload_special (/ups)")
     return state
 
 
@@ -562,6 +562,12 @@ def handle_export(chat_id: int, state: dict) -> dict:
         except Exception as e:
             send(chat_id, f"❌ שגיאה בייצוא זוגות: {e}")
 
+    if sent_any and state["assignments"] and state["pairings"]:
+        try:
+            path = export_mod.export_combined(state["pairings"], state["points_db"], str(out_dir))
+            send_doc(chat_id, path, caption="שיבוץ משולב")
+        except Exception as e:
+            send(chat_id, f"❌ שגיאה בייצוא משולב: {e}")
     if sent_any:
         send(chat_id, "✅ הקבצים נשלחו!")
         ingestion.release_models()
