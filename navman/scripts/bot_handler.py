@@ -166,6 +166,8 @@ ALIASES = {
     "cc": "clear_cache",
     "rp": "remove_point",
     "ap": "add_point",
+    "y": "yes",
+    "reparse": "reparse",
 }
 
 # ---------------------------------------------------------------------------
@@ -306,7 +308,7 @@ def handle_session(chat_id: int) -> dict:
     state["state"] = "awaiting_points_upload"
     sess.save(chat_id, state)
     send(chat_id, "סשן חדש נפתח!\nהעלה טבלת נקודות ניווט:\n/upload_points (/up) — קובץ CSV/XLS או תמונות")
-    return state
+    return _offer_prev(chat_id, state, "points")
 
 
 def handle_upload_points(chat_id: int, state: dict) -> dict:
@@ -328,7 +330,7 @@ def handle_upload_map(chat_id: int, state: dict) -> dict:
     state["pending_uploads"] = []
     sess.save(chat_id, state)
     send(chat_id, "שלח תמונת מפה עם גבול מצויר. כשסיימת: /done (/d)")
-    return state
+    return _offer_prev(chat_id, state, "map")
 
 
 def handle_upload_participants(chat_id: int, state: dict) -> dict:
@@ -342,7 +344,7 @@ def handle_upload_participants(chat_id: int, state: dict) -> dict:
     state["pending_uploads"] = []
     sess.save(chat_id, state)
     send(chat_id, "שלח קובץ משתתפים (CSV/XLS) או תמונה. כשסיימת: /done (/d)")
-    return state
+    return _offer_prev(chat_id, state, "participants")
 
 
 def handle_skip_map(chat_id: int, state: dict) -> dict:
@@ -575,17 +577,210 @@ def handle_export(chat_id: int, state: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Prev-session reuse helpers
+# ---------------------------------------------------------------------------
+
+def _offer_prev(chat_id: int, state: dict, key: str) -> dict:
+    """If prev session has data for 'key', send an offer message and set _reuse_offer."""
+    prev = sess.load_prev(chat_id)
+    if not prev:
+        return state
+
+    if key == "points" and prev.get("points_db"):
+        n = len(prev["points_db"])
+        state["_reuse_offer"] = key
+        sess.save(chat_id, state)
+        send(chat_id,
+             f"💾 נמצא סשן קודם עם {n} נקודות.\n"
+             "/yes — השתמש בנקודות הקודמות\n"
+             "/reparse — פרסר מחדש תמונות קיימות\n"
+             "או המשך להעלאה חדשה")
+    elif key == "map" and prev.get("filtered_point_ids"):
+        n = len(prev["filtered_point_ids"])
+        state["_reuse_offer"] = key
+        sess.save(chat_id, state)
+        send(chat_id,
+             f"💾 נמצא סשן קודם עם {n} נקודות מסוננות.\n"
+             "/yes — השתמש בסינון הקודם\n"
+             "/reparse — פרסר מחדש תמונת מפה\n"
+             "או המשך להעלאה חדשה")
+    elif key == "special" and any(prev.get("special", {}).values()):
+        sp = prev["special"]
+        state["_reuse_offer"] = key
+        sess.save(chat_id, state)
+        send(chat_id,
+             f"💾 נמצא סשן קודם: נה={sp.get('start_id')} נב={sp.get('mid_id')} נס={sp.get('finish_id')}.\n"
+             "/yes — השתמש בנקודות המיוחדות הקודמות\n"
+             "/reparse — פרסר מחדש תמונה\n"
+             "או הגדר ידנית: /sp <start_id> <mid_id> <finish_id>")
+    elif key == "participants" and prev.get("participants"):
+        n = len(prev["participants"])
+        state["_reuse_offer"] = key
+        sess.save(chat_id, state)
+        send(chat_id,
+             f"💾 נמצא סשן קודם עם {n} משתתפים.\n"
+             "/yes — השתמש במשתתפים הקודמים\n"
+             "/reparse — פרסר מחדש קבצים קיימים\n"
+             "או המשך להעלאה חדשה")
+    return state
+
+
+def handle_yes(chat_id: int, state: dict) -> dict:
+    offer = state.get("_reuse_offer")
+    if not offer:
+        send(chat_id, "❌ אין הצעה לשימוש חוזר כעת.")
+        return state
+
+    prev = sess.load_prev(chat_id)
+    if not prev:
+        send(chat_id, "❌ לא נמצא סשן קודם.")
+        state.pop("_reuse_offer", None)
+        sess.save(chat_id, state)
+        return state
+
+    state.pop("_reuse_offer", None)
+    prev_files = prev.get("source_files", {})
+
+    if offer == "points":
+        state["points_db"] = prev["points_db"]
+        state["filtered_point_ids"] = prev.get("filtered_point_ids", [p["id"] for p in prev["points_db"]])
+        state["source_files"]["points"] = prev_files.get("points", [])
+        state["media_groups"].update(prev.get("media_groups", {}))
+        state["pending_uploads"] = []
+        state["state"] = "points_uploaded"
+        sess.save(chat_id, state)
+        n = len(state["points_db"])
+        send(chat_id, f"✅ נטענו {n} נקודות מהסשן הקודם.\nהעלה מפה לסינון (/um) או דלג (/sm)")
+        return _offer_prev(chat_id, state, "map")
+
+    elif offer == "map":
+        state["filtered_point_ids"] = prev.get("filtered_point_ids", [])
+        state["source_files"]["map"] = prev_files.get("map", [])
+        state["media_groups"].update(prev.get("media_groups", {}))
+        state["state"] = "awaiting_special"
+        sess.save(chat_id, state)
+        n = len(state["filtered_point_ids"])
+        send(chat_id,
+             f"✅ נטענו {n} נקודות מסוננות מהסשן הקודם.\n"
+             "הגדר נקודות מיוחדות:\n/special (/sp) <start_id> <mid_id> <finish_id>\nאו העלה תמונה: /upload_special (/ups)")
+        return _offer_prev(chat_id, state, "special")
+
+    elif offer == "special":
+        state["special"] = prev.get("special", {})
+        state["source_files"]["special"] = prev_files.get("special", [])
+        state["media_groups"].update(prev.get("media_groups", {}))
+        state["state"] = "ready_for_generate"
+        sess.save(chat_id, state)
+        sp = state["special"]
+        send(chat_id,
+             f"✅ נקודות מיוחדות: נה={sp.get('start_id')}, נב={sp.get('mid_id')}, נס={sp.get('finish_id')}\n"
+             "צור משימות:\n/generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants>")
+        return state
+
+    elif offer == "participants":
+        state["participants"] = prev.get("participants", [])
+        state["source_files"]["participants"] = prev_files.get("participants", [])
+        state["media_groups"].update(prev.get("media_groups", {}))
+        state["state"] = "participants_uploaded"
+        sess.save(chat_id, state)
+        n = len(state["participants"])
+        send(chat_id, f"✅ נטענו {n} משתתפים מהסשן הקודם.\nצור שיבוץ: /assign (/a)")
+        return state
+
+    return state
+
+
+def handle_reparse(chat_id: int, state: dict) -> dict:
+    offer = state.get("_reuse_offer")
+    if not offer:
+        send(chat_id, "❌ אין הצעה לפרסור מחדש כעת.")
+        return state
+
+    prev = sess.load_prev(chat_id)
+    src_files = (prev or {}).get("source_files", {}).get(offer, []) if prev else []
+    state.pop("_reuse_offer", None)
+
+    if not src_files:
+        send(chat_id, "❌ אין קבצים שמורים לפרסור מחדש. העלה קבצים חדשים.")
+        sess.save(chat_id, state)
+        return state
+
+    pending = [{"file_id": fid, "mime": "", "name": ""} for fid in src_files]
+    state["pending_uploads"] = pending
+
+    if offer == "points":
+        state["state"] = "awaiting_points_upload"
+        sess.save(chat_id, state)
+        send(chat_id, f"מפרסר מחדש {len(src_files)} קבצים... ⏳")
+        return _process_points_uploads(chat_id, state, pending)
+    elif offer == "map":
+        state["state"] = "awaiting_map_upload"
+        sess.save(chat_id, state)
+        send(chat_id, "מפרסר מחדש תמונת מפה... ⏳")
+        return _process_map_upload(chat_id, state, pending)
+    elif offer == "special":
+        state["state"] = "awaiting_special_upload"
+        sess.save(chat_id, state)
+        send(chat_id, "מפרסר מחדש תמונת נקודות מיוחדות... ⏳")
+        return _process_special_upload(chat_id, state, pending)
+    elif offer == "participants":
+        state["state"] = "awaiting_participants_upload"
+        sess.save(chat_id, state)
+        send(chat_id, "מפרסר מחדש קובץ משתתפים... ⏳")
+        return _process_participants_uploads(chat_id, state, pending)
+
+    return state
+
+
+# ---------------------------------------------------------------------------
 # File upload handler (called when user sends file/photo in upload mode)
 # ---------------------------------------------------------------------------
 
-def handle_incoming_file(chat_id: int, state: dict, file_id: str, mime: str, name: str) -> dict:
+def _extract_file_ids_from_message(msg: dict) -> list[tuple[str, str, str]]:
+    """Extract (file_id, mime, name) from a Telegram message dict."""
+    results = []
+    doc = msg.get("document")
+    photos = msg.get("photo")
+    if doc:
+        results.append((doc["file_id"], doc.get("mime_type", ""), doc.get("file_name", "")))
+    if photos:
+        largest = sorted(photos, key=lambda x: x.get("file_size", 0), reverse=True)
+        results.append((largest[0]["file_id"], "image/jpeg", ""))
+    return results
+
+
+def _find_album_for_file(state: dict, chat_id: int, file_id: str) -> tuple[str | None, list]:
+    """Return (media_group_id, all_file_ids) if file_id belongs to any known album."""
+    for group_id, file_ids in state.get("media_groups", {}).items():
+        if file_id in file_ids:
+            return group_id, file_ids
+    prev = sess.load_prev(chat_id)
+    if prev:
+        for group_id, file_ids in prev.get("media_groups", {}).items():
+            if file_id in file_ids:
+                return group_id, file_ids
+    return None, []
+
+
+def handle_incoming_file(chat_id: int, state: dict, file_id: str, mime: str, name: str, media_group_id: str = None) -> dict:
     """Queue an uploaded file for processing after /done."""
     upload_state = state.get("state", "")
     if upload_state not in ("awaiting_points_upload", "awaiting_map_upload", "awaiting_participants_upload", "awaiting_special_upload"):
         send(chat_id, "לא ממתין לקבצים כעת. השתמש ב-/up, /um או /upa תחילה.")
         return state
 
+    # Track album membership
+    if media_group_id:
+        album = state.get("media_groups", {})
+        album.setdefault(media_group_id, [])
+        if file_id not in album[media_group_id]:
+            album[media_group_id].append(file_id)
+        state["media_groups"] = album
+
     pending = state.get("pending_uploads", [])
+    # Avoid duplicates
+    if any(p["file_id"] == file_id for p in pending):
+        return state
     pending.append({"file_id": file_id, "mime": mime, "name": name})
     state["pending_uploads"] = pending
     sess.save(chat_id, state)
@@ -690,6 +885,7 @@ def _process_points_uploads(chat_id: int, state: dict, pending: list[dict]) -> d
 
     state["points_db"] = all_points
     state["filtered_point_ids"] = [p["id"] for p in all_points]
+    state["source_files"]["points"] = [item["file_id"] for item in pending]
     state["pending_uploads"] = []
     state["state"] = "points_uploaded"
     sess.save(chat_id, state)
@@ -750,6 +946,7 @@ def _process_map_upload(chat_id: int, state: dict, pending: list[dict]) -> dict:
         return state
 
     state["pending_map_ids"] = filtered_ids
+    state["source_files"]["map"] = [item["file_id"] for item in pending]
     state["pending_uploads"] = []
     state["state"] = "map_pending_confirm"
     sess.save(chat_id, state)
@@ -791,6 +988,7 @@ def _process_participants_uploads(chat_id: int, state: dict, pending: list[dict]
         return state
 
     state["participants"] = all_parts
+    state["source_files"]["participants"] = [item["file_id"] for item in pending]
     state["pending_uploads"] = []
     state["state"] = "participants_uploaded"
     sess.save(chat_id, state)
@@ -827,7 +1025,7 @@ def handle_upload_special(chat_id: int, state: dict) -> dict:
          "שלח תמונה של נקודות נה/נב/נס (כל פורמט קואורדינטות).\n"
          "סדר בתמונה: נה ראשון, נב שני, נס שלישי.\n"
          "כשסיימת: /done (/d)")
-    return state
+    return _offer_prev(chat_id, state, "special")
 
 
 def _process_special_upload(chat_id: int, state: dict, pending: list[dict]) -> dict:
@@ -880,6 +1078,7 @@ def _process_special_upload(chat_id: int, state: dict, pending: list[dict]) -> d
                                     if p["id"] in set(state["filtered_point_ids"])
                                     or p["id"] > max_id]
 
+    state["source_files"]["special"] = [item["file_id"] for item in pending]
     state["pending_uploads"] = []
     state["state"] = "ready_for_generate"
     sess.save(chat_id, state)
@@ -1056,6 +1255,10 @@ def dispatch(chat_id: int, text: str) -> None:
         state = handle_export(chat_id, state)
     elif cmd == "clear_cache":
         handle_clear_cache(chat_id)
+    elif cmd == "yes":
+        state = handle_yes(chat_id, state)
+    elif cmd == "reparse":
+        state = handle_reparse(chat_id, state)
     elif cmd == "remove_point":
         state = handle_remove_point(chat_id, state, args)
     elif cmd == "add_point":
@@ -1072,12 +1275,13 @@ def dispatch(chat_id: int, text: str) -> None:
 def handle_file_message(chat_id: int, message: dict) -> None:
     state = sess.load(chat_id)
     upload_state = state.get("state", "")
+    doc = message.get("document")
+    photo = message.get("photo")
+    media_group_id = message.get("media_group_id")
+
     if upload_state not in ("awaiting_points_upload", "awaiting_map_upload", "awaiting_participants_upload", "awaiting_special_upload"):
         send(chat_id, "לא ממתין לקבצים. השתמש ב-/up, /um או /upa תחילה.")
         return
-
-    doc = message.get("document")
-    photo = message.get("photo")
 
     if doc:
         file_id = doc["file_id"]
@@ -1092,7 +1296,7 @@ def handle_file_message(chat_id: int, message: dict) -> None:
     else:
         return
 
-    handle_incoming_file(chat_id, state, file_id, mime, name)
+    handle_incoming_file(chat_id, state, file_id, mime, name, media_group_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1132,6 +1336,25 @@ def main() -> None:
 
                 text = msg.get("text", "").strip()
                 if text:
+                    # If user replies to an old message with files while in an upload state,
+                    # add those files to pending before processing the command.
+                    reply_to = msg.get("reply_to_message")
+                    if reply_to:
+                        try:
+                            cur_state = sess.load(chat_id)
+                            if cur_state.get("state") in (
+                                "awaiting_points_upload", "awaiting_map_upload",
+                                "awaiting_participants_upload", "awaiting_special_upload",
+                            ):
+                                for fid, mime, name in _extract_file_ids_from_message(reply_to):
+                                    group_id, album_fids = _find_album_for_file(cur_state, chat_id, fid)
+                                    if group_id and len(album_fids) > 1:
+                                        for album_fid in album_fids:
+                                            cur_state = handle_incoming_file(chat_id, cur_state, album_fid, "image/jpeg", "")
+                                    else:
+                                        cur_state = handle_incoming_file(chat_id, cur_state, fid, mime, name)
+                        except Exception as e:
+                            log(f"reply_to file extraction error: {e}")
                     try:
                         dispatch(chat_id, text)
                     except Exception as e:
