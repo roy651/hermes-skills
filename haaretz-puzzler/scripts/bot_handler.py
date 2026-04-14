@@ -76,13 +76,16 @@ def send_msg(chat_id, text, reply_to=None):
 
 
 def send_photo(chat_id, photo_path, caption=None, reply_to=None):
-    """Send photo with multipart upload."""
-    url = f"{API_BASE}/sendPhoto"
+    """Send image as a document to preserve full quality (sendPhoto compresses)."""
+    url = f"{API_BASE}/sendDocument"
     with open(photo_path, "rb") as f:
-        files = {"photo": (os.path.basename(photo_path), f, "image/jpeg")}
+        mime = "image/webp" if photo_path.endswith(".webp") else "image/jpeg"
+        files = {"document": (os.path.basename(photo_path), f, mime)}
         data = {"chat_id": chat_id}
         if caption:
             data["caption"] = caption
+        if reply_to:
+            data["reply_to_message_id"] = reply_to
         try:
             resp = requests_session.post(url, data=data, files=files, timeout=35)
             result = resp.json()
@@ -92,7 +95,7 @@ def send_photo(chat_id, photo_path, caption=None, reply_to=None):
                 log(f"Photo send failed: {result}")
             return result
         except Exception as e:
-            log(f"sendPhoto error: {e}")
+            log(f"sendDocument error: {e}")
             return None
 
 
@@ -154,12 +157,61 @@ def handle_puzzle(chat_id, message_id, args_text=""):
         log(f"Unexpected error in handle_puzzle: {e}")
 
 
+def handle_logic(chat_id, message_id):
+    """Handle /logic: fetch the latest logic puzzle from Haaretz."""
+    send_msg(chat_id, "מנסה לשלוף תשבץ היגיון אחרון", reply_to=message_id)
+
+    env = os.environ.copy()
+    env["PUZZLE_TYPE"] = "logic"
+    env["PUZZLE_INDEX"] = "1"
+    try:
+        result = subprocess.run(
+            ["bash", str(SKILL_DIR / "scripts" / "run.sh")],
+            env=env, capture_output=True, text=True, timeout=180,
+        )
+
+        if result.returncode != 0:
+            err_msg = "לא הצלחתי להביא את תשבץ ההיגיון. נסה שוב מאוחר יותר."
+            for line in result.stderr.split("\n"):
+                if "ERROR:" in line:
+                    err_msg = f"❌ {line.split('ERROR:')[1].strip()}"
+                    break
+            send_msg(chat_id, err_msg)
+            log(f"Logic fetch failed: {result.stderr[:300]}")
+            return
+
+        media_path = None
+        alt_info = ""
+        source = "fresh"
+        for line in result.stdout.strip().split("\n"):
+            if line.startswith("MEDIA:"):
+                media_path = line[6:]
+            elif line.startswith("ALT_INFO:"):
+                alt_info = line[9:]
+            elif line.startswith("SOURCE:"):
+                source = line[7:]
+
+        if media_path and os.path.exists(media_path):
+            suffix = "נשלף מהזיכרון הקיים" if source == "cached" else "נשלף מהאתר"
+            caption = f"🧠 {alt_info}\nתשבץ היגיון {suffix}"
+            send_photo(chat_id, media_path, caption=caption, reply_to=message_id)
+        else:
+            send_msg(chat_id, "❌ תשבץ ההיגיון לא הורד כראוי.")
+
+    except subprocess.TimeoutExpired:
+        send_msg(chat_id, "❌ לקח יותר מדי זמן. נסה שוב בעוד מספר דקות.")
+    except Exception as e:
+        send_msg(chat_id, "❌ שגיאה לא צפויה.")
+        log(f"Unexpected error in handle_logic: {e}")
+
+
 def handle_start(chat_id):
     send_msg(chat_id, (
         "🧩 <b>ברוכים הבאים לתשבצי הארץ!</b>\n\n"
         "פקודות זמינות:\n"
-        "/puzzle — מביא את התשבץ השלישי מהמוסף האחרון\n"
-        "/puzzle N — מביא את התשבץ ה-N (למשל: /puzzle 1)\n"
+        "/puzzle — תשבץ שבועי (מוסף סוף שבוע)\n"
+        "/puzzle N — תשבץ מספר N (למשל: /puzzle 1)\n"
+        "/logic — תשבץ היגיון (יוצא באמצע השבוע)\n"
         "/help — עזרה\n\n"
         "התשבצים מתעדכנים כל שבוע. 📅"
     ))
@@ -169,11 +221,12 @@ def handle_help(chat_id):
     send_msg(chat_id, (
         "📋 <b>פקודות זמינות:</b>\n\n"
         "/start — ברוכים הבאים\n"
-        "/puzzle — התשבץ השלישי (ברירת מחדל)\n"
+        "/puzzle — התשבץ השלישי מהמוסף השבועי (ברירת מחדל)\n"
         "/puzzle N — תשבץ מספר N (למשל: /puzzle 1)\n"
+        "/logic — תשבץ היגיון (יוצא לרוב ביום רביעי)\n"
         "/help — עזרה זו\n\n"
         "💡 הבוט שולף תשבץ חדש רק כששולחים פקודה.\n"
-        "אם התשבץ השבועי עוד לא פורסם — נשלח התשבץ האחרון מהמטמון."
+        "אם התשבץ עוד לא פורסם — נשלח התשבץ האחרון מהמטמון."
     ))
 
 
@@ -214,6 +267,8 @@ def main():
                         handle_start(chat_id)
                     elif cmd == "puzzle":
                         handle_puzzle(chat_id, message_id, args)
+                    elif cmd == "logic":
+                        handle_logic(chat_id, message_id)
                     elif cmd == "help":
                         handle_help(chat_id)
                     else:

@@ -35,7 +35,10 @@ except ImportError:
     sys.exit(1)
 
 HAARETZ_BASE = "https://www.haaretz.co.il"
-SEARCH_URL = "https://www.haaretz.co.il/ty-search?q=%D7%A2%D7%95%D7%A9%D7%94+%D7%A9%D7%9B%D7%9C"
+SEARCH_URLS = {
+    "puzzle": "https://www.haaretz.co.il/ty-search?q=%D7%A2%D7%95%D7%A9%D7%94+%D7%A9%D7%9B%D7%9C",
+    "logic":  "https://www.haaretz.co.il/ty-search?q=%D7%AA%D7%A9%D7%91%D7%A5%20%D7%94%D7%99%D7%92%D7%99%D7%95%D7%9F",
+}
 LOGIN_URL = "https://login.haaretz.co.il/?htm_source=site&htm_medium=MidPage&htm_campaign=register&htm_content=login"
 
 
@@ -83,8 +86,11 @@ async def download_image(url: str, referer: str, output_dir: str) -> tuple[str, 
     return dest, len(data)
 
 
-async def run(email: str, password: str, puzzle_index: int, output_dir: str):
+async def run(email: str, password: str, puzzle_index: int, output_dir: str, puzzle_type: str = "puzzle"):
     """Main browser automation flow."""
+    search_url = SEARCH_URLS.get(puzzle_type, SEARCH_URLS["puzzle"])
+    is_logic = puzzle_type == "logic"
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -103,8 +109,9 @@ async def run(email: str, password: str, puzzle_index: int, output_dir: str):
 
         try:
             # ── Step 1: Search for latest puzzle ──
-            print("[1/6] Searching for latest puzzle...", file=sys.stderr)
-            await page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            label = "תשבץ היגיון" if is_logic else "תשבץ"
+            print(f"[1/6] Searching for latest {label}...", file=sys.stderr)
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)
 
             articles = page.locator("article")
@@ -199,57 +206,103 @@ async def run(email: str, password: str, puzzle_index: int, output_dir: str):
             await page.evaluate("window.scrollBy(0, 600)")
             await page.wait_for_timeout(2000)
 
-            # ── Step 5: Find puzzle image by alt text ──
-            print(f"[5/6] Finding puzzle image #{puzzle_index}...", file=sys.stderr)
+            # ── Step 5: Find puzzle image ──
             all_imgs = page.locator("img")
             total = await all_imgs.count()
-            print(f"  Total images: {total}", file=sys.stderr)
+            print(f"[5/6] Scanning {total} images...", file=sys.stderr)
 
-            found = []
-            for i in range(total):
-                img = all_imgs.nth(i)
-                try:
-                    alt = await img.get_attribute("alt", timeout=2000)
-                    if not alt or "תשבץ" not in alt:
-                        continue
-                    src = await img.get_attribute("src", timeout=2000)
-                    if src:
+            if is_logic:
+                # Logic puzzle: one image per article — find first with "תשבץ" in alt,
+                # or fall back to first sufficiently large image.
+                image_url = None
+                alt_for_log = ""
+                fallback_url = None
+                for i in range(total):
+                    img = all_imgs.nth(i)
+                    try:
+                        alt = await img.get_attribute("alt", timeout=2000) or ""
+                        src = await img.get_attribute("src", timeout=2000) or ""
+                        if not src:
+                            continue
                         if src.startswith("//"):
                             src = "https:" + src
                         elif src.startswith("/"):
                             src = urljoin(HAARETZ_BASE, src)
-                        m = re.match(r'^(\d+)תשבץ\s', alt.strip())
-                        if m:
-                            idx = int(m.group(1))
-                            found.append((idx, alt.strip(), src))
-                            print(f"  Puzzle #{idx}: '{alt.strip()}'", file=sys.stderr)
-                except Exception:
-                    continue
-
-            if not found:
-                # Debug: dump all alt texts
-                print("  No puzzle images found. Alt texts:", file=sys.stderr)
-                for i in range(min(total, 30)):
-                    try:
-                        alt = await all_imgs.nth(i).get_attribute("alt", timeout=1000)
-                        if alt:
-                            print(f"    [{i}] '{alt}'", file=sys.stderr)
+                        # Skip tiny icons/logos (heuristic: URL contains resolution hint)
+                        if re.search(r'[_-](16|24|32|48|64|80)x', src):
+                            continue
+                        if "תשבץ" in alt:
+                            image_url = src
+                            alt_for_log = alt.strip()
+                            print(f"  Logic image (by alt): '{alt_for_log}'", file=sys.stderr)
+                            break
+                        # Keep first sizeable image as fallback
+                        if fallback_url is None and src and ("cdn" in src or "img" in src or "media" in src):
+                            fallback_url = src
                     except Exception:
                         continue
-                raise Exception("No puzzle images with 'תשבץ' in alt")
 
-            target = None
-            for idx, alt, src in found:
-                if idx == puzzle_index:
-                    target = (idx, alt, src)
-                    break
+                if not image_url:
+                    if fallback_url:
+                        image_url = fallback_url
+                        print(f"  Logic image (fallback): {fallback_url}", file=sys.stderr)
+                    else:
+                        # Debug dump
+                        print("  No logic image found. Alt texts:", file=sys.stderr)
+                        for i in range(min(total, 30)):
+                            try:
+                                alt = await all_imgs.nth(i).get_attribute("alt", timeout=1000)
+                                if alt:
+                                    print(f"    [{i}] '{alt}'", file=sys.stderr)
+                            except Exception:
+                                continue
+                        raise Exception("No image found in logic puzzle article")
+            else:
+                # Regular puzzle: find by numbered alt "NתשבץDATE"
+                found = []
+                for i in range(total):
+                    img = all_imgs.nth(i)
+                    try:
+                        alt = await img.get_attribute("alt", timeout=2000)
+                        if not alt or "תשבץ" not in alt:
+                            continue
+                        src = await img.get_attribute("src", timeout=2000)
+                        if src:
+                            if src.startswith("//"):
+                                src = "https:" + src
+                            elif src.startswith("/"):
+                                src = urljoin(HAARETZ_BASE, src)
+                            m = re.match(r'^(\d+)תשבץ\s', alt.strip())
+                            if m:
+                                idx = int(m.group(1))
+                                found.append((idx, alt.strip(), src))
+                                print(f"  Puzzle #{idx}: '{alt.strip()}'", file=sys.stderr)
+                    except Exception:
+                        continue
 
-            if not target:
-                available = ", ".join(str(x[0]) for x in found)
-                raise Exception(f"Puzzle #{puzzle_index} not found. Available: {available}")
+                if not found:
+                    print("  No puzzle images found. Alt texts:", file=sys.stderr)
+                    for i in range(min(total, 30)):
+                        try:
+                            alt = await all_imgs.nth(i).get_attribute("alt", timeout=1000)
+                            if alt:
+                                print(f"    [{i}] '{alt}'", file=sys.stderr)
+                        except Exception:
+                            continue
+                    raise Exception("No puzzle images with 'תשבץ' in alt")
 
-            print(f"  Selected: #{target[0]} | {target[1]}", file=sys.stderr)
-            image_url = target[2]
+                target = None
+                for idx, alt, src in found:
+                    if idx == puzzle_index:
+                        target = (idx, alt, src)
+                        break
+
+                if not target:
+                    available = ", ".join(str(x[0]) for x in found)
+                    raise Exception(f"Puzzle #{puzzle_index} not found. Available: {available}")
+
+                print(f"  Selected: #{target[0]} | {target[1]}", file=sys.stderr)
+                image_url = target[2]
 
             # ── Step 6: Download ──
             print("[6/6] Downloading...", file=sys.stderr)
@@ -277,13 +330,14 @@ def main():
     parser.add_argument("--password", default=os.environ.get("HAARETZ_PASSWORD", ""))
     parser.add_argument("--index", type=int, default=int(os.environ.get("PUZZLE_INDEX", "3")))
     parser.add_argument("--output-dir", default=os.environ.get("OUTPUT_DIR", str(Path(__file__).parent.parent / "output")))
+    parser.add_argument("--type", default=os.environ.get("PUZZLE_TYPE", "puzzle"), choices=["puzzle", "logic"])
     args = parser.parse_args()
 
     if not args.email or not args.password:
         print("ERROR: HAARETZ_EMAIL and HAARETZ_PASSWORD required.", file=sys.stderr)
         sys.exit(1)
 
-    asyncio.run(run(args.email, args.password, args.index, args.output_dir))
+    asyncio.run(run(args.email, args.password, args.index, args.output_dir, args.type))
 
 
 if __name__ == "__main__":
