@@ -53,6 +53,49 @@ def _env_defaults():
                 os.environ.setdefault(key.strip(), val.strip())
 
 
+def _best_image_url(src: str, srcset: str) -> str:
+    """Pick highest-resolution URL from srcset, or strip resize params from src."""
+    if srcset:
+        # srcset format: "url1 1x, url2 2x" or "url1 300w, url2 600w, url3 1200w"
+        best_url = src
+        best_w = 0
+        for entry in srcset.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = entry.rsplit(None, 1)
+            url_part = parts[0].strip()
+            desc = parts[1].strip() if len(parts) > 1 else "1x"
+            try:
+                if desc.endswith("w"):
+                    w = int(desc[:-1])
+                elif desc.endswith("x"):
+                    w = int(float(desc[:-1]) * 1000)
+                else:
+                    w = 0
+            except ValueError:
+                w = 0
+            if w > best_w:
+                best_w = w
+                best_url = url_part
+        if best_url and best_url != src:
+            return best_url
+
+    # No usable srcset — try stripping CDN resize query params from src
+    # e.g. remove ?width=NNN&quality=NN or similar
+    if src and ("?" in src or "&" in src):
+        from urllib.parse import urlparse as _up, urlencode, parse_qs, urlunparse
+        parsed = _up(src)
+        params = parse_qs(parsed.query)
+        # Strip common resize params; keep none (original) if only resize params exist
+        strip_keys = {"width", "w", "height", "h", "quality", "q", "fit", "f", "auto", "format", "dpr", "resize"}
+        remaining = {k: v for k, v in params.items() if k.lower() not in strip_keys}
+        clean_query = urlencode(remaining, doseq=True)
+        src = urlunparse(parsed._replace(query=clean_query))
+
+    return src
+
+
 async def download_image(url: str, referer: str, output_dir: str) -> tuple[str, int]:
     """Download an image with referer header."""
     os.makedirs(output_dir, exist_ok=True)
@@ -224,21 +267,32 @@ async def run(email: str, password: str, puzzle_index: int, output_dir: str, puz
                         src = await img.get_attribute("src", timeout=2000) or ""
                         if not src:
                             continue
-                        if src.startswith("//"):
-                            src = "https:" + src
-                        elif src.startswith("/"):
-                            src = urljoin(HAARETZ_BASE, src)
-                        # Skip tiny icons/logos (heuristic: URL contains resolution hint)
-                        if re.search(r'[_-](16|24|32|48|64|80)x', src):
+                        raw_src = await img.get_attribute("src", timeout=2000) or ""
+                        raw_srcset = (await img.get_attribute("srcset", timeout=2000) or
+                                      await img.get_attribute("data-srcset", timeout=2000) or "")
+                        if not raw_src:
+                            raw_src = await img.get_attribute("data-src", timeout=2000) or ""
+                        if not raw_src:
+                            continue
+                        def _abs(u):
+                            if u.startswith("//"):
+                                return "https:" + u
+                            if u.startswith("/"):
+                                return urljoin(HAARETZ_BASE, u)
+                            return u
+                        raw_src = _abs(raw_src)
+                        raw_srcset = ", ".join(_abs(e.strip()) if e.strip().startswith("/") else e for e in raw_srcset.split(","))
+                        best = _best_image_url(raw_src, raw_srcset)
+                        # Skip tiny icons/logos
+                        if re.search(r'[_-](16|24|32|48|64|80)x', best):
                             continue
                         if "תשבץ" in alt:
-                            image_url = src
+                            image_url = best
                             alt_for_log = alt.strip()
-                            print(f"  Logic image (by alt): '{alt_for_log}'", file=sys.stderr)
+                            print(f"  Logic image (by alt): '{alt_for_log}' → {best}", file=sys.stderr)
                             break
-                        # Keep first sizeable image as fallback
-                        if fallback_url is None and src and ("cdn" in src or "img" in src or "media" in src):
-                            fallback_url = src
+                        if fallback_url is None and best and ("cdn" in best or "img" in best or "media" in best):
+                            fallback_url = best
                     except Exception:
                         continue
 
@@ -247,7 +301,6 @@ async def run(email: str, password: str, puzzle_index: int, output_dir: str, puz
                         image_url = fallback_url
                         print(f"  Logic image (fallback): {fallback_url}", file=sys.stderr)
                     else:
-                        # Debug dump
                         print("  No logic image found. Alt texts:", file=sys.stderr)
                         for i in range(min(total, 30)):
                             try:
@@ -266,17 +319,23 @@ async def run(email: str, password: str, puzzle_index: int, output_dir: str, puz
                         alt = await img.get_attribute("alt", timeout=2000)
                         if not alt or "תשבץ" not in alt:
                             continue
-                        src = await img.get_attribute("src", timeout=2000)
-                        if src:
-                            if src.startswith("//"):
-                                src = "https:" + src
-                            elif src.startswith("/"):
-                                src = urljoin(HAARETZ_BASE, src)
-                            m = re.match(r'^(\d+)תשבץ\s', alt.strip())
-                            if m:
-                                idx = int(m.group(1))
-                                found.append((idx, alt.strip(), src))
-                                print(f"  Puzzle #{idx}: '{alt.strip()}'", file=sys.stderr)
+                        raw_src = await img.get_attribute("src", timeout=2000) or ""
+                        raw_srcset = (await img.get_attribute("srcset", timeout=2000) or
+                                      await img.get_attribute("data-srcset", timeout=2000) or "")
+                        if not raw_src:
+                            raw_src = await img.get_attribute("data-src", timeout=2000) or ""
+                        if not raw_src:
+                            continue
+                        if raw_src.startswith("//"):
+                            raw_src = "https:" + raw_src
+                        elif raw_src.startswith("/"):
+                            raw_src = urljoin(HAARETZ_BASE, raw_src)
+                        best = _best_image_url(raw_src, raw_srcset)
+                        m = re.match(r'^(\d+)תשבץ\s', alt.strip())
+                        if m:
+                            idx = int(m.group(1))
+                            found.append((idx, alt.strip(), best))
+                            print(f"  Puzzle #{idx}: '{alt.strip()}' → {best}", file=sys.stderr)
                     except Exception:
                         continue
 
