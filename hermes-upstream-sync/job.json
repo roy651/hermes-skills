@@ -1,0 +1,11 @@
+{
+  "id": "hermes_upstream_sync_check",
+  "name": "Hermes Upstream Sync Check",
+  "prompt": "Check if the hermes-agent installation is behind the upstream NousResearch repo and report the findings.\n\nRun these steps using execute_bash:\n\n1. Fetch upstream (no checkout):\n   cd ~/.hermes/hermes-agent && git fetch origin 2>&1\n\n2. Count commits behind:\n   git rev-list HEAD..origin/main --count\n\n3. If 0 commits behind, respond with [SILENT] — nothing to report.\n\n4. If behind, get the commit list:\n   git log HEAD..origin/main --oneline\n\n5. Check if our branch rebases cleanly (dry-run, no changes):\n   git stash 2>/dev/null; git rebase --onto origin/main origin/main HEAD --dry-run 2>&1 | tail -5; git stash pop 2>/dev/null\n\n6. Send a Telegram report to Roy with:\n   - How many commits behind\n   - Summary of notable changes (feat/fix only, skip docs/test/style commits)\n   - Whether rebase looks clean or has conflicts\n   - Recommendation: if rebase is clean → \"עדכון בטוח, ניתן לרוץ עכשיו\"; if conflicts → \"נדרש merge ידני לפני עדכון\"\n\nKeep the report concise and in English. Wrap any tables in triple-backtick code blocks.",
+  "schedule": {
+    "kind": "cron",
+    "expr": "0 9 * * 0"
+  },
+  "deliver": "origin",
+  "enabled": true
+}
