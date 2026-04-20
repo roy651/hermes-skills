@@ -52,6 +52,17 @@ browser_snapshot to get 10-day table from accessibility tree
 - **DO NOT scrape weather.com via web_extract** — it returns sidebar/lifestyle content, not the forecast data. Use browser snapshot if needed.
 - **Small towns may map to wrong locations** in generic searches — always use coordinates for precision, or specify "Northern District Israel" as the scope.
 
+## Telegram Formatting
+
+Any tabular data must be wrapped in a triple-backtick code block — Telegram uses a proportional font in regular messages, which garbles ASCII table alignment. Code blocks render in monospace and preserve the layout:
+```
+\`\`\`
+Day   | High | Low | Rain
+------|------|-----|-----
+Mon   |  18° | 12° |  60%
+\`\`\`
+```
+
 ## Response Format
 
 When presenting weather data, always include:

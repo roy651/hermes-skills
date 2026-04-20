@@ -14,6 +14,20 @@ metadata:
 
 Get accurate weather forecasts for Israel, with emphasis on precipitation timing windows and localized data. Always prioritize weather2day.co.il as the primary source — it's the most accurate for Israeli weather.
 
+## Output Language & Formatting
+
+**Language:** Always write the forecast report in Hebrew, regardless of what language the user asked in.
+
+**Tables:** Any tabular data (day-by-day forecasts, hourly precipitation, etc.) must be wrapped in a triple-backtick code block so it renders correctly in Telegram:
+```
+\`\`\`
+יום  | טמפ' | גשם
+-----|------|-----
+שני  | 18°  | 60%
+\`\`\`
+```
+Never output raw ASCII tables outside a code block — they render as garbled text in Telegram's proportional font.
+
 ## Primary Data Sources
 
 ### 1. weather2day.co.il/forecast (Textual forecasts) — PRIMARY

@@ -1,0 +1,9 @@
+.env
+.venv/
+logs/
+data/
+importer/node_modules/
+importer/config.json
+importer/config.enc
+importer/.cache/
+*.pid

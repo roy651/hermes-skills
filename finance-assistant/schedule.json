@@ -1,0 +1,4 @@
+{
+  "weekly":  { "enabled": true,  "day": "monday", "time": "09:00" },
+  "monthly": { "enabled": true,  "day": 1,         "time": "08:00" }
+}

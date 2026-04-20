@@ -1,0 +1,49 @@
+{
+  "accounts": [
+    {
+      "companyId": "max",
+      "username": "YOUR_MAX_USERNAME_ROY",
+      "password": "YOUR_MAX_PASSWORD_ROY"
+    },
+    {
+      "companyId": "max",
+      "username": "YOUR_MAX_USERNAME_WIFE",
+      "password": "YOUR_MAX_PASSWORD_WIFE"
+    },
+    {
+      "companyId": "visaCal",
+      "username": "YOUR_CAL_USERNAME_ROY",
+      "password": "YOUR_CAL_PASSWORD_ROY"
+    },
+    {
+      "companyId": "visaCal",
+      "username": "YOUR_CAL_USERNAME_WIFE",
+      "password": "YOUR_CAL_PASSWORD_WIFE"
+    },
+    {
+      "companyId": "isracard",
+      "id": "YOUR_ISRACARD_ID",
+      "card6Digits": "LAST_6_DIGITS_OF_CARD",
+      "password": "YOUR_ISRACARD_PASSWORD"
+    }
+  ],
+  "storage": {
+    "actual": {
+      "serverUrl": "http://localhost:5006",
+      "password": "YOUR_ACTUALBUDGET_PASSWORD",
+      "budgetId": "YOUR_BUDGET_UUID",
+      "accounts": {
+        "MONEYMAN_ACCOUNT_ID": "ACTUALBUDGET_ACCOUNT_UUID"
+      }
+    }
+  },
+  "options": {
+    "notifications": {
+      "telegram": {
+        "apiKey": "YOUR_TELEGRAM_BOT_TOKEN",
+        "chatId": "YOUR_CHAT_ID",
+        "enableOtp": true
+      }
+    }
+  }
+}
