@@ -399,13 +399,188 @@ def generate_assignments(
 
 
 def format_assignments_preview(assignments: list[dict], points_db: list[dict]) -> str:
-    pt_map = {p["id"]: p for p in points_db}
     lines = [f"נוצרו {len(assignments)} משימות:"]
     for a in assignments:
         pts_str = " → ".join(str(pid) for pid in a["points"])
         lines.append(f"  {a['index']}. [{a['section']}] {pts_str} ({a['length_km']:.2f} ק\"מ)")
-    si = [a for a in assignments if "נה→" in a["section"]]
-    fi = [a for a in assignments if "נב→" in a["section"]]
+    by_section: dict[str, list] = {}
+    for a in assignments:
+        by_section.setdefault(a["section"], []).append(a)
     unique = len({pid for a in assignments for pid in a["points"]})
-    lines.append(f"\nסיכום: {len(si)} מקטעי נה→נב, {len(fi)} מקטעי נב→נס, {unique} נקודות ייחודיות")
+    section_summary = "  ".join(f"{sec}: {len(tasks)} משימות" for sec, tasks in sorted(by_section.items()))
+    lines.append(f"\nסיכום: {section_summary} | {unique} נקודות ייחודיות")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Solo-A: single section, start → finish (no intermediate)
+# ---------------------------------------------------------------------------
+
+def generate_solo_a_assignments(
+    points_db: list[dict],
+    filtered_point_ids: list[int],
+    special: dict,
+    n_per_nav: int,
+    avg_km: float,
+    min_km: float,
+    max_km: float,
+    n_participants: int,
+) -> list[dict]:
+    """
+    Generate solo-A navigation assignments (no intermediate point).
+    All n_participants paths are start → finish, section "נה→נס".
+    """
+    if n_participants < 1:
+        raise ValueError("מספר המשתתפים חייב להיות לפחות 1")
+
+    start_id = special.get("start_id")
+    finish_id = special.get("finish_id")
+
+    if not all([start_id, finish_id]):
+        raise ValueError("נקודות מיוחדות (התחלה/סיום) לא הוגדרו")
+
+    pt_map = {p["id"]: p for p in points_db}
+    for label, pid in [("התחלה", start_id), ("סיום", finish_id)]:
+        if pid not in pt_map:
+            raise ValueError(f"נקודת {label} (ID={pid}) לא נמצאה בבסיס הנתונים")
+
+    start_pt = pt_map[start_id]
+    finish_pt = pt_map[finish_id]
+
+    special_ids = {start_id, finish_id}
+    pool = [pt_map[pid] for pid in filtered_point_ids if pid not in special_ids and pid in pt_map]
+
+    if len(pool) < n_per_nav:
+        raise ValueError(
+            f"אין מספיק נקודות בבריכת הניווט ({len(pool)}) עבור {n_per_nav} נקודות למסלול"
+        )
+
+    dist_cache = build_dist_cache(list(pt_map.values()))
+
+    pool_sf = filter_feasible_points(pool, start_pt, finish_pt, dist_cache, n_per_nav, min_km, max_km)
+    if len(pool_sf) < n_per_nav:
+        raise ValueError("לא נמצאו נקודות מתאימות למסלול נה→נס (בדוק את הגדרות המרחק)")
+
+    usage: dict[int, int] = {}
+    assignments = _greedy_assignment(
+        pool_sf, start_pt, finish_pt, dist_cache, n_per_nav, min_km, max_km,
+        n_participants, usage, "נה→נס",
+    )
+
+    if not assignments:
+        raise ValueError("לא הצלחתי לייצר אף מסלול — בדוק את הגדרות המרחק")
+
+    assignments, _ = _simulated_annealing(
+        assignments, [],
+        pool_sf, [],
+        start_pt, finish_pt,
+        None, None,
+        dist_cache, min_km, max_km,
+    )
+
+    for i, a in enumerate(assignments):
+        a["index"] = i + 1
+
+    unique = len({pid for a in assignments for pid in a["points"]})
+    print(
+        f"[nav_algorithm] Generated {len(assignments)} solo-A assignments (נה→נס), "
+        f"{unique} unique points used",
+        file=sys.stderr,
+    )
+    return assignments
+
+
+# ---------------------------------------------------------------------------
+# Solo-mid: two sections, separate waypoint counts, N paths per section
+# ---------------------------------------------------------------------------
+
+def generate_solo_mid_assignments(
+    points_db: list[dict],
+    filtered_point_ids: list[int],
+    special: dict,
+    n_si_pts: int,
+    n_if_pts: int,
+    avg_km: float,
+    min_km: float,
+    max_km: float,
+    n_participants: int,
+) -> list[dict]:
+    """
+    Generate solo-mid navigation assignments.
+    n_participants S→I paths (n_si_pts waypoints each) +
+    n_participants I→F paths (n_if_pts waypoints each).
+    Each participant gets one path from each section.
+    """
+    if n_participants < 1:
+        raise ValueError("מספר המשתתפים חייב להיות לפחות 1")
+
+    start_id = special.get("start_id")
+    mid_id = special.get("mid_id")
+    finish_id = special.get("finish_id")
+
+    if not all([start_id, mid_id, finish_id]):
+        raise ValueError("נקודות מיוחדות (התחלה/אמצע/סיום) לא הוגדרו")
+
+    pt_map = {p["id"]: p for p in points_db}
+    for label, pid in [("התחלה", start_id), ("אמצע", mid_id), ("סיום", finish_id)]:
+        if pid not in pt_map:
+            raise ValueError(f"נקודת {label} (ID={pid}) לא נמצאה בבסיס הנתונים")
+
+    start_pt = pt_map[start_id]
+    mid_pt = pt_map[mid_id]
+    finish_pt = pt_map[finish_id]
+
+    special_ids = {start_id, mid_id, finish_id}
+    pool = [pt_map[pid] for pid in filtered_point_ids if pid not in special_ids and pid in pt_map]
+
+    if len(pool) < max(n_si_pts, n_if_pts):
+        raise ValueError(
+            f"אין מספיק נקודות בבריכת הניווט ({len(pool)}) עבור המסלולים המבוקשים"
+        )
+
+    dist_cache = build_dist_cache(list(pt_map.values()))
+
+    pool_si = filter_feasible_points(pool, start_pt, mid_pt, dist_cache, n_si_pts, min_km, max_km)
+    pool_if = filter_feasible_points(pool, mid_pt, finish_pt, dist_cache, n_if_pts, min_km, max_km)
+
+    if len(pool_si) < n_si_pts:
+        raise ValueError("לא נמצאו נקודות מתאימות למקטע נה→נב (בדוק את הגדרות המרחק)")
+    if len(pool_if) < n_if_pts:
+        raise ValueError("לא נמצאו נקודות מתאימות למקטע נב→נס (בדוק את הגדרות המרחק)")
+
+    usage_si: dict[int, int] = {}
+    usage_if: dict[int, int] = {}
+
+    si_assignments = _greedy_assignment(
+        pool_si, start_pt, mid_pt, dist_cache, n_si_pts, min_km, max_km,
+        n_participants, usage_si, "נה→נב",
+    )
+    if_assignments = _greedy_assignment(
+        pool_if, mid_pt, finish_pt, dist_cache, n_if_pts, min_km, max_km,
+        n_participants, usage_if, "נב→נס",
+    )
+
+    if not si_assignments and not if_assignments:
+        raise ValueError("לא הצלחתי לייצר אף מסלול — בדוק את הגדרות המרחק")
+
+    si_assignments, if_assignments = _simulated_annealing(
+        si_assignments, if_assignments,
+        pool_si, pool_if,
+        start_pt, mid_pt,
+        mid_pt, finish_pt,
+        dist_cache, min_km, max_km,
+    )
+
+    all_assignments = si_assignments + if_assignments
+    for i, a in enumerate(all_assignments):
+        a["index"] = i + 1
+
+    unique = len({pid for a in all_assignments for pid in a["points"]})
+    print(
+        f"[nav_algorithm] Generated {len(all_assignments)} solo-mid assignments "
+        f"({len(si_assignments)} נה→נב [{n_si_pts} pts], "
+        f"{len(if_assignments)} נב→נס [{n_if_pts} pts]), "
+        f"{unique} unique points used",
+        file=sys.stderr,
+    )
+    return all_assignments

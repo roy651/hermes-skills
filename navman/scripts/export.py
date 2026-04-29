@@ -159,6 +159,90 @@ def export_pairings(
 # Combined export
 # ---------------------------------------------------------------------------
 
+def export_solo_a(
+    solo_assignments: list[dict],
+    points_db: list[dict],
+    output_dir: str,
+) -> str:
+    """Write solo_assignments.xlsx for solo-A mode (one row per participant). Returns file path."""
+    pt_map = {p["id"]: p for p in points_db}
+    n_pts = max((len(a["points"]) for a in solo_assignments), default=0)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "שיבוץ יחידני"
+    _rtl_sheet(ws)
+
+    headers = (
+        ["מס'", "שם", "ציון", "מס' משימה", "מקטע"]
+        + [f"נקודה {i + 1}" for i in range(n_pts)]
+        + ["אורך (ק\"מ)"]
+    )
+    _header_row(ws, headers)
+
+    for a in sorted(solo_assignments, key=lambda x: x["index"]):
+        pts_cells = []
+        for pid in a["points"]:
+            pt = pt_map.get(pid)
+            pts_cells.append(f"{pid}" + (f" – {pt['description']}" if pt and pt.get("description") else ""))
+        pts_cells += [""] * (n_pts - len(pts_cells))
+
+        row = [a["index"], a["name"], round(a["score"], 1), a["task_index"], a["section"]] + pts_cells + [a["length_km"]]
+        ws.append(row)
+        for cell in ws[ws.max_row]:
+            cell.alignment = _RTL
+
+    _auto_width(ws)
+    out_path = Path(output_dir) / "solo_assignments.xlsx"
+    wb.save(str(out_path))
+    return str(out_path)
+
+
+def export_solo_mid(
+    solo_assignments: list[dict],
+    points_db: list[dict],
+    output_dir: str,
+) -> str:
+    """Write solo_mid_assignments.xlsx for solo-mid mode (one row per participant, two tasks). Returns file path."""
+    pt_map = {p["id"]: p for p in points_db}
+    n_si = max((len(a["si_points"]) for a in solo_assignments), default=0)
+    n_if = max((len(a["if_points"]) for a in solo_assignments), default=0)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "שיבוץ יחידני עם ביניים"
+    _rtl_sheet(ws)
+
+    headers = (
+        ["מס'", "שם", "ציון"]
+        + ["מס' משימה נה→נב"] + [f"נקודה ס{i + 1}" for i in range(n_si)] + ["אורך נה→נב (ק\"מ)"]
+        + ["מס' משימה נב→נס"] + [f"נקודה ב{i + 1}" for i in range(n_if)] + ["אורך נב→נס (ק\"מ)"]
+    )
+    _header_row(ws, headers)
+
+    def _pt_labels(pids: list, n: int) -> list:
+        cells = []
+        for pid in pids:
+            pt = pt_map.get(pid)
+            cells.append(f"{pid}" + (f" – {pt['description']}" if pt and pt.get("description") else ""))
+        return cells + [""] * (n - len(cells))
+
+    for a in sorted(solo_assignments, key=lambda x: x["index"]):
+        row = (
+            [a["index"], a["name"], round(a["score"], 1)]
+            + [a["si_task_index"]] + _pt_labels(a["si_points"], n_si) + [a["si_length_km"]]
+            + [a["if_task_index"]] + _pt_labels(a["if_points"], n_if) + [a["if_length_km"]]
+        )
+        ws.append(row)
+        for cell in ws[ws.max_row]:
+            cell.alignment = _RTL
+
+    _auto_width(ws)
+    out_path = Path(output_dir) / "solo_mid_assignments.xlsx"
+    wb.save(str(out_path))
+    return str(out_path)
+
+
 def export_combined(
     pairings: list[dict],
     points_db: list[dict],

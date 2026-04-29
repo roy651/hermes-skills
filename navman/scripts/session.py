@@ -70,6 +70,7 @@ def _empty() -> dict:
             "special": [],
         },
         "media_groups": {},      # media_group_id -> [file_id, ...] for album tracking
+        "gen_mode": "duo",       # "duo", "solo", "solo_mid"
     }
 
 

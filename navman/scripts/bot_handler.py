@@ -181,9 +181,9 @@ def _state_label(state: dict) -> str:
         "points_uploaded": "נקודות נטענו — העלה מפה (/um) או דלג (/sm)",
         "awaiting_map_upload": "ממתין להעלאת תמונת מפה (/um, אז /d)",
         "map_pending_confirm": "מחכה לאישור נקודות המפה (/cm) או עריכה (/em)",
-        "awaiting_special": "הגדר נקודות מיוחדות: /sp <id> <id> <id> או העלה תמונה (/ups)",
+        "awaiting_special": "הגדר נקודות מיוחדות: /sp <ids> או העלה תמונה (/ups)",
         "awaiting_special_upload": "ממתין לתמונת נקודות מיוחדות (/ups, אז /d)",
-        "ready_for_generate": "מוכן ליצירת משימות: /gen <נקודות> <ממוצע> <מינ> <מקס> <משתתפים>",
+        "ready_for_generate": "מוכן ליצירת משימות: /gen duo|solo|solo_mid ...",
         "assignments_generated": "משימות נוצרו — העלה משתתפים (/upa, אז /d)",
         "awaiting_participants_upload": "ממתין להעלאת טבלת משתתפים (/upa, אז /d)",
         "participants_uploaded": "משתתפים נטענו — צור שיבוץ (/a)",
@@ -206,11 +206,14 @@ def handle_help(chat_id: int, state: dict) -> None:
         "/skip_map (/sm) — דילוג על סינון מפה\n"
         "/confirm_map (/cm) — אישור נקודות מפה\n"
         "/edit_map (/em) <ids> — עריכה ידנית של נקודות מפה\n"
-        "/special (/sp) <start_id> <mid_id> <finish_id> — נקודות נה/נב/נס ידנית\n"
-        "/upload_special (/ups) — העלאת תמונת נקודות מיוחדות (כל פורמט)\n"
-        "/generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants> — יצירת משימות\n"
+        "/special (/sp) <start_id> <mid_id> <finish_id> — נה/נב/נס (זוגות / יחידני עם ביניים)\n"
+        "/special (/sp) <start_id> <finish_id> — נה/נס בלבד (יחידני ללא ביניים)\n"
+        "/upload_special (/ups) — העלאת תמונת נקודות מיוחדות (2 או 3 נקודות)\n"
+        "/gen duo <avg_km> <min_km> <max_km> <participants> <pts> — ניווט זוגות\n"
+        "/gen solo <avg_km> <min_km> <max_km> <participants> <pts> — ניווט יחידני (נה→נס)\n"
+        "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if> — ניווט יחידני עם ביניים\n"
         "/upload_participants (/upa) — העלאת טבלת משתתפים\n"
-        "/assign (/a) — יצירת שיבוץ זוגות\n"
+        "/assign (/a) — יצירת שיבוץ\n"
         "/export (/ex) — יצוא XLS\n"
         "/done (/d) — סיום העלאות (מפעיל עיבוד)\n"
         "/clear_cache (/cc) — מחיקת מטמון פרסור (לפרסור מחדש)\n"
@@ -228,14 +231,21 @@ def handle_status(chat_id: int, state: dict) -> None:
     if state["filtered_point_ids"]:
         lines.append(f"נקודות מסוננות: {len(state['filtered_point_ids'])}")
     sp = state.get("special", {})
-    if any(sp.values()):
-        lines.append(f"נקודות מיוחדות: נה={sp.get('start_id')} נב={sp.get('mid_id')} נס={sp.get('finish_id')}")
+    if sp.get("start_id"):
+        if sp.get("mid_id"):
+            lines.append(f"נקודות מיוחדות: נה={sp['start_id']} נב={sp['mid_id']} נס={sp['finish_id']}")
+        else:
+            lines.append(f"נקודות מיוחדות (יחידני): נה={sp['start_id']} נס={sp['finish_id']}")
+    gen_mode = state.get("gen_mode")
+    if gen_mode:
+        mode_labels = {"duo": "זוגות", "solo": "יחידני (נה→נס)", "solo_mid": "יחידני עם ביניים"}
+        lines.append(f"מצב יצירה: {mode_labels.get(gen_mode, gen_mode)}")
     if state["assignments"]:
         lines.append(f"משימות: {len(state['assignments'])}")
     if state["participants"]:
         lines.append(f"משתתפים: {len(state['participants'])}")
     if state["pairings"]:
-        lines.append(f"זוגות: {len(state['pairings'])}")
+        lines.append(f"שיבוצים: {len(state['pairings'])}")
     send(chat_id, "\n".join(lines))
 
 
@@ -404,31 +414,72 @@ def handle_special(chat_id: int, state: dict, args: str) -> dict:
         send(chat_id, f"❌ לא ניתן כעת. מצב: {_state_label(state)}")
         return state
     parts = args.split()
-    if len(parts) != 3:
-        send(chat_id, "שימוש: /special (/sp) <start_id> <mid_id> <finish_id>\nדוגמה: /sp 240 265 261")
-        return state
-    try:
-        start_id, mid_id, finish_id = int(parts[0]), int(parts[1]), int(parts[2])
-    except ValueError:
-        send(chat_id, "❌ מספרים לא תקינים. שלושה מספרי נקודות נדרשים.")
-        return state
-
-    db_ids = {p["id"] for p in state["points_db"]}
-    for label, pid in [("נה (start)", start_id), ("נב (mid)", mid_id), ("נס (finish)", finish_id)]:
-        if pid not in db_ids:
-            send(chat_id, f"❌ נקודה {label} (ID={pid}) לא נמצאה בבסיס הנתונים")
+    if len(parts) == 2:
+        # Solo-A: start + finish only (no intermediate)
+        try:
+            start_id, finish_id = int(parts[0]), int(parts[1])
+        except ValueError:
+            send(chat_id, "❌ מספרים לא תקינים.\nשימוש: /sp <start_id> <finish_id>")
             return state
+        db_ids = {p["id"] for p in state["points_db"]}
+        for label, pid in [("נה (start)", start_id), ("נס (finish)", finish_id)]:
+            if pid not in db_ids:
+                send(chat_id, f"❌ נקודה {label} (ID={pid}) לא נמצאה בבסיס הנתונים")
+                return state
+        state["special"] = {"start_id": start_id, "mid_id": None, "finish_id": finish_id}
+        state["state"] = "ready_for_generate"
+        sess.save(chat_id, state)
+        send(chat_id,
+             f"נקודות מיוחדות (יחידני): נה={start_id}, נס={finish_id}\n"
+             "צור משימות יחידניות:\n"
+             "/gen solo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+             "דוגמה: /gen solo 8 6 10 16 3")
+        return state
+    elif len(parts) == 3:
+        # Duo / solo-mid: start + mid + finish
+        try:
+            start_id, mid_id, finish_id = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            send(chat_id, "❌ מספרים לא תקינים. שלושה מספרי נקודות נדרשים.")
+            return state
+        db_ids = {p["id"] for p in state["points_db"]}
+        for label, pid in [("נה (start)", start_id), ("נב (mid)", mid_id), ("נס (finish)", finish_id)]:
+            if pid not in db_ids:
+                send(chat_id, f"❌ נקודה {label} (ID={pid}) לא נמצאה בבסיס הנתונים")
+                return state
+        state["special"] = {"start_id": start_id, "mid_id": mid_id, "finish_id": finish_id}
+        state["state"] = "ready_for_generate"
+        sess.save(chat_id, state)
+        send(chat_id,
+             f"נקודות מיוחדות: נה={start_id}, נב={mid_id}, נס={finish_id}\n"
+             "צור משימות:\n"
+             "/gen duo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+             "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>\n"
+             "דוגמה: /gen duo 8 6 10 16 3")
+        return state
+    else:
+        send(chat_id,
+             "שימוש:\n"
+             "/sp <start_id> <mid_id> <finish_id> — שלוש נקודות (זוגות / יחידני עם ביניים)\n"
+             "/sp <start_id> <finish_id> — שתי נקודות (יחידני ללא ביניים)\n"
+             "דוגמאות: /sp 240 265 261  |  /sp 240 261")
+        return state
 
-    state["special"] = {"start_id": start_id, "mid_id": mid_id, "finish_id": finish_id}
-    state["state"] = "ready_for_generate"
-    sess.save(chat_id, state)
-    send(
-        chat_id,
-        f"נקודות מיוחדות: נה={start_id}, נב={mid_id}, נס={finish_id}\n"
-        "צור משימות:\n/generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants>\n"
-        "דוגמה: /gen 3 8 6 10 16"
+
+def _gen_usage_text() -> str:
+    return (
+        "שימוש:\n"
+        "/gen duo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+        "  — ניווט זוגות (נה→נב→נס), נדרשות 3 נקודות מיוחדות\n"
+        "/gen solo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+        "  — ניווט יחידני (נה→נס), נדרשות 2 נקודות מיוחדות\n"
+        "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>\n"
+        "  — ניווט יחידני עם ביניים, נדרשות 3 נקודות מיוחדות\n"
+        "דוגמאות:\n"
+        "/gen duo 8 6 10 16 3\n"
+        "/gen solo 8 6 10 16 3\n"
+        "/gen solo_mid 8 6 10 16 2 4"
     )
-    return state
 
 
 def handle_generate(chat_id: int, state: dict, args: str) -> dict:
@@ -437,44 +488,116 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
         return state
 
     parts = args.split()
-    if len(parts) != 5:
-        send(
-            chat_id,
-            "שימוש: /generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants>\n"
-            "דוגמה: /gen 3 8 6 10 16",
-        )
+    if not parts or parts[0].lower() not in ("duo", "solo", "solo_mid"):
+        send(chat_id, _gen_usage_text())
         return state
 
+    mode = parts[0].lower()
+    num_parts = parts[1:]
+    mid_id = state["special"].get("mid_id")
+
     try:
-        n_pts = int(parts[0])
-        avg_km = float(parts[1])
-        min_km = float(parts[2])
-        max_km = float(parts[3])
-        n_part = int(parts[4])
-    except ValueError:
-        send(chat_id, "❌ ערכים לא תקינים. דוגמה: /gen 3 8 6 10 16")
+        if mode == "duo":
+            if len(num_parts) != 5:
+                send(chat_id, _gen_usage_text())
+                return state
+            avg_km = float(num_parts[0])
+            min_km = float(num_parts[1])
+            max_km = float(num_parts[2])
+            n_part = int(num_parts[3])
+            n_pts = int(num_parts[4])
+            if mid_id is None:
+                send(chat_id,
+                     "❌ לא הוגדרה נקודת ביניים (נב). לניווט זוגות נדרשות 3 נקודות.\n"
+                     "הגדר: /sp <start_id> <mid_id> <finish_id>")
+                return state
+            if n_part < 2:
+                send(chat_id, "❌ מספר משתתפים חייב להיות לפחות 2 לניווט זוגות")
+                return state
+
+        elif mode == "solo":
+            if len(num_parts) != 5:
+                send(chat_id, _gen_usage_text())
+                return state
+            avg_km = float(num_parts[0])
+            min_km = float(num_parts[1])
+            max_km = float(num_parts[2])
+            n_part = int(num_parts[3])
+            n_pts = int(num_parts[4])
+            if mid_id is not None:
+                send(chat_id,
+                     "❌ נקודת ביניים מוגדרת. לניווט יחידני עם ביניים השתמש ב:\n"
+                     "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>")
+                return state
+            if n_part < 1:
+                send(chat_id, "❌ מספר משתתפים חייב להיות לפחות 1")
+                return state
+
+        else:  # solo_mid
+            if len(num_parts) != 6:
+                send(chat_id, _gen_usage_text())
+                return state
+            avg_km = float(num_parts[0])
+            min_km = float(num_parts[1])
+            max_km = float(num_parts[2])
+            n_part = int(num_parts[3])
+            n_pts = None
+            n_si = int(num_parts[4])
+            n_if = int(num_parts[5])
+            if mid_id is None:
+                send(chat_id,
+                     "❌ לא הוגדרה נקודת ביניים (נב). לניווט יחידני ללא ביניים השתמש ב:\n"
+                     "/gen solo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+                     "או הגדר 3 נקודות: /sp <start_id> <mid_id> <finish_id>")
+                return state
+            if n_part < 1:
+                send(chat_id, "❌ מספר משתתפים חייב להיות לפחות 1")
+                return state
+    except (ValueError, IndexError):
+        send(chat_id, _gen_usage_text())
         return state
 
     if min_km >= max_km:
         send(chat_id, "❌ מרחק מינימום חייב להיות קטן ממקסימום")
         return state
-    if n_part < 2:
-        send(chat_id, "❌ מספר משתתפים חייב להיות לפחות 2")
-        return state
 
     send(chat_id, "מחשב משימות ניווט... ⏳")
 
     try:
-        assignments = nav_algorithm.generate_assignments(
-            points_db=state["points_db"],
-            filtered_point_ids=state["filtered_point_ids"],
-            special=state["special"],
-            n_per_nav=n_pts,
-            avg_km=avg_km,
-            min_km=min_km,
-            max_km=max_km,
-            n_participants=n_part,
-        )
+        if mode == "duo":
+            assignments = nav_algorithm.generate_assignments(
+                points_db=state["points_db"],
+                filtered_point_ids=state["filtered_point_ids"],
+                special=state["special"],
+                n_per_nav=n_pts,
+                avg_km=avg_km,
+                min_km=min_km,
+                max_km=max_km,
+                n_participants=n_part,
+            )
+        elif mode == "solo":
+            assignments = nav_algorithm.generate_solo_a_assignments(
+                points_db=state["points_db"],
+                filtered_point_ids=state["filtered_point_ids"],
+                special=state["special"],
+                n_per_nav=n_pts,
+                avg_km=avg_km,
+                min_km=min_km,
+                max_km=max_km,
+                n_participants=n_part,
+            )
+        else:  # solo_mid
+            assignments = nav_algorithm.generate_solo_mid_assignments(
+                points_db=state["points_db"],
+                filtered_point_ids=state["filtered_point_ids"],
+                special=state["special"],
+                n_si_pts=n_si,
+                n_if_pts=n_if,
+                avg_km=avg_km,
+                min_km=min_km,
+                max_km=max_km,
+                n_participants=n_part,
+            )
     except ValueError as e:
         send(chat_id, f"❌ שגיאה: {e}")
         return state
@@ -485,6 +608,7 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
         state["participants"] = []
 
     state["assignments"] = assignments
+    state["gen_mode"] = mode
     state["state"] = "assignments_generated"
     sess.save(chat_id, state)
 
@@ -501,8 +625,7 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
         f"{sec}: {len(dists)} משימות, ממוצע {sum(dists)/len(dists):.1f}ק\"מ"
         for sec, dists in sorted(by_section.items())
     )
-    send(chat_id,
-         f"📊 כיסוי: {len(used_ids)} נקודות בשימוש מתוך {available} זמינות\n{section_lines}")
+    send(chat_id, f"📊 כיסוי: {len(used_ids)} נקודות בשימוש מתוך {available} זמינות\n{section_lines}")
 
     send(chat_id, "משימות נוצרו!\nהעלה טבלת משתתפים:\n/upload_participants (/upa)\nאחר כך: /done (/d)")
     return state
@@ -514,26 +637,38 @@ def handle_assign(chat_id: int, state: dict) -> dict:
         return state
 
     if not state["assignments"]:
-        send(chat_id, "❌ אין משימות — הפעל /generate תחילה")
+        send(chat_id, "❌ אין משימות — הפעל /gen תחילה")
         return state
 
+    gen_mode = state.get("gen_mode", "duo")
+
     try:
-        sorted_parts = part_mod.sort_participants(state["participants"])
-        pairs = part_mod.pair_participants(sorted_parts)
-        pairings = part_mod.assign_tasks(pairs, state["assignments"])
+        if gen_mode == "duo":
+            sorted_parts = part_mod.sort_participants(state["participants"])
+            pairs = part_mod.pair_participants(sorted_parts)
+            pairings = part_mod.assign_tasks(pairs, state["assignments"])
+        elif gen_mode == "solo":
+            pairings = part_mod.assign_tasks_solo_a(state["participants"], state["assignments"])
+        else:  # solo_mid
+            pairings = part_mod.assign_tasks_solo_mid(state["participants"], state["assignments"])
     except Exception as e:
         send(chat_id, f"❌ שגיאה בשיבוץ: {e}")
         return state
 
-    has_solo = any(pr["p2_name"] == "" for pr in pairings)
     state["pairings"] = pairings
     state["state"] = "fully_assigned"
     sess.save(chat_id, state)
 
-    preview = part_mod.format_pairings_preview(pairings)
-    send(chat_id, preview)
-    if has_solo:
-        send(chat_id, "⚠️ מספר משתתפים אי-זוגי — משתתף אחד ללא שותף")
+    if gen_mode == "duo":
+        preview = part_mod.format_pairings_preview(pairings)
+        send(chat_id, preview)
+        if any(pr["p2_name"] == "" for pr in pairings):
+            send(chat_id, "⚠️ מספר משתתפים אי-זוגי — משתתף אחד ללא שותף")
+    elif gen_mode == "solo":
+        send(chat_id, part_mod.format_solo_a_preview(pairings))
+    else:  # solo_mid
+        send(chat_id, part_mod.format_solo_mid_preview(pairings))
+
     send(chat_id, "שיבוץ הושלם! יצא תוצאות: /export (/ex)")
     return state
 
@@ -547,7 +682,9 @@ def handle_export(chat_id: int, state: dict) -> dict:
     out_dir = EXPORT_DIR / str(chat_id)
     out_dir.mkdir(exist_ok=True)
 
+    gen_mode = state.get("gen_mode", "duo")
     sent_any = False
+
     if state["assignments"]:
         try:
             path = export_mod.export_assignments(state["assignments"], state["points_db"], str(out_dir))
@@ -558,18 +695,27 @@ def handle_export(chat_id: int, state: dict) -> dict:
 
     if state["pairings"]:
         try:
-            path = export_mod.export_pairings(state["pairings"], str(out_dir))
-            send_doc(chat_id, path, caption="שיבוץ זוגות")
+            if gen_mode == "duo":
+                path = export_mod.export_pairings(state["pairings"], str(out_dir))
+                send_doc(chat_id, path, caption="שיבוץ זוגות")
+            elif gen_mode == "solo":
+                path = export_mod.export_solo_a(state["pairings"], state["points_db"], str(out_dir))
+                send_doc(chat_id, path, caption="שיבוץ יחידני")
+            else:  # solo_mid
+                path = export_mod.export_solo_mid(state["pairings"], state["points_db"], str(out_dir))
+                send_doc(chat_id, path, caption="שיבוץ יחידני עם ביניים")
             sent_any = True
         except Exception as e:
-            send(chat_id, f"❌ שגיאה בייצוא זוגות: {e}")
+            send(chat_id, f"❌ שגיאה בייצוא שיבוץ: {e}")
 
-    if sent_any and state["assignments"] and state["pairings"]:
+    # Combined export only for duo mode
+    if gen_mode == "duo" and sent_any and state["assignments"] and state["pairings"]:
         try:
             path = export_mod.export_combined(state["pairings"], state["points_db"], str(out_dir))
             send_doc(chat_id, path, caption="שיבוץ משולב")
         except Exception as e:
             send(chat_id, f"❌ שגיאה בייצוא משולב: {e}")
+
     if sent_any:
         send(chat_id, "✅ הקבצים נשלחו!")
         ingestion.release_models()
@@ -604,15 +750,22 @@ def _offer_prev(chat_id: int, state: dict, key: str) -> dict:
              "/yes — השתמש בסינון הקודם\n"
              "/reparse — פרסר מחדש תמונת מפה\n"
              "או המשך להעלאה חדשה")
-    elif key == "special" and any(prev.get("special", {}).values()):
+    elif key == "special" and prev.get("special", {}).get("start_id"):
         sp = prev["special"]
         state["_reuse_offer"] = key
         sess.save(chat_id, state)
-        send(chat_id,
-             f"💾 נמצא סשן קודם: נה={sp.get('start_id')} נב={sp.get('mid_id')} נס={sp.get('finish_id')}.\n"
-             "/yes — השתמש בנקודות המיוחדות הקודמות\n"
-             "/reparse — פרסר מחדש תמונה\n"
-             "או הגדר ידנית: /sp <start_id> <mid_id> <finish_id>")
+        if sp.get("mid_id"):
+            send(chat_id,
+                 f"💾 נמצא סשן קודם: נה={sp['start_id']} נב={sp['mid_id']} נס={sp['finish_id']}.\n"
+                 "/yes — השתמש בנקודות המיוחדות הקודמות\n"
+                 "/reparse — פרסר מחדש תמונה\n"
+                 "או הגדר ידנית: /sp <start_id> <mid_id> <finish_id>")
+        else:
+            send(chat_id,
+                 f"💾 נמצא סשן קודם (יחידני): נה={sp['start_id']} נס={sp['finish_id']}.\n"
+                 "/yes — השתמש בנקודות המיוחדות הקודמות\n"
+                 "/reparse — פרסר מחדש תמונה\n"
+                 "או הגדר ידנית: /sp <start_id> <finish_id>")
     elif key == "participants" and prev.get("participants"):
         n = len(prev["participants"])
         state["_reuse_offer"] = key
@@ -672,9 +825,16 @@ def handle_yes(chat_id: int, state: dict) -> dict:
         state["state"] = "ready_for_generate"
         sess.save(chat_id, state)
         sp = state["special"]
-        send(chat_id,
-             f"✅ נקודות מיוחדות: נה={sp.get('start_id')}, נב={sp.get('mid_id')}, נס={sp.get('finish_id')}\n"
-             "צור משימות:\n/generate (/gen) <pts> <avg_km> <min_km> <max_km> <participants>")
+        if sp.get("mid_id"):
+            send(chat_id,
+                 f"✅ נקודות מיוחדות: נה={sp['start_id']}, נב={sp['mid_id']}, נס={sp['finish_id']}\n"
+                 "צור משימות:\n"
+                 "/gen duo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+                 "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>")
+        else:
+            send(chat_id,
+                 f"✅ נקודות מיוחדות (יחידני): נה={sp['start_id']}, נס={sp['finish_id']}\n"
+                 "צור משימות:\n/gen solo <avg_km> <min_km> <max_km> <participants> <pts>")
         return state
 
     elif offer == "participants":
@@ -1001,10 +1161,19 @@ def _process_participants_uploads(chat_id: int, state: dict, pending: list[dict]
     missing_scores = [p["name"] for p in all_parts if not str(p.get("score_raw", "")).strip() or str(p.get("score_raw", "")).strip() in ("0", "None", "")]
     if missing_scores:
         send(chat_id, f"⚠️ חסר ציון ל-{len(missing_scores)} משתתפים: {', '.join(missing_scores[:10])}\nהשיבוץ יסתמך על ציון 0 עבורם.")
-    if n_part % 2 != 0:
-        send(chat_id, f"⚠️ מספר משתתפים אי-זוגי ({n_part}) — אחד יהיה יחיד")
-    if n_part > n_tasks:
-        send(chat_id, f"⚠️ {n_part} משתתפים אך רק {n_tasks} משימות — ייתכן שיבוץ חוזר")
+    gen_mode = state.get("gen_mode", "duo")
+    if gen_mode == "duo":
+        if n_part % 2 != 0:
+            send(chat_id, f"⚠️ מספר משתתפים אי-זוגי ({n_part}) — אחד יהיה יחיד")
+        if n_part > n_tasks:
+            send(chat_id, f"⚠️ {n_part} משתתפים אך רק {n_tasks} משימות — ייתכן שיבוץ חוזר")
+    elif gen_mode == "solo":
+        if n_part != n_tasks:
+            send(chat_id, f"⚠️ {n_part} משתתפים ו-{n_tasks} משימות — לניווט יחידני המספרים צריכים להיות שווים")
+    else:  # solo_mid
+        n_si = sum(1 for a in state["assignments"] if "נה→" in a["section"])
+        if n_part != n_si:
+            send(chat_id, f"⚠️ {n_part} משתתפים ו-{n_si} משימות לכל מקטע — לניווט יחידני עם ביניים המספרים צריכים להיות שווים")
 
     send(chat_id, "משתתפים נטענו! צור שיבוץ: /assign (/a)")
     return state
@@ -1022,8 +1191,9 @@ def handle_upload_special(chat_id: int, state: dict) -> dict:
     state["pending_uploads"] = []
     sess.save(chat_id, state)
     send(chat_id,
-         "שלח תמונה של נקודות נה/נב/נס (כל פורמט קואורדינטות).\n"
-         "סדר בתמונה: נה ראשון, נב שני, נס שלישי.\n"
+         "שלח תמונה של נקודות מיוחדות (כל פורמט קואורדינטות).\n"
+         "2 נקודות (נה, נס) — ניווט יחידני ללא ביניים.\n"
+         "3 נקודות (נה, נב, נס) — ניווט זוגות / יחידני עם ביניים.\n"
          "כשסיימת: /done (/d)")
     return _offer_prev(chat_id, state, "special")
 
@@ -1048,48 +1218,74 @@ def _process_special_upload(chat_id: int, state: dict, pending: list[dict]) -> d
         sess.save(chat_id, state)
         return state
 
-    if not coords:
-        send(chat_id, "❌ לא נמצאו קואורדינטות. נסה /sp ידנית.")
+    if not coords or len(coords) < 2:
+        send(chat_id, "❌ לא נמצאו קואורדינטות (נדרשות לפחות 2). נסה /sp ידנית.")
         state["state"] = "awaiting_special"
         sess.save(chat_id, state)
         return state
 
-    # Assign new IDs beyond current max
     max_id = max((p["id"] for p in state["points_db"]), default=0)
-    labels = ["נה (התחלה)", "נב (אמצע)", "נס (סיום)"]
-    role_keys = ["start_id", "mid_id", "finish_id"]
-    added = []
     db = {p["id"]: p for p in state["points_db"]}
+    n_coords = min(len(coords), 3)
 
-    for i, coord in enumerate(coords[:3]):
-        new_id = max_id + i + 1
-        pt = {"id": new_id, "x": coord["x"], "y": coord["y"],
-              "description": coord.get("label", labels[i])}
-        db[new_id] = pt
-        state["special"][role_keys[i]] = new_id
-        added.append(f"{labels[i]}: ID={new_id} ({coord['x']:.0f}, {coord['y']:.0f})"
-                     + (f" — {coord['label']}" if coord.get("label") else ""))
-
-    state["points_db"] = sorted(db.values(), key=lambda p: p["id"])
-    # Keep filtered list in sync
-    for pt in added:
-        pass  # IDs already added to db; rebuild filtered if not filtered yet
-    state["filtered_point_ids"] = [p["id"] for p in state["points_db"]
-                                    if p["id"] in set(state["filtered_point_ids"])
-                                    or p["id"] > max_id]
-
-    state["source_files"]["special"] = [item["file_id"] for item in pending]
-    state["pending_uploads"] = []
-    state["state"] = "ready_for_generate"
-    sess.save(chat_id, state)
-
-    summary = "\n".join(added)
-    sp = state["special"]
-    send(chat_id,
-         f"✅ נקודות מיוחדות נקלטו:\n{summary}\n\n"
-         f"נה={sp['start_id']}, נב={sp['mid_id']}, נס={sp['finish_id']}\n"
-         "לשינוי ידני: /sp <start_id> <mid_id> <finish_id>\n"
-         "ליצירת משימות: /gen <pts> <avg_km> <min_km> <max_km> <participants>")
+    if n_coords == 2:
+        # Solo-A: start + finish only
+        labels = ["נה (התחלה)", "נס (סיום)"]
+        role_keys = ["start_id", "finish_id"]
+        new_special = {"start_id": None, "mid_id": None, "finish_id": None}
+        added = []
+        for i, coord in enumerate(coords[:2]):
+            new_id = max_id + i + 1
+            pt = {"id": new_id, "x": coord["x"], "y": coord["y"],
+                  "description": coord.get("label", labels[i])}
+            db[new_id] = pt
+            new_special[role_keys[i]] = new_id
+            added.append(f"{labels[i]}: ID={new_id} ({coord['x']:.0f}, {coord['y']:.0f})"
+                         + (f" — {coord['label']}" if coord.get("label") else ""))
+        state["special"] = new_special
+        state["points_db"] = sorted(db.values(), key=lambda p: p["id"])
+        state["filtered_point_ids"] = [p["id"] for p in state["points_db"]
+                                        if p["id"] in set(state["filtered_point_ids"]) or p["id"] > max_id]
+        state["source_files"]["special"] = [item["file_id"] for item in pending]
+        state["pending_uploads"] = []
+        state["state"] = "ready_for_generate"
+        sess.save(chat_id, state)
+        sp = state["special"]
+        send(chat_id,
+             f"✅ נקודות מיוחדות נקלטו (יחידני — ללא ביניים):\n{chr(10).join(added)}\n\n"
+             f"נה={sp['start_id']}, נס={sp['finish_id']}\n"
+             "לשינוי ידני: /sp <start_id> <finish_id>\n"
+             "ליצירת משימות: /gen solo <avg_km> <min_km> <max_km> <participants> <pts>")
+    else:
+        # 3 coords: duo / solo_mid
+        labels = ["נה (התחלה)", "נב (אמצע)", "נס (סיום)"]
+        role_keys = ["start_id", "mid_id", "finish_id"]
+        new_special = {"start_id": None, "mid_id": None, "finish_id": None}
+        added = []
+        for i, coord in enumerate(coords[:3]):
+            new_id = max_id + i + 1
+            pt = {"id": new_id, "x": coord["x"], "y": coord["y"],
+                  "description": coord.get("label", labels[i])}
+            db[new_id] = pt
+            new_special[role_keys[i]] = new_id
+            added.append(f"{labels[i]}: ID={new_id} ({coord['x']:.0f}, {coord['y']:.0f})"
+                         + (f" — {coord['label']}" if coord.get("label") else ""))
+        state["special"] = new_special
+        state["points_db"] = sorted(db.values(), key=lambda p: p["id"])
+        state["filtered_point_ids"] = [p["id"] for p in state["points_db"]
+                                        if p["id"] in set(state["filtered_point_ids"]) or p["id"] > max_id]
+        state["source_files"]["special"] = [item["file_id"] for item in pending]
+        state["pending_uploads"] = []
+        state["state"] = "ready_for_generate"
+        sess.save(chat_id, state)
+        sp = state["special"]
+        send(chat_id,
+             f"✅ נקודות מיוחדות נקלטו:\n{chr(10).join(added)}\n\n"
+             f"נה={sp['start_id']}, נב={sp['mid_id']}, נס={sp['finish_id']}\n"
+             "לשינוי ידני: /sp <start_id> <mid_id> <finish_id>\n"
+             "ליצירת משימות:\n"
+             "/gen duo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+             "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>")
     return state
 
 
@@ -1125,8 +1321,11 @@ def handle_free_text(chat_id: int, state: dict, text: str) -> dict:
         "The bot manages: uploading a nav-points table, filtering by map, setting start/mid/finish points, "
         "generating assignments, uploading participants, and exporting results.\n\n"
         "Commands: /session(/s), /status(/st), /upload_points(/up), /done(/d), /skip_map(/sm), "
-        "/upload_map(/um), /confirm_map(/cm), /edit_map(/em), /special(/sp) <start> <mid> <finish>, "
-        "/generate(/gen) <pts> <avg_km> <min_km> <max_km> <participants>, "
+        "/upload_map(/um), /confirm_map(/cm), /edit_map(/em), "
+        "/special(/sp) <start> <mid> <finish> OR <start> <finish> (2 pts = solo, no intermediate), "
+        "/gen duo <avg_km> <min_km> <max_km> <participants> <pts> (couples), "
+        "/gen solo <avg_km> <min_km> <max_km> <participants> <pts> (solo, no intermediate), "
+        "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if> (solo with intermediate), "
         "/upload_participants(/upa), /assign(/a), /export(/ex).\n\n"
         f"Current context:\n{ctx}\n\n"
         "The user sent free text. Respond helpfully in Hebrew (1-3 sentences).\n"

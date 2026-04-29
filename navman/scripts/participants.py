@@ -149,7 +149,92 @@ def assign_tasks(pairs: list[dict], assignments: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Preview
+# Solo-A: one task per participant (single S→F section)
+# ---------------------------------------------------------------------------
+
+def assign_tasks_solo_a(participants: list[dict], assignments: list[dict]) -> list[dict]:
+    """Random 1:1 assignment. Each participant gets one S→F task."""
+    sorted_parts = sort_participants(participants)
+    tasks = list(assignments)
+    random.shuffle(tasks)
+
+    result = []
+    for i, p in enumerate(sorted_parts):
+        task = tasks[i % len(tasks)]
+        result.append({
+            "index": i + 1,
+            "name": p["name"],
+            "score": p.get("score", 0),
+            "task_index": task["index"],
+            "section": task["section"],
+            "points": task["points"],
+            "length_km": task["length_km"],
+        })
+    return result
+
+
+def format_solo_a_preview(assignments: list[dict], max_rows: int = 10) -> str:
+    lines = [f"נוצרו {len(assignments)} שיבוצים יחידניים:"]
+    for a in assignments[:max_rows]:
+        pts_str = "→".join(str(pid) for pid in a["points"])
+        lines.append(
+            f"  {a['index']}. {a['name']} — משימה {a['task_index']}: {pts_str} ({a['length_km']:.2f} ק\"מ)"
+        )
+    if len(assignments) > max_rows:
+        lines.append(f"  ... ועוד {len(assignments) - max_rows} שיבוצים")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Solo-mid: two tasks per participant (S→I and I→F, N paths per section)
+# ---------------------------------------------------------------------------
+
+def assign_tasks_solo_mid(participants: list[dict], assignments: list[dict]) -> list[dict]:
+    """Random 1:1 assignment. Each participant gets one S→I task and one I→F task."""
+    sorted_parts = sort_participants(participants)
+    si_tasks = [a for a in assignments if "נה→" in a["section"]]
+    if_tasks = [a for a in assignments if "נב→" in a["section"]]
+
+    random.shuffle(si_tasks)
+    random.shuffle(if_tasks)
+
+    result = []
+    for i, p in enumerate(sorted_parts):
+        si = si_tasks[i % len(si_tasks)] if si_tasks else None
+        ift = if_tasks[i % len(if_tasks)] if if_tasks else None
+        result.append({
+            "index": i + 1,
+            "name": p["name"],
+            "score": p.get("score", 0),
+            "si_task_index": si["index"] if si else None,
+            "si_section": si["section"] if si else "",
+            "si_points": si["points"] if si else [],
+            "si_length_km": si["length_km"] if si else 0,
+            "if_task_index": ift["index"] if ift else None,
+            "if_section": ift["section"] if ift else "",
+            "if_points": ift["points"] if ift else [],
+            "if_length_km": ift["length_km"] if ift else 0,
+        })
+    return result
+
+
+def format_solo_mid_preview(assignments: list[dict], max_rows: int = 10) -> str:
+    lines = [f"נוצרו {len(assignments)} שיבוצים יחידניים עם ביניים:"]
+    for a in assignments[:max_rows]:
+        si_pts = "→".join(str(pid) for pid in a["si_points"])
+        if_pts = "→".join(str(pid) for pid in a["if_points"])
+        lines.append(
+            f"  {a['index']}. {a['name']} — "
+            f"נה→נב: משימה {a['si_task_index']} ({si_pts}, {a['si_length_km']:.2f}ק\"מ) | "
+            f"נב→נס: משימה {a['if_task_index']} ({if_pts}, {a['if_length_km']:.2f}ק\"מ)"
+        )
+    if len(assignments) > max_rows:
+        lines.append(f"  ... ועוד {len(assignments) - max_rows} שיבוצים")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Preview (duo mode)
 # ---------------------------------------------------------------------------
 
 def format_pairings_preview(pairings: list[dict], max_rows: int = 10) -> str:
