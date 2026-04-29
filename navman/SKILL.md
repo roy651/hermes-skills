@@ -58,12 +58,12 @@ To find your chat ID: message @userinfobot on Telegram.
 ### 4. Start the bot
 
 ```bash
-bash ~/.hermes/skills/navman/scripts/run.sh
+bash ~/.hermes/skills/navman/run.sh
 ```
 
 To run as a background daemon:
 ```bash
-nohup bash ~/.hermes/skills/navman/scripts/run.sh \
+nohup bash ~/.hermes/skills/navman/run.sh \
     >> ~/.hermes/skills/navman/logs/daemon.log 2>&1 &
 echo $! > ~/.hermes/skills/navman/navman.pid
 ```

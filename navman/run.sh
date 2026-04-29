@@ -2,7 +2,7 @@
 # NavMan bot daemon launcher
 set -euo pipefail
 
-SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$SKILL_DIR/.venv"
 
 # Load .env
@@ -29,4 +29,4 @@ fi
 mkdir -p "$SKILL_DIR/logs" "$SKILL_DIR/data/uploads" "$SKILL_DIR/data/exports"
 
 echo "[navman] Starting bot..."
-exec "$VENV/bin/python" "$SKILL_DIR/scripts/bot_handler.py" "$@"
+exec "$VENV/bin/python" "$SKILL_DIR/bot_handler.py" "$@"
