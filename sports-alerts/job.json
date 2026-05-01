@@ -1,0 +1,11 @@
+{
+  "id": "sports_alerts_weekly",
+  "name": "Sports Alerts — Weekly Digest",
+  "prompt": "Run the weekly sports digest:\n\n```bash\ncd ~/.hermes/skills/sports-alerts && .venv/bin/python weekly.py >> logs/weekly.log 2>&1\n```\n\nIf the command exits with a non-zero status, report the last 20 lines of logs/weekly.log to Roy. Otherwise respond with [SILENT].",
+  "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * 0"
+  },
+  "deliver": "origin",
+  "enabled": true
+}

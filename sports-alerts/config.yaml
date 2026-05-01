@@ -1,0 +1,26 @@
+sports:
+  f1:
+    enabled: true
+    sessions: [race, qualifying, sprint]   # sprint = Sprint Race (SR), not Sprint Shootout
+    reminder: true
+
+  cycling:
+    enabled: true
+    reminder: false                         # multi-day races — weekly digest only, no 5-min alert
+
+  nfl:
+    enabled: true
+    max_local_hour: 24                      # midnight Israel cutoff; raise to 25+ to allow early-morning games
+    reminder: true
+
+  hapoel_soccer:
+    enabled: true
+    reminder: true
+
+  hapoel_basketball:
+    enabled: true
+    reminder: true
+
+  nba_avdia:
+    enabled: true                           # tracks Portland Trail Blazers (Deni Avdia)
+    reminder: true
