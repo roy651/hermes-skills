@@ -1,16 +1,67 @@
+# ── Sport5 broadcast schedule (primary source for Israeli TV) ─────────────────
+# Covers sport5, sport1, sport2, sport3, sport4, ערוץ One, and more.
+# include: any of these Hebrew strings must appear in the broadcast title
+# require: at least one of these must also appear (optional context filter)
+# max_local_hour: skip broadcasts starting after this Israel local hour (default: no cutoff)
+# sport: maps to the sport key used in reminders (must match a key under `sports:` below)
+sport5:
+  enabled: true
+  filters:
+    hapoel_soccer:
+      enabled: true
+      sport: hapoel_soccer
+      include: ["הפועל תל אביב", 'הפועל ת"א']
+      require: ["כדורגל"]
+      reminder: true
+
+    hapoel_basketball:
+      enabled: true
+      sport: hapoel_basketball
+      include: ["הפועל תל אביב", 'הפועל ת"א']
+      require: ["כדורסל"]
+      reminder: true
+
+    f1:
+      enabled: true
+      sport: f1
+      include: ["פורמולה 1"]
+      require: []
+      reminder: true
+
+    nba_avdia:
+      enabled: true
+      sport: nba_avdia
+      include: ["NBA"]
+      require: []
+      max_local_hour: 24     # skip games starting after midnight Israel
+      reminder: true
+
+    nfl:
+      enabled: true
+      sport: nfl
+      include: ["NFL", "כדורגל אמריקאי"]
+      require: []
+      max_local_hour: 24
+      reminder: true
+
+
+# ── ESPN API (fallback for non-broadcast events) ──────────────────────────────
+# Used when sport5 doesn't cover the event (e.g. Portland Trail Blazers games
+# not broadcast in Israel, or F1 sessions not on Israeli TV).
+# sport5 events take priority — ESPN events for the same sport+day are dropped.
 sports:
   f1:
     enabled: true
-    sessions: [race, qualifying, sprint]   # sprint = Sprint Race (SR), not Sprint Shootout
+    sessions: [race, qualifying, sprint]
     reminder: true
 
   cycling:
     enabled: true
-    reminder: false                         # multi-day races — weekly digest only, no 5-min alert
+    reminder: false          # stage races — weekly digest only, no 5-min alert
 
   nfl:
     enabled: true
-    max_local_hour: 24                      # midnight Israel cutoff; raise to 25+ to allow early-morning games
+    max_local_hour: 24
     reminder: true
 
   hapoel_soccer:
@@ -22,5 +73,6 @@ sports:
     reminder: true
 
   nba_avdia:
-    enabled: true                           # tracks Portland Trail Blazers (Deni Avdia)
+    enabled: true            # tracks Portland Trail Blazers (Deni Avdia)
+    max_local_hour: 24
     reminder: true

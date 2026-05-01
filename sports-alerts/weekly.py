@@ -1,6 +1,5 @@
 from __future__ import annotations
 import json
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from fetchers.base import Event, TZ_IL, DAY_NAMES_HE, SPORT_EMOJI
 from fetchers.espn import ESPNFetcher
 from fetchers.cycling import CyclingFetcher
 from fetchers.sofascore import SofascoreFetcher
+from fetchers.sport5 import Sport5Fetcher
 import notifier
 
 ROOT = Path(__file__).parent
@@ -21,23 +21,55 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def fetch_all(sports_cfg: dict, start: datetime, end: datetime) -> list[Event]:
+def fetch_all(cfg: dict, start: datetime, end: datetime) -> list[Event]:
     events: list[Event] = []
-    events += ESPNFetcher(sports_cfg).fetch_week(start, end)
-    if sports_cfg.get("cycling", {}).get("enabled"):
-        events += CyclingFetcher(sports_cfg["cycling"]).fetch_week(start, end)
-    if sports_cfg.get("hapoel_basketball", {}).get("enabled"):
-        events += SofascoreFetcher(sports_cfg["hapoel_basketball"]).fetch_week(start, end)
 
-    # Apply reminder flag from config
-    for ev in events:
-        ev.has_reminder = sports_cfg.get(ev.sport, {}).get("reminder", True)
+    # 1. sport5 — Israeli TV broadcast schedule (primary)
+    if cfg.get("sport5", {}).get("enabled"):
+        s5 = Sport5Fetcher(cfg["sport5"]["filters"]).fetch_week(start, end)
+        events += s5
+        print(f"[weekly] sport5: {len(s5)} events")
+
+    # Track which (sport, date) combos are already covered by sport5
+    sport5_covered: set[tuple[str, str]] = {
+        (e.sport, e.time_utc.astimezone(TZ_IL).strftime("%Y-%m-%d"))
+        for e in events
+    }
+
+    sports_cfg = cfg.get("sports", {})
+
+    # 2. ESPN — fallback for events not broadcast in Israel
+    espn = ESPNFetcher(sports_cfg).fetch_week(start, end)
+    for ev in espn:
+        day_key = ev.time_utc.astimezone(TZ_IL).strftime("%Y-%m-%d")
+        if (ev.sport, day_key) not in sport5_covered:
+            events.append(ev)
+    print(f"[weekly] espn: {len(espn)} raw, added {sum(1 for e in events if 'nfl-' in e.id or 'nba-' in e.id or 'f1-' in e.id or 'soccer-' in e.id)}")
+
+    # 3. Cycling — Wikipedia WorldTour calendar
+    if sports_cfg.get("cycling", {}).get("enabled"):
+        cyc = CyclingFetcher(sports_cfg["cycling"]).fetch_week(start, end)
+        for ev in cyc:
+            ev.has_reminder = sports_cfg["cycling"].get("reminder", False)
+        events += cyc
+        print(f"[weekly] cycling: {len(cyc)} events")
+
+    # 4. Sofascore (Hapoel basketball) — currently blocked, kept as no-op
+    if sports_cfg.get("hapoel_basketball", {}).get("enabled"):
+        try:
+            sfs = SofascoreFetcher(sports_cfg["hapoel_basketball"]).fetch_week(start, end)
+            for ev in sfs:
+                day_key = ev.time_utc.astimezone(TZ_IL).strftime("%Y-%m-%d")
+                if (ev.sport, day_key) not in sport5_covered:
+                    events.append(ev)
+        except Exception:
+            pass
 
     return sorted(events, key=lambda e: e.time_utc)
 
 
 def merge_with_existing(new_events: list[Event]) -> list[Event]:
-    """Keep manual enable/disable overrides for events already in the queue."""
+    """Preserve manual enable/disable overrides for events already in the queue."""
     if not REMINDERS_FILE.exists():
         return new_events
     with open(REMINDERS_FILE) as f:
@@ -87,8 +119,8 @@ def main() -> None:
     end = start + timedelta(days=7)
 
     print(f"[weekly] fetching {start.date()} → {end.date()}", flush=True)
-    events = fetch_all(cfg["sports"], start, end)
-    print(f"[weekly] {len(events)} events found", flush=True)
+    events = fetch_all(cfg, start, end)
+    print(f"[weekly] {len(events)} total events", flush=True)
 
     events = merge_with_existing(events)
     save(events)
