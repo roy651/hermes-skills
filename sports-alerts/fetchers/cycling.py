@@ -103,8 +103,10 @@ def _tnt_stage_events(race_name: str, year: int, week_start: date, week_end: dat
             continue
         seen_slugs.add(slug_path)
 
-        ctx = r.text[max(0, m.start() - 400):m.end() + 100]
-        date_m = re.search(r"(\d{2}/\d{2}/\d{4})", ctx)
+        ctx = r.text[max(0, m.start() - 2500):m.end() + 100]
+        # Find the last (closest) date in context — date headers precede their stage cards
+        date_matches = list(re.finditer(r"(\d{2}/\d{2}/\d{4})", ctx))
+        date_m = date_matches[-1] if date_matches else None
         if not date_m:
             continue
         d_str = date_m.group(1)
