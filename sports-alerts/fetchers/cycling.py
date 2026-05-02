@@ -118,8 +118,12 @@ def _tnt_stage_events(race_name: str, year: int, week_start: date, week_end: dat
         if not (week_start <= stage_date < week_end):
             continue
 
-        label_m = re.search(r"(?i)(stage \d+|prologue)", ctx)
-        label = label_m.group(1).capitalize() if label_m else "Stage"
+        # Extract label from slug (e.g., "stage-2" → "Stage 2", "prologue" → "Prologue")
+        label_m = re.search(r"-(stage-\d+|prologue|final)[-_]", slug_path)
+        if label_m:
+            label = label_m.group(1).replace("-", " ").title()
+        else:
+            label = "Stage"
         stage_entries.append((stage_date, label, slug_path))
 
     if not stage_entries:
