@@ -21,11 +21,21 @@ All messages are sent in Hebrew. Tables are wrapped in triple-backtick code bloc
 | Sport | Source | Notes |
 |---|---|---|
 | Formula 1 | ESPN API | Race, Qualifying, Sprint Race (configurable) |
-| UCI WorldTour cycling | procyclingstats.com | Digest only — no 5-min reminder |
+| UCI WorldTour cycling | TNT Sports / Wikipedia | Per-stage times + 5-min reminder (Wikipedia fallback) |
 | NFL | ESPN API | Filtered by Israel midnight cutoff (configurable) |
 | Hapoel Tel Aviv soccer | ESPN API (Israeli Premier League) | |
 | Hapoel Tel Aviv basketball | Sofascore API | |
 | NBA | ESPN API | Portland Trail Blazers games (Deni Avdia) |
+
+## Hermes Tool: Run Digest On-Demand
+
+When the user asks for this week's sports schedule or wants to refresh the digest, run:
+
+```bash
+cd ~/.hermes/skills/sports-alerts && .venv/bin/python weekly.py
+```
+
+This fetches fresh data, updates `reminders.json`, and sends the digest to Telegram immediately.
 
 ## Hermes Tool: Manage Reminders
 
@@ -65,7 +75,7 @@ sports:
   nfl:
     max_local_hour: 24    # midnight Israel cutoff; set to 25 to allow 1 AM games
   cycling:
-    reminder: false       # set true to get 5-min alerts for race starts
+    reminder: true        # per-stage 5-min reminders (requires TNT Sports to be reachable)
 ```
 
 ## Install
