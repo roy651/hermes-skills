@@ -27,7 +27,8 @@ def _fetch_day(d: date) -> list[tuple[str, str, str]]:
 
     for row in soup.find_all("tr"):
         if "tr-header" in row.get("class", []):
-            current_channel = row.get_text(strip=True)
+            img = row.find("img")
+            current_channel = img["alt"] if img and img.get("alt") else row.get_text(strip=True)
             continue
         cells = row.find_all(["td", "th"])
         if len(cells) < 2:

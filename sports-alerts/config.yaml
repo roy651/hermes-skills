@@ -57,7 +57,7 @@ sports:
 
   cycling:
     enabled: true
-    reminder: false          # stage races — weekly digest only, no 5-min alert
+    reminder: true           # per-stage times from TNT Sports; fallback digest-only
 
   nfl:
     enabled: true
