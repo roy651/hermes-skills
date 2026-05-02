@@ -97,8 +97,9 @@ class Sport5Fetcher(Fetcher):
 
                     sport = fcfg.get("sport", sport_key)
                     eid = f"sport5-{sport_key}-{day.strftime('%Y%m%d')}-{h:02d}{m:02d}"
+                    full_title = f"{title} ({channel})"
                     events.append(Event(
-                        id=eid, sport=sport, title=title,
+                        id=eid, sport=sport, title=full_title,
                         time_utc=dt_utc,
                         has_reminder=fcfg.get("reminder", True),
                     ))

@@ -122,6 +122,12 @@ def main() -> None:
     events = fetch_all(cfg, start, end)
     print(f"[weekly] {len(events)} total events", flush=True)
 
+    # Dedup by ID, keeping last occurrence (named-channel sport5 entry overwrites unnamed)
+    seen_ids: dict[str, Event] = {}
+    for ev in events:
+        seen_ids[ev.id] = ev
+    events = sorted(seen_ids.values(), key=lambda e: e.time_utc)
+
     events = merge_with_existing(events)
     save(events)
 
