@@ -32,10 +32,7 @@ BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 API_PORT = int(os.environ.get("API_PORT", 8766))
 
-USERS = {
-    os.environ.get("USER_ID_ROY", "391626535"): "Roy",
-    os.environ.get("USER_ID_MICHAEL", "MICHAEL_STUB"): "מיכאל",
-}
+ALLOWED_USER_IDS = set(filter(None, os.environ.get("ALLOWED_USER_IDS", "").split(",")))
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +143,7 @@ def _resolve_reminder(user_id: str, ref: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def handle_message(chat_id: str, text: str):
-    if chat_id not in USERS:
+    if ALLOWED_USER_IDS and chat_id not in ALLOWED_USER_IDS:
         send_message(chat_id, "אין לך הרשאה להשתמש בבוט זה.")
         return
 
@@ -254,20 +251,6 @@ def poll():
 
 api = Flask(__name__)
 
-_API_KEY = os.environ.get("API_KEY", "")
-
-
-@api.before_request
-def _auth():
-    if request.path == "/health":
-        return  # public — no auth needed for liveness check
-    if not _API_KEY:
-        return
-    auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {_API_KEY}":
-        return jsonify({"error": "unauthorized"}), 401
-
-
 @api.route("/health")
 def health():
     return jsonify({"status": "ok"})
@@ -339,9 +322,6 @@ if __name__ == "__main__":
     Path(Path(__file__).parent.parent / "logs").mkdir(exist_ok=True)
     db.init()
     scheduler.init(str(db.DB_PATH))
-
-    if not _API_KEY:
-        log.warning("API_KEY not set — local HTTP API is unauthenticated")
 
     api_thread = threading.Thread(
         target=lambda: api.run(host="127.0.0.1", port=API_PORT, use_reloader=False),
