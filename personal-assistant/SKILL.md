@@ -37,14 +37,21 @@ APScheduler stores its job state in the same DB (table: `apscheduler_jobs`).
 
 The bot exposes a local HTTP API at `http://127.0.0.1:8766`. Roy can use it to read or modify his own data or Michael's.
 
-The API requires an `Authorization: Bearer <API_KEY>` header on every request. The key is set in `.env` as `API_KEY` and must be passed by Hermes in all curl calls. The API binds to `127.0.0.1` only — not reachable from outside the machine.
+The API requires an `Authorization: Bearer <key>` header. Before making any request, read the key from the skill's `.env`:
+
+```bash
+PA_KEY=$(grep '^API_KEY=' ~/.hermes/skills/personal-assistant/.env | cut -d= -f2)
+MICHAEL_ID=$(grep '^USER_ID_MICHAEL=' ~/.hermes/skills/personal-assistant/.env | cut -d= -f2)
+```
+
+The API binds to `127.0.0.1` only — not reachable from outside the machine.
 
 ```bash
 # List Roy's todos
-curl -H "Authorization: Bearer $API_KEY" http://127.0.0.1:8766/todos?user_id=391626535
+curl -H "Authorization: Bearer $PA_KEY" http://127.0.0.1:8766/todos?user_id=391626535
 
 # List Michael's todos
-curl "http://127.0.0.1:8766/todos?user_id=$USER_ID_MICHAEL"
+curl "http://127.0.0.1:8766/todos?user_id=$MICHAEL_ID"
 
 # Add a todo for Michael
 curl -s -X POST http://127.0.0.1:8766/todos \
@@ -58,7 +65,7 @@ curl -X POST http://127.0.0.1:8766/todos/3/done
 curl -X DELETE http://127.0.0.1:8766/todos/5
 
 # List Roy's reminders
-curl -H "Authorization: Bearer $API_KEY" http://127.0.0.1:8766/reminders?user_id=391626535
+curl -H "Authorization: Bearer $PA_KEY" http://127.0.0.1:8766/reminders?user_id=391626535
 
 # Add a one-time reminder
 curl -s -X POST http://127.0.0.1:8766/reminders \
