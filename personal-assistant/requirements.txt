@@ -1,0 +1,5 @@
+requests
+python-dotenv
+apscheduler[sqlalchemy]
+flask
+SQLAlchemy
