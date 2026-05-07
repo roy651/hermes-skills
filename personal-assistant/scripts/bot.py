@@ -259,11 +259,18 @@ _API_KEY = os.environ.get("API_KEY", "")
 
 @api.before_request
 def _auth():
+    if request.path == "/health":
+        return  # public — no auth needed for liveness check
     if not _API_KEY:
-        return  # key not configured — fail open with a warning (startup will log it)
+        return
     auth = request.headers.get("Authorization", "")
     if auth != f"Bearer {_API_KEY}":
         return jsonify({"error": "unauthorized"}), 401
+
+
+@api.route("/health")
+def health():
+    return jsonify({"status": "ok"})
 
 
 @api.route("/todos", methods=["GET"])
