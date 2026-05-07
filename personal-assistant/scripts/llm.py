@@ -57,7 +57,7 @@ def parse_intent(message: str) -> dict:
             "Content-Type": "application/json",
         },
         json={
-            "model": os.environ.get("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001"),
+            "model": os.environ.get("LLM_MODEL", "anthropic/claude-haiku-4.5"),
             "messages": [
                 {"role": "system", "content": _SYSTEM.format(now=now)},
                 {"role": "user", "content": message},
