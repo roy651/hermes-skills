@@ -1,8 +1,11 @@
 import json
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
+
+TZ = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Jerusalem"))
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -49,7 +52,7 @@ _SYSTEM = """אתה מנתח בקשות של משתמש ומחזיר JSON בלב
 
 
 def parse_intent(message: str) -> dict:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(tz=TZ).strftime("%Y-%m-%d %H:%M")
     resp = requests.post(
         API_URL,
         headers={

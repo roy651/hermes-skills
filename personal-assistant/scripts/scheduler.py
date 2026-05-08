@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
@@ -8,6 +9,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+
+TZ = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Jerusalem"))
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +37,8 @@ def send_reminder(chat_id: str, text: str, reminder_id: int, recurring: bool):
 def init(db_path: str):
     global _scheduler
     _scheduler = BackgroundScheduler(
-        jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{db_path}")}
+        jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{db_path}")},
+        timezone=TZ,
     )
     _scheduler.start()
     log.info("Scheduler started")
@@ -43,7 +47,8 @@ def init(db_path: str):
 def schedule(reminder_id: int, user_id: str, text: str, schedule_data: dict, recurring: bool):
     t = schedule_data["type"]
     if t == "once":
-        trigger = DateTrigger(run_date=datetime.fromisoformat(schedule_data["datetime"]))
+        run_date = datetime.fromisoformat(schedule_data["datetime"]).replace(tzinfo=TZ)
+        trigger = DateTrigger(run_date=run_date)
     elif t == "interval":
         trigger = IntervalTrigger(seconds=schedule_data["seconds"])
     elif t == "cron":
