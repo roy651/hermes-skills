@@ -39,6 +39,7 @@ def init(db_path: str):
     _scheduler = BackgroundScheduler(
         jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{db_path}")},
         timezone=TZ,
+        job_defaults={"misfire_grace_time": 3600},
     )
     _scheduler.start()
     log.info("Scheduler started")

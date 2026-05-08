@@ -33,6 +33,24 @@ BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 API_PORT = int(os.environ.get("API_PORT", 8766))
 
 ALLOWED_USER_IDS = set(filter(None, os.environ.get("ALLOWED_USER_IDS", "").split(",")))
+AGENT_USER_ID = os.environ.get("AGENT_USER_ID", "")
+
+HELP_TEXT = """שלום! אני העוזר האישי שלך 🤖
+
+הנה מה שאני יכול לעשות:
+
+📋 <b>משימות</b>
+• "הוסף: לקנות חלב" — הוספת משימה
+• "מה המשימות שלי?" — הצגת הרשימה
+• "סיימתי את המשימה הראשונה" — סימון כבוצע
+• "מחק את החלב" — מחיקת משימה
+
+⏰ <b>תזכורות</b>
+• "תזכיר לי מחר ב-9 לצלצל לסבתא"
+• "תזכיר לי כל שעתיים לשתות מים"
+• "תזכיר לי כל יום ב-8 לקחת תרופות"
+• "מה התזכורות שלי?" — הצגת תזכורות פעילות
+• "בטל את תזכורת המים" — ביטול תזכורת"""
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +67,11 @@ def send_message(chat_id: str, text: str, parse_mode: str = "HTML"):
         )
     except Exception as e:
         log.warning(f"send_message failed: {e}")
+
+
+def _notify_agent(msg: str):
+    if AGENT_USER_ID:
+        send_message(AGENT_USER_ID, msg)
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +170,16 @@ def handle_message(chat_id: str, text: str):
         send_message(chat_id, "אין לך הרשאה להשתמש בבוט זה.")
         return
 
+    if text.strip() in ("/start", "/help"):
+        send_message(chat_id, HELP_TEXT)
+        return
+
     try:
         intent = llm.parse_intent(text)
     except Exception as e:
         log.warning(f"LLM parse error: {e}")
         send_message(chat_id, "סליחה, לא הצלחתי לעבד את הבקשה. נסה שוב.")
+        _notify_agent(f"⚠️ שגיאה בעיבוד הודעה\nמשתמש: {chat_id}\nהודעה: {text}\nשגיאה: {e}")
         return
 
     action = intent.get("action", "unknown")
@@ -213,7 +241,9 @@ def handle_message(chat_id: str, text: str):
         send_message(chat_id, f'🗑️ ביטלתי את התזכורת: "{reminder["text"]}"')
 
     else:
-        send_message(chat_id, "לא הבנתי את הבקשה. אפשר לנסח מחדש?")
+        send_message(chat_id, "לא הבנתי את הבקשה. אפשר לנסח מחדש?\n\nכתוב /help לרשימת הפעולות האפשריות.")
+        if chat_id != AGENT_USER_ID:
+            _notify_agent(f"📩 הודעה שלא טופלה\nמשתמש: {chat_id}\nהודעה: \"{text}\"")
 
 
 # ---------------------------------------------------------------------------
