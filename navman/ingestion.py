@@ -499,13 +499,15 @@ def parse_nav_images(image_paths: list[str], api_cfg: dict) -> tuple[list[dict],
             ).hexdigest()[:16]
 
             if batch_key in cache and cache[batch_key]:
-                print(f"[ingestion] batch cache hit ({len(cache[batch_key])} pts)", file=sys.stderr)
-                all_points.extend(cache[batch_key])
+                validated = _validate_nav_points(cache[batch_key])
+                print(f"[ingestion] batch cache hit ({len(validated)} pts)", file=sys.stderr)
+                all_points.extend(validated)
             else:
                 llm_pts, failed_names = _llm_parse_nav_batch(needs_llm, api_cfg)
-                all_points.extend(llm_pts)
-                if llm_pts:  # only cache successful results
-                    cache[batch_key] = llm_pts
+                validated_pts = _validate_nav_points(llm_pts)
+                all_points.extend(validated_pts)
+                if validated_pts:
+                    cache[batch_key] = validated_pts
                     cache_dirty = True
                 if failed_names:
                     print(f"[ingestion] Warning: LLM failed for {failed_names}", file=sys.stderr)
