@@ -13,6 +13,8 @@ _SYSTEM = """אתה מנתח בקשות של משתמש ומחזיר JSON בלב
 
 התאריך והשעה עכשיו: {now}
 
+אם יש היסטוריית שיחה, השתמש בה להבין הודעות עמומות כמו "קצת יותר מאוחר", "שעה קודם", "בטל" — הן מתייחסות לפעולה האחרונה.
+
 הפעולות האפשריות ופורמט ה-JSON:
 
 הוספת משימה:
@@ -45,14 +47,25 @@ _SYSTEM = """אתה מנתח בקשות של משתמש ומחזיר JSON בלב
 ביטול תזכורת (ref = מספר ברשימה, או טקסט חלקי):
 {{"action": "cancel_reminder", "ref": "1"}}
 
+שינוי לוח זמנים של תזכורות המשימות (שעות ערות בלבד: 6–22):
+— שעות ספציפיות: {{"action": "set_todo_digest", "schedule": {{"type": "specific_times", "hours": [8, 20]}}}}
+— כל N שעות: {{"action": "set_todo_digest", "schedule": {{"type": "interval_waking", "every_hours": 4}}}}
+
+השהיית תזכורות המשימות להיום:
+{{"action": "pause_todo_digest"}}
+
 לא הובן:
 {{"action": "unknown"}}
 
 החזר JSON בלבד. אל תוסיף שום טקסט לפני או אחרי."""
 
 
-def parse_intent(message: str) -> dict:
+def parse_intent(message: str, history: list[dict] | None = None) -> dict:
     now = datetime.now(tz=TZ).strftime("%Y-%m-%d %H:%M")
+    messages = [{"role": "system", "content": _SYSTEM.format(now=now)}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": message})
     resp = requests.post(
         API_URL,
         headers={
@@ -61,10 +74,7 @@ def parse_intent(message: str) -> dict:
         },
         json={
             "model": os.environ.get("LLM_MODEL", "anthropic/claude-haiku-4.5"),
-            "messages": [
-                {"role": "system", "content": _SYSTEM.format(now=now)},
-                {"role": "user", "content": message},
-            ],
+            "messages": messages,
             "temperature": 0,
         },
         timeout=30,

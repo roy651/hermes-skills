@@ -165,6 +165,17 @@ def _resolve_reminder(user_id: str, ref: str) -> dict | None:
 # Message handler
 # ---------------------------------------------------------------------------
 
+def _describe_digest_schedule(schedule_data: dict) -> str:
+    t = schedule_data.get("type")
+    if t == "specific_times":
+        times = ", ".join(f"{h:02d}:00" for h in sorted(schedule_data["hours"]))
+        return f"בשעות {times}"
+    if t == "interval_waking":
+        n = schedule_data.get("every_hours", 4)
+        return f"כל {n} שעות בין 06:00 ל-22:00"
+    return "כל 4 שעות בין 06:00 ל-22:00"
+
+
 def handle_message(chat_id: str, text: str):
     if ALLOWED_USER_IDS and chat_id not in ALLOWED_USER_IDS:
         send_message(chat_id, "אין לך הרשאה להשתמש בבוט זה.")
@@ -174,76 +185,95 @@ def handle_message(chat_id: str, text: str):
         send_message(chat_id, HELP_TEXT)
         return
 
+    history = db.get_history(chat_id)
+    db.add_message(chat_id, "user", text)
+
     try:
-        intent = llm.parse_intent(text)
+        intent = llm.parse_intent(text, history)
     except Exception as e:
         log.warning(f"LLM parse error: {e}")
-        send_message(chat_id, "סליחה, לא הצלחתי לעבד את הבקשה. נסה שוב.")
+        response = "סליחה, לא הצלחתי לעבד את הבקשה. נסה שוב."
+        send_message(chat_id, response)
+        db.add_message(chat_id, "assistant", response)
         _notify_agent(f"⚠️ שגיאה בעיבוד הודעה\nמשתמש: {chat_id}\nהודעה: {text}\nשגיאה: {e}")
         return
 
     action = intent.get("action", "unknown")
     log.info(f"chat={chat_id} action={action}")
+    response = None
 
     if action == "add_todo":
         todo_text = intent.get("text", "").strip()
         if not todo_text:
-            send_message(chat_id, "לא הבנתי מה להוסיף לרשימה.")
-            return
-        db.add_todo(chat_id, todo_text)
-        send_message(chat_id, f"✅ נוספה משימה: {todo_text}")
+            response = "לא הבנתי מה להוסיף לרשימה."
+        else:
+            db.add_todo(chat_id, todo_text)
+            response = f"✅ נוספה משימה: {todo_text}"
 
     elif action == "list_todos":
         todos = db.list_todos(chat_id)
-        send_message(chat_id, format_todos(todos))
+        response = format_todos(todos)
 
     elif action == "complete_todo":
         todo = _resolve_todo(chat_id, str(intent.get("ref", "")))
         if not todo:
-            send_message(chat_id, "לא מצאתי את המשימה הזו.")
-            return
-        db.complete_todo(todo["id"])
-        send_message(chat_id, f'✅ מצוין! סימנתי "{todo["text"]}" כבוצע.')
+            response = "לא מצאתי את המשימה הזו."
+        else:
+            db.complete_todo(todo["id"])
+            response = f'✅ מצוין! סימנתי "{todo["text"]}" כבוצע.'
 
     elif action == "delete_todo":
         todo = _resolve_todo(chat_id, str(intent.get("ref", "")))
         if not todo:
-            send_message(chat_id, "לא מצאתי את המשימה הזו.")
-            return
-        db.delete_todo(todo["id"])
-        send_message(chat_id, f'🗑️ מחקתי: "{todo["text"]}"')
+            response = "לא מצאתי את המשימה הזו."
+        else:
+            db.delete_todo(todo["id"])
+            response = f'🗑️ מחקתי: "{todo["text"]}"'
 
     elif action == "add_reminder":
         reminder_text = intent.get("text", "").strip()
         schedule_data = intent.get("schedule")
         if not reminder_text or not schedule_data:
-            send_message(chat_id, "לא הבנתי את פרטי התזכורת.")
-            return
-        recurring = schedule_data["type"] in ("interval", "cron")
-        reminder_id = db.add_reminder(
-            chat_id, reminder_text,
-            schedule_data["type"], json.dumps(schedule_data)
-        )
-        scheduler.schedule(reminder_id, chat_id, reminder_text, schedule_data, recurring)
-        send_message(chat_id, f'⏰ תזכורת נקבעה: "{reminder_text}" — {_describe_schedule(schedule_data)}')
+            response = "לא הבנתי את פרטי התזכורת."
+        else:
+            recurring = schedule_data["type"] in ("interval", "cron")
+            reminder_id = db.add_reminder(
+                chat_id, reminder_text,
+                schedule_data["type"], json.dumps(schedule_data)
+            )
+            scheduler.schedule(reminder_id, chat_id, reminder_text, schedule_data, recurring)
+            response = f'⏰ תזכורת נקבעה: "{reminder_text}" — {_describe_schedule(schedule_data)}'
 
     elif action == "list_reminders":
         reminders = db.list_reminders(chat_id)
-        send_message(chat_id, format_reminders(reminders))
+        response = format_reminders(reminders)
 
     elif action == "cancel_reminder":
         reminder = _resolve_reminder(chat_id, str(intent.get("ref", "")))
         if not reminder:
-            send_message(chat_id, "לא מצאתי את התזכורת הזו.")
-            return
-        db.cancel_reminder(reminder["id"])
-        scheduler.cancel(reminder["id"])
-        send_message(chat_id, f'🗑️ ביטלתי את התזכורת: "{reminder["text"]}"')
+            response = "לא מצאתי את התזכורת הזו."
+        else:
+            db.cancel_reminder(reminder["id"])
+            scheduler.cancel(reminder["id"])
+            response = f'🗑️ ביטלתי את התזכורת: "{reminder["text"]}"'
+
+    elif action == "set_todo_digest":
+        schedule_data = intent.get("schedule", {})
+        scheduler.schedule_todo_digest(chat_id, schedule_data)
+        response = f'✅ תזכורות משימות עודכנו — {_describe_digest_schedule(schedule_data)}'
+
+    elif action == "pause_todo_digest":
+        scheduler.pause_todo_digest_today(chat_id)
+        response = "⏸️ תזכורות המשימות מושהות להיום. מחר יחזרו כרגיל."
 
     else:
-        send_message(chat_id, "לא הבנתי את הבקשה. אפשר לנסח מחדש?\n\nכתוב /help לרשימת הפעולות האפשריות.")
+        response = "לא הבנתי את הבקשה. אפשר לנסח מחדש?\n\nכתוב /help לרשימת הפעולות האפשריות."
         if chat_id != AGENT_USER_ID:
             _notify_agent(f"📩 הודעה שלא טופלה\nמשתמש: {chat_id}\nהודעה: \"{text}\"")
+
+    if response:
+        send_message(chat_id, response)
+        db.add_message(chat_id, "assistant", response)
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +382,10 @@ if __name__ == "__main__":
     Path(Path(__file__).parent.parent / "logs").mkdir(exist_ok=True)
     db.init()
     scheduler.init(str(db.DB_PATH))
+
+    for _uid in ALLOWED_USER_IDS:
+        if _uid and not scheduler.has_todo_digest(_uid):
+            scheduler.schedule_todo_digest(_uid, {"type": "interval_waking", "every_hours": 4})
 
     api_thread = threading.Thread(
         target=lambda: api.run(host="127.0.0.1", port=API_PORT, use_reloader=False),

@@ -32,9 +32,43 @@ def init():
             active       INTEGER DEFAULT 1,
             created_at   TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS message_history (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    TEXT NOT NULL,
+            role       TEXT NOT NULL,
+            content    TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
     """)
     c.commit()
     c.close()
+
+
+def add_message(user_id: str, role: str, content: str):
+    c = _connect()
+    c.execute(
+        "INSERT INTO message_history (user_id, role, content) VALUES (?, ?, ?)",
+        (user_id, role, content),
+    )
+    c.execute(
+        """DELETE FROM message_history WHERE user_id = ? AND id NOT IN (
+               SELECT id FROM message_history WHERE user_id = ?
+               ORDER BY id DESC LIMIT 10
+           )""",
+        (user_id, user_id),
+    )
+    c.commit()
+    c.close()
+
+
+def get_history(user_id: str, n: int = 10) -> list[dict]:
+    c = _connect()
+    rows = c.execute(
+        "SELECT role, content FROM message_history WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+        (user_id, n),
+    ).fetchall()
+    c.close()
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
 
 def add_todo(user_id: str, text: str) -> int:

@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -11,6 +11,8 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 TZ = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Jerusalem"))
+WAKING_START = 6
+WAKING_END = 22
 
 log = logging.getLogger(__name__)
 
@@ -73,3 +75,65 @@ def cancel(reminder_id: int):
     if _scheduler.get_job(job_id):
         _scheduler.remove_job(job_id)
         log.info(f"Cancelled reminder {reminder_id}")
+
+
+# ---------------------------------------------------------------------------
+# Todo digest
+# ---------------------------------------------------------------------------
+
+def send_todo_digest(user_id: str):
+    """APScheduler job — sends open todos as a digest message."""
+    import db
+    todos = db.list_todos(user_id)
+    open_todos = [t for t in todos if not t["done"]]
+    if not open_todos:
+        return
+    lines = ["📋 תזכורת משימות:"]
+    for i, t in enumerate(open_todos, 1):
+        lines.append(f"{i}. {t['text']}")
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": user_id, "text": "\n".join(lines)},
+            timeout=10,
+        )
+    except Exception as e:
+        log.warning(f"Failed to send todo digest for {user_id}: {e}")
+
+
+def _digest_hours(schedule_data: dict) -> list[int]:
+    t = schedule_data.get("type")
+    if t == "specific_times":
+        return sorted(h for h in schedule_data["hours"] if WAKING_START <= h <= WAKING_END)
+    if t == "interval_waking":
+        every = int(schedule_data.get("every_hours", 4))
+        return [h for h in range(WAKING_START, WAKING_END + 1) if (h - WAKING_START) % every == 0]
+    return [6, 10, 14, 18, 22]  # default every 4h
+
+
+def schedule_todo_digest(user_id: str, schedule_data: dict):
+    hours = _digest_hours(schedule_data)
+    trigger = CronTrigger(hour=",".join(str(h) for h in hours), minute=0, timezone=TZ)
+    _scheduler.add_job(
+        send_todo_digest,
+        trigger=trigger,
+        args=[user_id],
+        id=f"todo_digest_{user_id}",
+        replace_existing=True,
+    )
+    log.info(f"Scheduled todo digest for {user_id} at hours {hours}")
+
+
+def has_todo_digest(user_id: str) -> bool:
+    return _scheduler.get_job(f"todo_digest_{user_id}") is not None
+
+
+def pause_todo_digest_today(user_id: str):
+    job_id = f"todo_digest_{user_id}"
+    if _scheduler.get_job(job_id):
+        tomorrow_6am = (datetime.now(TZ) + timedelta(days=1)).replace(
+            hour=WAKING_START, minute=0, second=0, microsecond=0
+        )
+        _scheduler.modify_job(job_id, next_run_time=tomorrow_6am)
+        log.info(f"Paused todo digest for {user_id} until {tomorrow_6am}")
