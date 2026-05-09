@@ -791,20 +791,25 @@ def generate_zone_based_assignments(
         raise ValueError("לא נמצאו מסלולים תקינים בשיטת הזונות — בדוק את הגדרות המרחק")
 
     # 4. Greedy selection: max new unique points, break ties by lowest CV
+    # Each route is removed from the pool after selection so no two assignments
+    # share an identical sequence of waypoints.
     selected: list[dict] = []
     used_ids: set[int] = set()
+    remaining_routes = list(valid_routes)
 
     for slot in range(n_participants):
         best_route = None
         best_new = -1
         best_cv = float("inf")
+        best_idx = -1
 
-        for ids, length, cv in valid_routes:
+        for i, (ids, length, cv) in enumerate(remaining_routes):
             new_pts = len(set(ids) - used_ids)
             if new_pts > best_new or (new_pts == best_new and cv < best_cv):
                 best_new = new_pts
                 best_cv = cv
                 best_route = (ids, length, cv)
+                best_idx = i
 
         if best_route is None:
             print(
@@ -813,6 +818,7 @@ def generate_zone_based_assignments(
             )
             break
 
+        remaining_routes.pop(best_idx)
         ids, length, cv = best_route
         used_ids.update(ids)
         selected.append({
