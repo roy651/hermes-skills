@@ -68,10 +68,10 @@ def analyze(ticker: str, df: pd.DataFrame, held: bool = False) -> dict:
     resp = requests.post(
         API_URL,
         headers={
-            "Authorization": f"Bearer {os.environ['LLM_API_KEY']}",
+            "Authorization": f"Bearer {os.environ.get('LLM_API_KEY') or os.environ['OPENROUTER_API_KEY']}",
             "Content-Type": "application/json",
         },
-        json={"model": model, "messages": messages, "temperature": 0},
+        json={"model": model, "messages": messages, "temperature": 0, "max_tokens": 512},
         timeout=90,
     )
     resp.raise_for_status()
