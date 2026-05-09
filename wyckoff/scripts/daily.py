@@ -52,8 +52,10 @@ def _format_result(result: dict, holding: dict | None, price: float, name: str =
 
     phase_icon = _PHASE_EMOJI.get(phase, "⬜")
     rec_label = _REC_EMOJI.get(rec, rec)
-    sym = currency if currency != "USD" else "$"
-    price_str = f"{sym}{price:.2f}" if sym == "$" else f"{price:.2f} {sym}"
+    _sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
+    price_str = f"{_sym}{price:.2f}"
+    if holding:
+        cost_str = f"{_sym}{holding['avg_cost']:.2f}"
 
     title = f"<b>{ticker}</b>"
     if name and name != ticker:
@@ -64,7 +66,7 @@ def _format_result(result: dict, holding: dict | None, price: float, name: str =
         cost = holding["avg_cost"]
         pnl_pct = (price - cost) / cost * 100
         pnl_sign = "+" if pnl_pct >= 0 else ""
-        header = f"{title} · {qty} @ {sym}{cost:.2f} · {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
+        header = f"{title} · {qty} @ {cost_str} · {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
     else:
         header = f"{title} · {price_str}"
 

@@ -36,16 +36,20 @@ def fetch_ohlcv(ticker: str, days: int = 120) -> TickerData:
     q = r["indicators"]["quote"][0]
     adj = r["indicators"].get("adjclose", [{}])[0].get("adjclose", q["close"])
 
+    # Yahoo Finance returns TASE prices in agorot (ILA = 1/100 ILS); normalize to ILS
+    scale = 0.01 if currency == "ILA" else 1.0
+    display_currency = "ILS" if currency == "ILA" else currency
+
     df = pd.DataFrame({
         "Date": [datetime.fromtimestamp(ts, tz=timezone.utc).date() for ts in timestamps],
-        "open": q["open"],
-        "high": q["high"],
-        "low": q["low"],
-        "close": adj,
+        "open": [v * scale if v is not None else None for v in q["open"]],
+        "high": [v * scale if v is not None else None for v in q["high"]],
+        "low": [v * scale if v is not None else None for v in q["low"]],
+        "close": [v * scale if v is not None else None for v in adj],
         "volume": q["volume"],
     }).set_index("Date").dropna()
 
     df = df.tail(days).round(4)
     if df.empty:
         raise ValueError(f"No data returned for {ticker}")
-    return TickerData(df=df, name=name, currency=currency)
+    return TickerData(df=df, name=name, currency=display_currency)
