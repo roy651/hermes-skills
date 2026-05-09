@@ -1,14 +1,10 @@
 from __future__ import annotations
-import requests
 import yfinance as yf
 import pandas as pd
 
-# Use a plain requests.Session to bypass curl_cffi (which has SSL issues on some Linux hosts)
-_session = requests.Session()
-
 
 def fetch_ohlcv(ticker: str, days: int = 120) -> pd.DataFrame:
-    t = yf.Ticker(ticker, session=_session)
+    t = yf.Ticker(ticker)
     df = t.history(period=f"{days}d", interval="1d", auto_adjust=True)
     if df.empty:
         raise ValueError(f"No data returned for {ticker}")

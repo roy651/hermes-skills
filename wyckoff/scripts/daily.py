@@ -117,7 +117,9 @@ def run():
         parts.extend(watchlist_lines)
 
     if errors:
-        parts.append(f"\n<i>Errors: {', '.join(errors)}</i>")
+        import html
+        safe_errors = ", ".join(html.escape(str(e)) for e in errors)
+        parts.append(f"\n<i>Errors: {safe_errors}</i>")
 
     notifier.send("\n".join(parts))
     print(f"[daily] sent digest for {len(all_tickers)} tickers", file=sys.stderr)
