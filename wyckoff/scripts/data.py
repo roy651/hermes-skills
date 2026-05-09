@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+from typing import NamedTuple
 import requests
 import pandas as pd
 
@@ -7,8 +8,13 @@ _HEADERS = {"User-Agent": "Mozilla/5.0"}
 _BASE = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 
 
-def fetch_ohlcv(ticker: str, days: int = 120) -> pd.DataFrame:
-    # Use 1y range to ensure we get at least `days` trading days
+class TickerData(NamedTuple):
+    df: pd.DataFrame
+    name: str      # e.g. "SPDR S&P 500 ETF Trust"
+    currency: str  # e.g. "USD" or "ILS"
+
+
+def fetch_ohlcv(ticker: str, days: int = 120) -> TickerData:
     range_param = "1y" if days <= 252 else "2y"
     resp = requests.get(
         _BASE.format(ticker=ticker),
@@ -22,6 +28,10 @@ def fetch_ohlcv(ticker: str, days: int = 120) -> pd.DataFrame:
         raise ValueError(f"No data returned for {ticker}")
 
     r = result[0]
+    meta = r["meta"]
+    name = meta.get("shortName") or meta.get("longName") or ticker
+    currency = meta.get("currency", "USD")
+
     timestamps = r["timestamp"]
     q = r["indicators"]["quote"][0]
     adj = r["indicators"].get("adjclose", [{}])[0].get("adjclose", q["close"])
@@ -38,9 +48,4 @@ def fetch_ohlcv(ticker: str, days: int = 120) -> pd.DataFrame:
     df = df.tail(days).round(4)
     if df.empty:
         raise ValueError(f"No data returned for {ticker}")
-    return df
-
-
-def current_price(ticker: str) -> float:
-    df = fetch_ohlcv(ticker, days=5)
-    return float(df["close"].iloc[-1])
+    return TickerData(df=df, name=name, currency=currency)

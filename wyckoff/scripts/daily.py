@@ -39,7 +39,7 @@ _REC_EMOJI = {
 }
 
 
-def _format_result(result: dict, holding: dict | None, price: float) -> str:
+def _format_result(result: dict, holding: dict | None, price: float, name: str = "", currency: str = "USD") -> str:
     ticker = result["ticker"]
     phase = result.get("phase", "unclear")
     confidence = result.get("phase_confidence", "")
@@ -52,15 +52,21 @@ def _format_result(result: dict, holding: dict | None, price: float) -> str:
 
     phase_icon = _PHASE_EMOJI.get(phase, "⬜")
     rec_label = _REC_EMOJI.get(rec, rec)
+    sym = currency if currency != "USD" else "$"
+    price_str = f"{sym}{price:.2f}" if sym == "$" else f"{price:.2f} {sym}"
+
+    title = f"<b>{ticker}</b>"
+    if name and name != ticker:
+        title += f" <i>({name})</i>"
 
     if holding:
         qty = holding["qty"]
         cost = holding["avg_cost"]
         pnl_pct = (price - cost) / cost * 100
         pnl_sign = "+" if pnl_pct >= 0 else ""
-        header = f"<b>{ticker}</b> · {qty} @ ${cost:.2f} · ${price:.2f} ({pnl_sign}{pnl_pct:.1f}%)"
+        header = f"{title} · {qty} @ {sym}{cost:.2f} · {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
     else:
-        header = f"<b>{ticker}</b> · ${price:.2f}"
+        header = f"{title} · {price_str}"
 
     lines = [header]
     lines.append(f"  {phase_icon} {phase.title()} ({confidence}) · {criteria}/9 criteria")
@@ -93,11 +99,11 @@ def run():
 
     for ticker in all_tickers:
         try:
-            df = market_data.fetch_ohlcv(ticker, days=lookback)
-            price = float(df["close"].iloc[-1])
+            td = market_data.fetch_ohlcv(ticker, days=lookback)
+            price = float(td.df["close"].iloc[-1])
             held = ticker in holdings
-            result = wyckoff.analyze(ticker, df, held=held)
-            block = _format_result(result, holdings.get(ticker), price)
+            result = wyckoff.analyze(ticker, td.df, held=held, name=td.name)
+            block = _format_result(result, holdings.get(ticker), price, name=td.name, currency=td.currency)
             if held:
                 portfolio_lines.append(block)
             else:

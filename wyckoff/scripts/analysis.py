@@ -57,12 +57,13 @@ Return ONLY valid JSON:
 }"""
 
 
-def analyze(ticker: str, df: pd.DataFrame, held: bool = False) -> dict:
+def analyze(ticker: str, df: pd.DataFrame, held: bool = False, name: str = "") -> dict:
     context = "Currently HELD in portfolio." if held else "On watchlist (not held)."
+    label = f"{ticker} ({name})" if name and name != ticker else ticker
     csv = df.to_csv()
     messages = [
         {"role": "system", "content": _SYSTEM},
-        {"role": "user", "content": f"Ticker: {ticker}\n{context}\n\nOHLCV (last {len(df)} trading days):\n{csv}"},
+        {"role": "user", "content": f"Ticker: {label}\n{context}\n\nOHLCV (last {len(df)} trading days):\n{csv}"},
     ]
     model = os.environ.get("WYCKOFF_LLM_MODEL", "anthropic/claude-sonnet-4-5")
     resp = requests.post(
