@@ -21,7 +21,7 @@ All user-facing text is in Hebrew.
 /session → /upload_points → /done
         → /upload_map → /done → /confirm_map   (optional, or /skip_map)
         → /special <start> <mid> <finish>
-        → /generate <n> <avg_km> <min_km> <max_km> <participants>
+        → /gen duo|solo|solo_mid <min_km> <max_km> <participants> ...
         → /upload_participants → /done
         → /assign
         → /export

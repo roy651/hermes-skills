@@ -41,28 +41,48 @@ def build_dist_cache(points: list[dict]) -> dict:
 # Optimal path length for fixed start/end + n intermediate points
 # ---------------------------------------------------------------------------
 
-def optimal_path(start: dict, end: dict, intermediates: list[dict], dist_cache: dict) -> tuple[float, list[int]]:
+def optimal_path(
+    start: dict,
+    end: dict,
+    intermediates: list[dict],
+    dist_cache: dict,
+    min_km: float | None = None,
+    max_km: float | None = None,
+) -> tuple[float, list[int]]:
     """
-    Return (min_length_km, ordered_intermediate_ids) for the best permutation.
-    With n ≤ 5 intermediates, brute force is fine (max 120 permutations).
+    Return (length_km, ordered_intermediate_ids) for the best permutation.
+    When min_km/max_km are given, prefers the most evenly spaced permutation
+    within bounds over the shortest one. Falls back to shortest if none fit.
     """
     if not intermediates:
         return dist_cache.get((start["id"], end["id"]), _euclidean_km(start, end)), []
 
     best_len = float("inf")
-    best_order = []
+    best_len_order = []
+    best_even: tuple[float, float, list[int]] | None = None  # (variance, length, order)
 
     for perm in permutations(intermediates):
         pts = [start] + list(perm) + [end]
-        total = sum(
+        segs = [
             dist_cache.get((pts[i]["id"], pts[i + 1]["id"]), _euclidean_km(pts[i], pts[i + 1]))
             for i in range(len(pts) - 1)
-        )
+        ]
+        total = sum(segs)
+        order = [p["id"] for p in perm]
+
         if total < best_len:
             best_len = total
-            best_order = [p["id"] for p in perm]
+            best_len_order = order
 
-    return best_len, best_order
+        if min_km is not None and max_km is not None and min_km <= total <= max_km:
+            mean = total / len(segs)
+            var = sum((s - mean) ** 2 for s in segs) / len(segs)
+            if best_even is None or var < best_even[0]:
+                best_even = (var, total, order)
+
+    if best_even is not None:
+        return best_even[1], best_even[2]
+    return best_len, best_len_order
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +172,10 @@ def _greedy_assignment(
             lo = min_km * (1 - relaxation)
             hi = max_km * (1 + relaxation)
 
+            best_even_score = float("inf")
+            best_even_result: tuple[float, list[int]] | None = None
+            valid_found = 0
+
             for _ in range(max_tries):
                 # Pick candidates weighted by low usage
                 candidates = sorted_pool[:max(n_per_nav * 3, 15)]
@@ -161,19 +185,34 @@ def _greedy_assignment(
                     break
 
                 subset = random.sample(candidates, n_per_nav)
-                length, ordered_ids = optimal_path(start, end, subset, dist_cache)
+                length, ordered_ids = optimal_path(start, end, subset, dist_cache, lo, hi)
 
                 if _is_valid_length(length, lo, hi):
-                    for pid in ordered_ids:
-                        usage_count[pid] = usage_count.get(pid, 0) + 1
-                    assignments.append({
-                        "index": len(assignments) + 1,
-                        "section": section,
-                        "points": ordered_ids,
-                        "length_km": round(length, 3),
-                    })
-                    found = True
-                    break
+                    pts = [start] + [pool_map[pid] for pid in ordered_ids] + [end]
+                    segs = [
+                        dist_cache.get((pts[i]["id"], pts[i + 1]["id"]), _euclidean_km(pts[i], pts[i + 1]))
+                        for i in range(len(pts) - 1)
+                    ]
+                    mean = sum(segs) / len(segs) if segs else 1.0
+                    score = sum((s - mean) ** 2 for s in segs)
+                    if score < best_even_score:
+                        best_even_score = score
+                        best_even_result = (length, ordered_ids)
+                    valid_found += 1
+                    if valid_found >= 30:
+                        break
+
+            if best_even_result:
+                length, ordered_ids = best_even_result
+                for pid in ordered_ids:
+                    usage_count[pid] = usage_count.get(pid, 0) + 1
+                assignments.append({
+                    "index": len(assignments) + 1,
+                    "section": section,
+                    "points": ordered_ids,
+                    "length_km": round(length, 3),
+                })
+                found = True
 
             if found:
                 break
@@ -290,7 +329,6 @@ def generate_assignments(
     filtered_point_ids: list[int],
     special: dict,
     n_per_nav: int,
-    avg_km: float,
     min_km: float,
     max_km: float,
     n_participants: int,
@@ -421,7 +459,6 @@ def generate_solo_a_assignments(
     filtered_point_ids: list[int],
     special: dict,
     n_per_nav: int,
-    avg_km: float,
     min_km: float,
     max_km: float,
     n_participants: int,
@@ -500,7 +537,6 @@ def generate_solo_mid_assignments(
     special: dict,
     n_si_pts: int,
     n_if_pts: int,
-    avg_km: float,
     min_km: float,
     max_km: float,
     n_participants: int,

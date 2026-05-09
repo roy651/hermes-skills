@@ -209,9 +209,9 @@ def handle_help(chat_id: int, state: dict) -> None:
         "/special (/sp) <start_id> <mid_id> <finish_id> — נה/נב/נס (זוגות / יחידני עם ביניים)\n"
         "/special (/sp) <start_id> <finish_id> — נה/נס בלבד (יחידני ללא ביניים)\n"
         "/upload_special (/ups) — העלאת תמונת נקודות מיוחדות (2 או 3 נקודות)\n"
-        "/gen duo <avg_km> <min_km> <max_km> <participants> <pts> — ניווט זוגות\n"
-        "/gen solo <avg_km> <min_km> <max_km> <participants> <pts> — ניווט יחידני (נה→נס)\n"
-        "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if> — ניווט יחידני עם ביניים\n"
+        "/gen duo <min_km> <max_km> <participants> <pts> — ניווט זוגות\n"
+        "/gen solo <min_km> <max_km> <participants> <pts> — ניווט יחידני (נה→נס)\n"
+        "/gen solo_mid <min_km> <max_km> <participants> <n_si> <n_if> — ניווט יחידני עם ביניים\n"
         "/upload_participants (/upa) — העלאת טבלת משתתפים\n"
         "/assign (/a) — יצירת שיבוץ\n"
         "/export (/ex) — יצוא XLS\n"
@@ -432,8 +432,8 @@ def handle_special(chat_id: int, state: dict, args: str) -> dict:
         send(chat_id,
              f"נקודות מיוחדות (יחידני): נה={start_id}, נס={finish_id}\n"
              "צור משימות יחידניות:\n"
-             "/gen solo <avg_km> <min_km> <max_km> <participants> <pts>\n"
-             "דוגמה: /gen solo 8 6 10 16 3")
+             "/gen solo <min_km> <max_km> <participants> <pts>\n"
+             "דוגמה: /gen solo 6 10 16 3")
         return state
     elif len(parts) == 3:
         # Duo / solo-mid: start + mid + finish
@@ -453,9 +453,9 @@ def handle_special(chat_id: int, state: dict, args: str) -> dict:
         send(chat_id,
              f"נקודות מיוחדות: נה={start_id}, נב={mid_id}, נס={finish_id}\n"
              "צור משימות:\n"
-             "/gen duo <avg_km> <min_km> <max_km> <participants> <pts>\n"
-             "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>\n"
-             "דוגמה: /gen duo 8 6 10 16 3")
+             "/gen duo <min_km> <max_km> <participants> <pts>\n"
+             "/gen solo_mid <min_km> <max_km> <participants> <n_si> <n_if>\n"
+             "דוגמה: /gen duo 6 10 16 3")
         return state
     else:
         send(chat_id,
@@ -469,16 +469,16 @@ def handle_special(chat_id: int, state: dict, args: str) -> dict:
 def _gen_usage_text() -> str:
     return (
         "שימוש:\n"
-        "/gen duo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+        "/gen duo <min_km> <max_km> <participants> <pts>\n"
         "  — ניווט זוגות (נה→נב→נס), נדרשות 3 נקודות מיוחדות\n"
-        "/gen solo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+        "/gen solo <min_km> <max_km> <participants> <pts>\n"
         "  — ניווט יחידני (נה→נס), נדרשות 2 נקודות מיוחדות\n"
-        "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>\n"
+        "/gen solo_mid <min_km> <max_km> <participants> <n_si> <n_if>\n"
         "  — ניווט יחידני עם ביניים, נדרשות 3 נקודות מיוחדות\n"
         "דוגמאות:\n"
-        "/gen duo 8 6 10 16 3\n"
-        "/gen solo 8 6 10 16 3\n"
-        "/gen solo_mid 8 6 10 16 2 4"
+        "/gen duo 6 10 16 3\n"
+        "/gen solo 6 10 16 3\n"
+        "/gen solo_mid 6 10 16 2 4"
     )
 
 
@@ -498,14 +498,13 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
 
     try:
         if mode == "duo":
-            if len(num_parts) != 5:
+            if len(num_parts) != 4:
                 send(chat_id, _gen_usage_text())
                 return state
-            avg_km = float(num_parts[0])
-            min_km = float(num_parts[1])
-            max_km = float(num_parts[2])
-            n_part = int(num_parts[3])
-            n_pts = int(num_parts[4])
+            min_km = float(num_parts[0])
+            max_km = float(num_parts[1])
+            n_part = int(num_parts[2])
+            n_pts = int(num_parts[3])
             if mid_id is None:
                 send(chat_id,
                      "❌ לא הוגדרה נקודת ביניים (נב). לניווט זוגות נדרשות 3 נקודות.\n"
@@ -516,38 +515,36 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
                 return state
 
         elif mode == "solo":
-            if len(num_parts) != 5:
+            if len(num_parts) != 4:
                 send(chat_id, _gen_usage_text())
                 return state
-            avg_km = float(num_parts[0])
-            min_km = float(num_parts[1])
-            max_km = float(num_parts[2])
-            n_part = int(num_parts[3])
-            n_pts = int(num_parts[4])
+            min_km = float(num_parts[0])
+            max_km = float(num_parts[1])
+            n_part = int(num_parts[2])
+            n_pts = int(num_parts[3])
             if mid_id is not None:
                 send(chat_id,
                      "❌ נקודת ביניים מוגדרת. לניווט יחידני עם ביניים השתמש ב:\n"
-                     "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>")
+                     "/gen solo_mid <min_km> <max_km> <participants> <n_si> <n_if>")
                 return state
             if n_part < 1:
                 send(chat_id, "❌ מספר משתתפים חייב להיות לפחות 1")
                 return state
 
         else:  # solo_mid
-            if len(num_parts) != 6:
+            if len(num_parts) != 5:
                 send(chat_id, _gen_usage_text())
                 return state
-            avg_km = float(num_parts[0])
-            min_km = float(num_parts[1])
-            max_km = float(num_parts[2])
-            n_part = int(num_parts[3])
+            min_km = float(num_parts[0])
+            max_km = float(num_parts[1])
+            n_part = int(num_parts[2])
             n_pts = None
-            n_si = int(num_parts[4])
-            n_if = int(num_parts[5])
+            n_si = int(num_parts[3])
+            n_if = int(num_parts[4])
             if mid_id is None:
                 send(chat_id,
                      "❌ לא הוגדרה נקודת ביניים (נב). לניווט יחידני ללא ביניים השתמש ב:\n"
-                     "/gen solo <avg_km> <min_km> <max_km> <participants> <pts>\n"
+                     "/gen solo <min_km> <max_km> <participants> <pts>\n"
                      "או הגדר 3 נקודות: /sp <start_id> <mid_id> <finish_id>")
                 return state
             if n_part < 1:
@@ -570,7 +567,6 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
                 filtered_point_ids=state["filtered_point_ids"],
                 special=state["special"],
                 n_per_nav=n_pts,
-                avg_km=avg_km,
                 min_km=min_km,
                 max_km=max_km,
                 n_participants=n_part,
@@ -581,7 +577,6 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
                 filtered_point_ids=state["filtered_point_ids"],
                 special=state["special"],
                 n_per_nav=n_pts,
-                avg_km=avg_km,
                 min_km=min_km,
                 max_km=max_km,
                 n_participants=n_part,
@@ -593,7 +588,6 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
                 special=state["special"],
                 n_si_pts=n_si,
                 n_if_pts=n_if,
-                avg_km=avg_km,
                 min_km=min_km,
                 max_km=max_km,
                 n_participants=n_part,
@@ -829,12 +823,12 @@ def handle_yes(chat_id: int, state: dict) -> dict:
             send(chat_id,
                  f"✅ נקודות מיוחדות: נה={sp['start_id']}, נב={sp['mid_id']}, נס={sp['finish_id']}\n"
                  "צור משימות:\n"
-                 "/gen duo <avg_km> <min_km> <max_km> <participants> <pts>\n"
-                 "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>")
+                 "/gen duo <min_km> <max_km> <participants> <pts>\n"
+                 "/gen solo_mid <min_km> <max_km> <participants> <n_si> <n_if>")
         else:
             send(chat_id,
                  f"✅ נקודות מיוחדות (יחידני): נה={sp['start_id']}, נס={sp['finish_id']}\n"
-                 "צור משימות:\n/gen solo <avg_km> <min_km> <max_km> <participants> <pts>")
+                 "צור משימות:\n/gen solo <min_km> <max_km> <participants> <pts>")
         return state
 
     elif offer == "participants":
@@ -1256,7 +1250,7 @@ def _process_special_upload(chat_id: int, state: dict, pending: list[dict]) -> d
              f"✅ נקודות מיוחדות נקלטו (יחידני — ללא ביניים):\n{chr(10).join(added)}\n\n"
              f"נה={sp['start_id']}, נס={sp['finish_id']}\n"
              "לשינוי ידני: /sp <start_id> <finish_id>\n"
-             "ליצירת משימות: /gen solo <avg_km> <min_km> <max_km> <participants> <pts>")
+             "ליצירת משימות: /gen solo <min_km> <max_km> <participants> <pts>")
     else:
         # 3 coords: duo / solo_mid
         labels = ["נה (התחלה)", "נב (אמצע)", "נס (סיום)"]
@@ -1285,8 +1279,8 @@ def _process_special_upload(chat_id: int, state: dict, pending: list[dict]) -> d
              f"נה={sp['start_id']}, נב={sp['mid_id']}, נס={sp['finish_id']}\n"
              "לשינוי ידני: /sp <start_id> <mid_id> <finish_id>\n"
              "ליצירת משימות:\n"
-             "/gen duo <avg_km> <min_km> <max_km> <participants> <pts>\n"
-             "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if>")
+             "/gen duo <min_km> <max_km> <participants> <pts>\n"
+             "/gen solo_mid <min_km> <max_km> <participants> <n_si> <n_if>")
     return state
 
 
@@ -1324,9 +1318,9 @@ def handle_free_text(chat_id: int, state: dict, text: str) -> dict:
         "Commands: /session(/s), /status(/st), /upload_points(/up), /done(/d), /skip_map(/sm), "
         "/upload_map(/um), /confirm_map(/cm), /edit_map(/em), "
         "/special(/sp) <start> <mid> <finish> OR <start> <finish> (2 pts = solo, no intermediate), "
-        "/gen duo <avg_km> <min_km> <max_km> <participants> <pts> (couples), "
-        "/gen solo <avg_km> <min_km> <max_km> <participants> <pts> (solo, no intermediate), "
-        "/gen solo_mid <avg_km> <min_km> <max_km> <participants> <n_si> <n_if> (solo with intermediate), "
+        "/gen duo <min_km> <max_km> <participants> <pts> (couples), "
+        "/gen solo <min_km> <max_km> <participants> <pts> (solo, no intermediate), "
+        "/gen solo_mid <min_km> <max_km> <participants> <n_si> <n_if> (solo with intermediate), "
         "/upload_participants(/upa), /assign(/a), /export(/ex).\n\n"
         f"Current context:\n{ctx}\n\n"
         "The user sent free text. Respond helpfully in Hebrew (1-3 sentences).\n"
