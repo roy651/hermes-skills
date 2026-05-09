@@ -1,4 +1,6 @@
 from __future__ import annotations
+import os
+os.environ.setdefault("CURL_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
 import yfinance as yf
 import pandas as pd
 
