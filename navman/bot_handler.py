@@ -1037,15 +1037,16 @@ def _process_points_uploads(chat_id: int, state: dict, pending: list[dict]) -> d
         send(chat_id, "❌ לא נמצאו נקודות בקבצים שהועלו")
         return state
 
-    # Deduplicate by ID (last wins)
-    seen = {}
+    # Merge with existing points_db, new batch wins on duplicate IDs
+    seen = {p["id"]: p for p in state.get("points_db", [])}
     for p in all_points:
         seen[p["id"]] = p
     all_points = sorted(seen.values(), key=lambda x: x["id"])
 
     state["points_db"] = all_points
     state["filtered_point_ids"] = [p["id"] for p in all_points]
-    state["source_files"]["points"] = [item["file_id"] for item in pending]
+    prev_files = state.get("source_files", {}).get("points", [])
+    state["source_files"]["points"] = prev_files + [item["file_id"] for item in pending]
     state["pending_uploads"] = []
     state["state"] = "points_uploaded"
     sess.save(chat_id, state)

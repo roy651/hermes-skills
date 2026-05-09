@@ -578,7 +578,7 @@ def _llm_parse_nav_batch(image_paths: list[str], api_cfg: dict) -> tuple[list[di
             delays = [5, 15, 45]
             resp = None
             for attempt, delay in enumerate(delays + [None]):
-                resp = requests.post(api_cfg["url"], headers=headers, json=payload, timeout=120)
+                resp = requests.post(api_cfg["url"], headers=headers, json=payload, timeout=300)
                 if resp.status_code == 429 and delay is not None:
                     print(f"[ingestion] {model} rate-limited, retrying in {delay}s ({attempt+1}/{len(delays)})...", file=sys.stderr)
                     time.sleep(delay)
