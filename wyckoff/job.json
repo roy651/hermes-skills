@@ -1,0 +1,11 @@
+{
+  "id": "wyckoff_daily",
+  "name": "Wyckoff Daily Analysis",
+  "prompt": "Run the Wyckoff daily market analysis:\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py >> logs/daily.log 2>&1\n```\n\nIf the command exits with a non-zero status, report the last 30 lines of logs/daily.log to Roy. Otherwise respond with [SILENT].",
+  "schedule": {
+    "kind": "cron",
+    "expr": "0 6 * * 1-5"
+  },
+  "deliver": "origin",
+  "enabled": true
+}
