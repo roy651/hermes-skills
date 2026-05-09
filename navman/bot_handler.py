@@ -572,7 +572,7 @@ def handle_generate(chat_id: int, state: dict, args: str) -> dict:
                 n_participants=n_part,
             )
         elif mode == "solo":
-            assignments = nav_algorithm.generate_solo_a_assignments(
+            assignments = nav_algorithm.generate_solo_a_assignments_auto(
                 points_db=state["points_db"],
                 filtered_point_ids=state["filtered_point_ids"],
                 special=state["special"],

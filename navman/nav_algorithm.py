@@ -13,7 +13,7 @@ Output: list of assignment dicts with section, ordered point IDs, and length_km.
 import math
 import random
 import sys
-from itertools import permutations
+from itertools import permutations, product
 
 
 # ---------------------------------------------------------------------------
@@ -663,3 +663,205 @@ def generate_solo_mid_assignments(
         file=sys.stderr,
     )
     return all_assignments
+
+
+# ---------------------------------------------------------------------------
+# Zone-based alternative: ratio-grouped random sampling (solo A only)
+# ---------------------------------------------------------------------------
+
+def generate_zone_based_assignments(
+    points_db: list[dict],
+    filtered_point_ids: list[int],
+    special: dict,
+    n_per_nav: int,
+    min_km: float,
+    max_km: float,
+    n_participants: int,
+    n_generate: int = 20_000,
+) -> list[dict]:
+    """
+    Alternative to generate_solo_a_assignments using zone-based sampling.
+
+    Strategy:
+    1. Rank each pool point by its ratio along the start→finish axis:
+         ratio = d(start,p) / (d(start,p) + d(p,finish))
+    2. Sort by ratio; split into n_per_nav equal-size bands.
+    3. Generate routes by sampling one point per band (enumerate all combos
+       if total ≤ 100,000; otherwise random-sample n_generate routes).
+    4. Visit waypoints in band order (natural A→B progression).
+    5. Filter routes within [min_km, max_km]; score by CV of segment lengths.
+    6. Select n_participants routes greedily: most new unique points first,
+       break ties by lowest CV.
+    """
+    if n_participants < 1:
+        raise ValueError("מספר המשתתפים חייב להיות לפחות 1")
+
+    start_id = special.get("start_id")
+    finish_id = special.get("finish_id")
+    if not all([start_id, finish_id]):
+        raise ValueError("נקודות מיוחדות (התחלה/סיום) לא הוגדרו")
+
+    pt_map = {p["id"]: p for p in points_db}
+    start_pt = pt_map[start_id]
+    finish_pt = pt_map[finish_id]
+
+    special_ids = {start_id, finish_id}
+    pool = [pt_map[pid] for pid in filtered_point_ids if pid not in special_ids and pid in pt_map]
+
+    if len(pool) < n_per_nav:
+        raise ValueError(
+            f"אין מספיק נקודות בבריכת הניווט ({len(pool)}) עבור {n_per_nav} נקודות למסלול"
+        )
+
+    dist_cache = build_dist_cache(list(pt_map.values()))
+
+    # 1. Compute ratio for each pool point along start→finish axis
+    def _ratio(p: dict) -> float:
+        d_s = dist_cache.get((start_id, p["id"]), _euclidean_km(start_pt, p))
+        d_f = dist_cache.get((p["id"], finish_id), _euclidean_km(p, finish_pt))
+        total = d_s + d_f
+        return d_s / total if total > 0 else 0.5
+
+    pool_sorted = sorted(pool, key=_ratio)
+
+    # 2. Split into n_per_nav equal bands
+    n = len(pool_sorted)
+    band_size = n / n_per_nav
+    bands: list[list[dict]] = []
+    for b in range(n_per_nav):
+        lo_idx = round(b * band_size)
+        hi_idx = round((b + 1) * band_size)
+        bands.append(pool_sorted[lo_idx:hi_idx])
+
+    # Drop empty bands — can happen with very small pools
+    bands = [b for b in bands if b]
+    if len(bands) < n_per_nav:
+        raise ValueError("לא ניתן לחלק את הנקודות לקבוצות — הבריכה קטנה מדי")
+
+    # 3. Generate candidate routes
+    total_combos = 1
+    for b in bands:
+        total_combos *= len(b)
+
+    def _route_stats(route: tuple[dict, ...]) -> tuple[float, float] | None:
+        """Return (total_km, cv) for a route visited in band order, or None if out of bounds."""
+        pts = [start_pt] + list(route) + [finish_pt]
+        segs = [
+            dist_cache.get((pts[i]["id"], pts[i + 1]["id"]), _euclidean_km(pts[i], pts[i + 1]))
+            for i in range(len(pts) - 1)
+        ]
+        total = sum(segs)
+        if not (min_km <= total <= max_km):
+            return None
+        mean = total / len(segs)
+        cv = math.sqrt(sum((s - mean) ** 2 for s in segs) / len(segs)) / mean if mean > 0 else 0.0
+        return total, cv
+
+    # Each candidate: (tuple of point-ids in band order, total_km, cv)
+    valid_routes: list[tuple[tuple[int, ...], float, float]] = []
+
+    if total_combos <= 100_000:
+        for combo in product(*bands):
+            result = _route_stats(combo)
+            if result is not None:
+                ids = tuple(p["id"] for p in combo)
+                valid_routes.append((ids, result[0], result[1]))
+    else:
+        seen_combos: set[tuple[int, ...]] = set()
+        attempts = 0
+        max_attempts = n_generate * 5
+        while len(seen_combos) < n_generate and attempts < max_attempts:
+            attempts += 1
+            combo = tuple(random.choice(b) for b in bands)
+            ids = tuple(p["id"] for p in combo)
+            if ids in seen_combos:
+                continue
+            seen_combos.add(ids)
+            result = _route_stats(combo)
+            if result is not None:
+                valid_routes.append((ids, result[0], result[1]))
+
+    print(
+        f"[zone_based] {len(valid_routes)} valid routes from "
+        f"{'all ' + str(total_combos) if total_combos <= 100_000 else str(n_generate) + ' sampled'} combos",
+        file=sys.stderr,
+    )
+
+    if not valid_routes:
+        raise ValueError("לא נמצאו מסלולים תקינים בשיטת הזונות — בדוק את הגדרות המרחק")
+
+    # 4. Greedy selection: max new unique points, break ties by lowest CV
+    selected: list[dict] = []
+    used_ids: set[int] = set()
+
+    for slot in range(n_participants):
+        best_route = None
+        best_new = -1
+        best_cv = float("inf")
+
+        for ids, length, cv in valid_routes:
+            new_pts = len(set(ids) - used_ids)
+            if new_pts > best_new or (new_pts == best_new and cv < best_cv):
+                best_new = new_pts
+                best_cv = cv
+                best_route = (ids, length, cv)
+
+        if best_route is None:
+            print(
+                f"[zone_based] Warning: could not fill slot {slot + 1}",
+                file=sys.stderr,
+            )
+            break
+
+        ids, length, cv = best_route
+        used_ids.update(ids)
+        selected.append({
+            "index": slot + 1,
+            "section": "נה→נס",
+            "points": list(ids),
+            "length_km": round(length, 3),
+        })
+
+    unique = len({pid for a in selected for pid in a["points"]})
+    print(
+        f"[zone_based] Generated {len(selected)} assignments (נה→נס), "
+        f"{unique} unique points used",
+        file=sys.stderr,
+    )
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# Auto: zone-based with greedy+SA fallback (solo A)
+# ---------------------------------------------------------------------------
+
+def generate_solo_a_assignments_auto(
+    points_db: list[dict],
+    filtered_point_ids: list[int],
+    special: dict,
+    n_per_nav: int,
+    min_km: float,
+    max_km: float,
+    n_participants: int,
+    n_generate: int = 20_000,
+) -> list[dict]:
+    """
+    Generate solo-A assignments using zone-based sampling; falls back to
+    greedy+SA if zone-based finds no valid routes (e.g. very tight ranges).
+    """
+    try:
+        result = generate_zone_based_assignments(
+            points_db, filtered_point_ids, special,
+            n_per_nav, min_km, max_km, n_participants, n_generate,
+        )
+        if result:
+            print("[nav_algorithm] solo-A: using zone-based", file=sys.stderr)
+            return result
+    except ValueError:
+        pass
+
+    print("[nav_algorithm] solo-A: zone-based failed, falling back to greedy+SA", file=sys.stderr)
+    return generate_solo_a_assignments(
+        points_db, filtered_point_ids, special,
+        n_per_nav, min_km, max_km, n_participants,
+    )
