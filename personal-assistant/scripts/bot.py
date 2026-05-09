@@ -264,6 +264,27 @@ def handle_message(chat_id: str, text: str):
             scheduler.cancel(reminder["id"])
             response = f'🗑️ ביטלתי את התזכורת: "{reminder["text"]}"'
 
+    elif action == "update_reminder":
+        reminder = _resolve_reminder(chat_id, str(intent.get("ref", "")))
+        schedule_data = intent.get("schedule")
+        if not reminder:
+            response = "לא מצאתי את התזכורת הזו."
+        elif not schedule_data:
+            response = "לא הבנתי את השעה החדשה."
+        else:
+            db.cancel_reminder(reminder["id"])
+            scheduler.cancel(reminder["id"])
+            recurring = schedule_data["type"] in ("interval", "cron")
+            new_id = db.add_reminder(
+                chat_id, reminder["text"],
+                schedule_data["type"], json.dumps(schedule_data)
+            )
+            scheduler.schedule(new_id, chat_id, reminder["text"], schedule_data, recurring)
+            response = f'⏰ עדכנתי: "{reminder["text"]}" — {_describe_schedule(schedule_data)}'
+
+    elif action == "social":
+        response = intent.get("text", "😊")
+
     elif action == "set_todo_digest":
         schedule_data = intent.get("schedule", {})
         scheduler.schedule_todo_digest(chat_id, schedule_data)

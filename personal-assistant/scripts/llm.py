@@ -47,12 +47,18 @@ _SYSTEM = """אתה מנתח בקשות של משתמש ומחזיר JSON בלב
 ביטול תזכורת (ref = מספר ברשימה, או טקסט חלקי):
 {{"action": "cancel_reminder", "ref": "1"}}
 
+שינוי שעה/תאריך של תזכורת קיימת (ref = שם חלקי או מספר, schedule = הזמן החדש):
+{{"action": "update_reminder", "ref": "ניווט", "schedule": {{"type": "once", "datetime": "2026-05-08T11:00:00"}}}}
+
 שינוי לוח זמנים של תזכורות המשימות (שעות ערות בלבד: 6–22):
 — שעות ספציפיות: {{"action": "set_todo_digest", "schedule": {{"type": "specific_times", "hours": [8, 20]}}}}
 — כל N שעות: {{"action": "set_todo_digest", "schedule": {{"type": "interval_waking", "every_hours": 4}}}}
 
 השהיית תזכורות המשימות להיום:
 {{"action": "pause_todo_digest"}}
+
+ברכות, תודות, שיחה כללית (ענה בעברית קצרה):
+{{"action": "social", "text": "בבקשה! 😊"}}
 
 לא הובן:
 {{"action": "unknown"}}
@@ -86,4 +92,7 @@ def parse_intent(message: str, history: list[dict] | None = None) -> dict:
         if text.startswith("json"):
             text = text[4:]
         text = text.strip()
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"action": "unknown"}
