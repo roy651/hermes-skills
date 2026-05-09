@@ -139,6 +139,50 @@ def filter_feasible_points(
 
 
 # ---------------------------------------------------------------------------
+# Ideal-position subset selection
+# ---------------------------------------------------------------------------
+
+def _ideal_sample(
+    pool: list[dict],
+    n: int,
+    start: dict,
+    end: dict,
+    usage_count: dict,
+    k: int = 3,
+) -> list[dict]:
+    """
+    Select n points from pool by placing n ideal target positions evenly along
+    the start→end straight line and picking the nearest available pool point
+    to each target. Among the 9 nearest candidates per target, prefers the
+    k least-used ones (random choice among them for variety across tries).
+    """
+    if len(pool) <= n:
+        return pool[:]
+
+    selected: list[dict] = []
+    selected_ids: set[int] = set()
+
+    for i in range(n):
+        frac = (i + 1) / (n + 1)
+        ideal_x = start["x"] + frac * (end["x"] - start["x"])
+        ideal_y = start["y"] + frac * (end["y"] - start["y"])
+
+        available = [p for p in pool if p["id"] not in selected_ids]
+        available.sort(key=lambda p: (p["x"] - ideal_x) ** 2 + (p["y"] - ideal_y) ** 2)
+
+        # Among 9 nearest, prefer least-used; randomize among top k
+        candidates = available[:9]
+        candidates.sort(key=lambda p: usage_count.get(p["id"], 0))
+        if not candidates:
+            break
+        pick = random.choice(candidates[:k])
+        selected.append(pick)
+        selected_ids.add(pick["id"])
+
+    return selected
+
+
+# ---------------------------------------------------------------------------
 # Greedy seed
 # ---------------------------------------------------------------------------
 
@@ -176,15 +220,14 @@ def _greedy_assignment(
             best_even_result: tuple[float, list[int]] | None = None
             valid_found = 0
 
+            if len(sorted_pool) < n_per_nav:
+                break
+
             for _ in range(max_tries):
-                # Pick candidates weighted by low usage
-                candidates = sorted_pool[:max(n_per_nav * 3, 15)]
-                if len(candidates) < n_per_nav:
-                    candidates = sorted_pool
-                if len(candidates) < n_per_nav:
+                subset = _ideal_sample(sorted_pool, n_per_nav, start, end, usage_count)
+                if len(subset) < n_per_nav:
                     break
 
-                subset = random.sample(candidates, n_per_nav)
                 length, ordered_ids = optimal_path(start, end, subset, dist_cache, lo, hi)
 
                 if _is_valid_length(length, lo, hi):
@@ -199,7 +242,7 @@ def _greedy_assignment(
                         best_even_score = score
                         best_even_result = (length, ordered_ids)
                     valid_found += 1
-                    if valid_found >= 30:
+                    if valid_found >= 15:
                         break
 
             if best_even_result:
