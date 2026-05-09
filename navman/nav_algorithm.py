@@ -437,31 +437,43 @@ def generate_assignments(
             f"לא נמצאו נקודות מתאימות למקטע נב→נס (ייתכן שמרחקי המסלול קצרים מדי/ארוכים מדי)"
         )
 
-    # Greedy seed
-    usage_si: dict[int, int] = {}
-    usage_if: dict[int, int] = {}
+    # Try zone-based for each section; fall back to greedy+SA if either fails
+    pool_si_ids = [p["id"] for p in pool_si]
+    pool_if_ids = [p["id"] for p in pool_if]
+    si_special = {"start_id": start_id, "finish_id": mid_id}
+    if_special = {"start_id": mid_id, "finish_id": finish_id}
 
-    si_assignments = _greedy_assignment(
-        pool_si, start_pt, mid_pt, dist_cache, n_per_nav, min_km, max_km,
-        n_si, usage_si, "נה→נב",
-    )
-    if_assignments = _greedy_assignment(
-        pool_if, mid_pt, finish_pt, dist_cache, n_per_nav, min_km, max_km,
-        n_if, usage_if, "נב→נס",
-    )
+    try:
+        si_assignments = generate_zone_based_assignments(
+            points_db, pool_si_ids, si_special, n_per_nav, min_km, max_km, n_si, section="נה→נב",
+        )
+        if_assignments = generate_zone_based_assignments(
+            points_db, pool_if_ids, if_special, n_per_nav, min_km, max_km, n_if, section="נב→נס",
+        )
+        print("[nav_algorithm] duo: using zone-based", file=sys.stderr)
+    except ValueError:
+        print("[nav_algorithm] duo: zone-based failed, falling back to greedy+SA", file=sys.stderr)
+        usage_si: dict[int, int] = {}
+        usage_if: dict[int, int] = {}
+        si_assignments = _greedy_assignment(
+            pool_si, start_pt, mid_pt, dist_cache, n_per_nav, min_km, max_km,
+            n_si, usage_si, "נה→נב",
+        )
+        if_assignments = _greedy_assignment(
+            pool_if, mid_pt, finish_pt, dist_cache, n_per_nav, min_km, max_km,
+            n_if, usage_if, "נב→נס",
+        )
+        si_assignments, if_assignments = _simulated_annealing(
+            si_assignments, if_assignments,
+            pool_si, pool_if,
+            start_pt, mid_pt,
+            mid_pt, finish_pt,
+            dist_cache, min_km, max_km,
+            iterations=2000,
+        )
 
     if not si_assignments and not if_assignments:
         raise ValueError("לא הצלחתי לייצר אף מסלול — בדוק את הגדרות המרחק")
-
-    # Simulated annealing refinement
-    si_assignments, if_assignments = _simulated_annealing(
-        si_assignments, if_assignments,
-        pool_si, pool_if,
-        start_pt, mid_pt,
-        mid_pt, finish_pt,
-        dist_cache, min_km, max_km,
-        iterations=2000,
-    )
 
     all_assignments = si_assignments + if_assignments
     # Global re-index
@@ -678,6 +690,7 @@ def generate_zone_based_assignments(
     max_km: float,
     n_participants: int,
     n_generate: int = 20_000,
+    section: str = "נה→נס",
 ) -> list[dict]:
     """
     Alternative to generate_solo_a_assignments using zone-based sampling.
@@ -823,7 +836,7 @@ def generate_zone_based_assignments(
         used_ids.update(ids)
         selected.append({
             "index": slot + 1,
-            "section": "נה→נס",
+            "section": section,
             "points": list(ids),
             "length_km": round(length, 3),
         })
