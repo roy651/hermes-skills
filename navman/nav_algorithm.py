@@ -639,28 +639,41 @@ def generate_solo_mid_assignments(
     if len(pool_if) < n_if_pts:
         raise ValueError("לא נמצאו נקודות מתאימות למקטע נב→נס (בדוק את הגדרות המרחק)")
 
-    usage_si: dict[int, int] = {}
-    usage_if: dict[int, int] = {}
+    pool_si_ids = [p["id"] for p in pool_si]
+    pool_if_ids = [p["id"] for p in pool_if]
+    si_special = {"start_id": start_id, "finish_id": mid_id}
+    if_special = {"start_id": mid_id, "finish_id": finish_id}
 
-    si_assignments = _greedy_assignment(
-        pool_si, start_pt, mid_pt, dist_cache, n_si_pts, min_km, max_km,
-        n_participants, usage_si, "נה→נב",
-    )
-    if_assignments = _greedy_assignment(
-        pool_if, mid_pt, finish_pt, dist_cache, n_if_pts, min_km, max_km,
-        n_participants, usage_if, "נב→נס",
-    )
+    try:
+        si_assignments = generate_zone_based_assignments(
+            points_db, pool_si_ids, si_special, n_si_pts, min_km, max_km, n_participants, section="נה→נב",
+        )
+        if_assignments = generate_zone_based_assignments(
+            points_db, pool_if_ids, if_special, n_if_pts, min_km, max_km, n_participants, section="נב→נס",
+        )
+        print("[nav_algorithm] solo-mid: using zone-based", file=sys.stderr)
+    except ValueError:
+        print("[nav_algorithm] solo-mid: zone-based failed, falling back to greedy+SA", file=sys.stderr)
+        usage_si: dict[int, int] = {}
+        usage_if: dict[int, int] = {}
+        si_assignments = _greedy_assignment(
+            pool_si, start_pt, mid_pt, dist_cache, n_si_pts, min_km, max_km,
+            n_participants, usage_si, "נה→נב",
+        )
+        if_assignments = _greedy_assignment(
+            pool_if, mid_pt, finish_pt, dist_cache, n_if_pts, min_km, max_km,
+            n_participants, usage_if, "נב→נס",
+        )
+        si_assignments, if_assignments = _simulated_annealing(
+            si_assignments, if_assignments,
+            pool_si, pool_if,
+            start_pt, mid_pt,
+            mid_pt, finish_pt,
+            dist_cache, min_km, max_km,
+        )
 
     if not si_assignments and not if_assignments:
         raise ValueError("לא הצלחתי לייצר אף מסלול — בדוק את הגדרות המרחק")
-
-    si_assignments, if_assignments = _simulated_annealing(
-        si_assignments, if_assignments,
-        pool_si, pool_if,
-        start_pt, mid_pt,
-        mid_pt, finish_pt,
-        dist_cache, min_km, max_km,
-    )
 
     all_assignments = si_assignments + if_assignments
     for i, a in enumerate(all_assignments):
