@@ -1,11 +1,35 @@
-{
-  "id": "wyckoff_daily",
-  "name": "Wyckoff Daily Analysis",
-  "prompt": "Run the Wyckoff daily market analysis:\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py >> logs/daily.log 2>&1\n```\n\nIf the command exits with a non-zero status, report the last 30 lines of logs/daily.log to Roy. Otherwise respond with [SILENT].",
-  "schedule": {
-    "kind": "cron",
-    "expr": "0 6 * * 1-5"
+[
+  {
+    "id": "wyckoff_portfolio",
+    "name": "Wyckoff Portfolio Analysis",
+    "prompt": "Run the Wyckoff portfolio analysis:\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section portfolio >> logs/daily.log 2>&1\n```\n\nIf the command exits with a non-zero status, report the last 30 lines of logs/daily.log to Roy. Otherwise respond with [SILENT].",
+    "schedule": {
+      "kind": "cron",
+      "expr": "0 20 * * 1-5"
+    },
+    "deliver": "origin",
+    "enabled": true
   },
-  "deliver": "origin",
-  "enabled": true
-}
+  {
+    "id": "wyckoff_watchlist",
+    "name": "Wyckoff Watchlist Analysis",
+    "prompt": "Run the Wyckoff watchlist analysis:\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section watchlist >> logs/daily.log 2>&1\n```\n\nIf the command exits with a non-zero status, report the last 30 lines of logs/daily.log to Roy. Otherwise respond with [SILENT].",
+    "schedule": {
+      "kind": "cron",
+      "expr": "20 20 * * 1-5"
+    },
+    "deliver": "origin",
+    "enabled": true
+  },
+  {
+    "id": "wyckoff_prescreener",
+    "name": "Wyckoff Weekly Prescreener",
+    "prompt": "Run the Wyckoff watchlist prescreener:\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/prescreener.py >> logs/prescreener.log 2>&1\n```\n\nIf the command exits with a non-zero status, report the last 30 lines of logs/prescreener.log to Roy. Otherwise respond with [SILENT].",
+    "schedule": {
+      "kind": "cron",
+      "expr": "0 6 * * 0"
+    },
+    "deliver": "origin",
+    "enabled": true
+  }
+]

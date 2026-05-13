@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Daily Wyckoff analysis — fetches data, runs LLM analysis, sends Telegram digest."""
 from __future__ import annotations
+import argparse
 import sys
 import os
 from datetime import datetime
@@ -86,13 +87,28 @@ def _format_result(result: dict, holding: dict | None, price: float, name: str =
 
 
 def run():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--section",
+        choices=["portfolio", "watchlist", "all"],
+        default="all",
+        help="Which section to run (default: all)",
+    )
+    args = parser.parse_args()
+
     cfg_path = Path(__file__).parent.parent / "config.yaml"
     cfg = yaml.safe_load(cfg_path.read_text())
     watchlist = [t.upper() for t in cfg.get("watchlist", [])]
     lookback = cfg.get("llm", {}).get("lookback_days", 120)
 
     holdings = portfolio.load()
-    all_tickers = list(dict.fromkeys(list(holdings.keys()) + watchlist))
+
+    if args.section == "portfolio":
+        all_tickers = list(holdings.keys())
+    elif args.section == "watchlist":
+        all_tickers = [t for t in watchlist if t not in holdings]
+    else:
+        all_tickers = list(dict.fromkeys(list(holdings.keys()) + watchlist))
 
     date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     portfolio_lines = []
@@ -114,7 +130,12 @@ def run():
             errors.append(f"{ticker}: {e}")
             print(f"[daily] error on {ticker}: {e}", file=sys.stderr)
 
-    parts = [f"📊 <b>Wyckoff Daily — {date_str}</b>"]
+    section_label = {
+        "portfolio": "Portfolio",
+        "watchlist": "Watchlist",
+        "all": "Daily",
+    }[args.section]
+    parts = [f"📊 <b>Wyckoff {section_label} — {date_str}</b>"]
 
     if portfolio_lines:
         parts.append("\n<b>Portfolio</b>")

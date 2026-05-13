@@ -1,7 +1,7 @@
 ---
 name: wyckoff
-description: Daily Wyckoff method analysis for ETFs and stocks — phase detection, signal identification, and buy/hold/sell recommendations via Telegram.
-version: 1.0.0
+description: Daily Wyckoff method analysis for ETFs and stocks — phase detection, signal identification, and buy/hold/sell recommendations via Telegram. Weekly prescreener proposes watchlist candidates from S&P 500 + NASDAQ 100.
+version: 1.1.0
 license: MIT
 metadata:
   hermes:
@@ -95,8 +95,25 @@ Key events detected recently. Common signals:
 When the user asks for a Wyckoff analysis or wants to refresh the digest:
 
 ```bash
+# Full digest (portfolio + watchlist)
 cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py
+
+# Portfolio only
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section portfolio
+
+# Watchlist only
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section watchlist
 ```
+
+## Hermes Tool: Run Weekly Prescreener On-Demand
+
+When the user asks to scan for new watchlist candidates or wants to refresh the candidate list:
+
+```bash
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/prescreener.py >> logs/prescreener.log 2>&1
+```
+
+This scans ~600 tickers from S&P 500 + NASDAQ 100 + sector ETFs using 5 programmatic Wyckoff accumulation filters (no LLM). The top ~30 candidates are sent to Telegram and saved to `data/watchlist_candidates.json`. The user reviews and adds approved tickers via `manage.py watchlist-add TICKER`.
 
 ## Hermes Tool: Deep-Dive Explanation for a Specific Ticker
 
@@ -194,7 +211,7 @@ cd ~/.hermes/skills/wyckoff
 python3 -m venv .venv
 .venv/bin/pip install -q -r requirements.txt
 
-# 3. Register daily cron job in Hermes
+# 3. Register all cron jobs in Hermes (job.json is now an array of 3 jobs)
 python3 - << 'EOF'
 import json
 JOBS_FILE = "/home/roy650/.hermes/cron/jobs.json"
@@ -202,13 +219,14 @@ with open(JOBS_FILE) as f:
     data = json.load(f)
 jobs = data if isinstance(data, list) else data.get("jobs", [])
 with open("/home/roy650/.hermes/skills/wyckoff/job.json") as f:
-    new_job = json.load(f)
-jobs = [j for j in jobs if j.get("id") != new_job["id"]]
-jobs.append(new_job)
+    new_jobs = json.load(f)
+new_ids = {j["id"] for j in new_jobs}
+jobs = [j for j in jobs if j.get("id") not in new_ids]
+jobs.extend(new_jobs)
 result = jobs if isinstance(data, list) else {**data, "jobs": jobs}
 with open(JOBS_FILE, "w") as f:
     json.dump(result, f, indent=2)
-print("job registered")
+print(f"registered {len(new_jobs)} jobs")
 EOF
 
 # 4. Run once to test
@@ -220,25 +238,39 @@ cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py
 ```
 wyckoff/
 ├── SKILL.md
-├── job.json              # weekday cron at 06:00 UTC = 09:00 Israel
+├── job.json              # array of 3 cron jobs (portfolio, watchlist, prescreener)
 ├── requirements.txt
-├── config.yaml           # watchlist + LLM settings
+├── config.yaml           # approved watchlist + LLM settings
 ├── scripts/
-│   ├── daily.py          # main runner: fetch → analyze → send digest
+│   ├── daily.py          # daily runner: fetch → LLM analyze → send digest
+│   │                     #   --section portfolio|watchlist|all
+│   ├── prescreener.py    # weekly screener: S&P 500 + NASDAQ 100 → top 30 candidates
 │   ├── analysis.py       # Wyckoff LLM analysis via OpenRouter
-│   ├── data.py           # yfinance OHLCV fetch
+│   ├── data.py           # Yahoo Finance OHLCV fetch
 │   ├── holdings.py       # portfolio state (data/holdings.json)
 │   ├── manage.py         # CLI: add/remove holdings and watchlist
 │   └── notifier.py       # Telegram sender
 ├── data/
-│   └── holdings.json     # portfolio positions
+│   ├── holdings.json           # portfolio positions
+│   └── watchlist_candidates.json  # latest prescreener output (not committed)
 └── logs/
-    └── daily.log
+    ├── daily.log
+    └── prescreener.log
 ```
+
+## Schedule
+
+| Job | Cron (UTC) | Israel Time | Description |
+|-----|-----------|-------------|-------------|
+| Portfolio analysis | `0 20 * * 1-5` | 23:00 Mon–Fri | Holdings after US market close |
+| Watchlist analysis | `20 20 * * 1-5` | 23:20 Mon–Fri | Approved watchlist after US close |
+| Prescreener | `0 6 * * 0` | 09:00 Sunday | Scan ~600 tickers, propose candidates |
 
 ## Notes
 
-- Data source: [yfinance](https://github.com/ranaroussi/yfinance) — free, no API key, covers all major ETFs and stocks
-- Analysis: LLM (Claude Sonnet via OpenRouter) reasoning on 120 days of OHLCV — not algorithmic signal detection
+- Data source: Yahoo Finance API (direct) — free, no API key, covers all major ETFs and stocks
+- Prescreener: pure Python/math, no LLM — fetches concurrently (10 workers), takes ~2-3 min for ~600 tickers
+- Daily analysis: LLM (Claude Sonnet via OpenRouter) on 120 days OHLCV — not algorithmic signal detection
 - Wyckoff is a swing/position methodology; daily candles are the appropriate timeframe
 - Treat recommendations as a second opinion, not automated trading signals
+- Prescreener candidates in `data/watchlist_candidates.json` are suggestions only; you decide what goes in `config.yaml`
