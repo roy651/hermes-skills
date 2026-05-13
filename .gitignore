@@ -22,4 +22,8 @@ __pycache__/
 Thumbs.db
 
 navman/test_data/
+navman/data/
+navman/logs/
+data/
+logs/
 .claude/
