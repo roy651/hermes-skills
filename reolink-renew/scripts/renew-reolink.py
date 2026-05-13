@@ -232,31 +232,35 @@ def run(check_only, verbose):
     # 2. Check for active subscription
     active = get_active_subscription(session, token, verbose)
     if active:
-        expiry = ts_to_date(active["endingAt"])
-        print("STATUS: active")
-        print(f"EXPIRY: {expiry}")
-        print("MESSAGE: Subscription is active, no action needed.")
-        return
+        sub = active
+        log(verbose, f"[check] active subscription found id={sub['id']} — proceeding with renewal")
+    else:
+        # 3. Get most recently expired subscription
+        inactive = get_inactive_subscriptions(session, token, verbose)
+        if not inactive:
+            bail("subscription_check", "No active or inactive subscriptions found.")
 
-    # 3. Get most recently expired subscription
-    inactive = get_inactive_subscriptions(session, token, verbose)
-    if not inactive:
-        bail("subscription_check", "No active or inactive subscriptions found.")
+        # Sort by expiredAt descending — most recently expired first
+        inactive.sort(key=lambda s: s.get("expiredAt", 0), reverse=True)
+        sub = inactive[0]
 
-    # Sort by expiredAt descending — most recently expired first
-    inactive.sort(key=lambda s: s.get("expiredAt", 0), reverse=True)
-    sub = inactive[0]
     sub_id  = sub["id"]
     plan_id = sub["plan"]
     country = sub.get("country", "IL")
 
-    log(verbose, f"[check] selected subscription id={sub_id} plan={plan_id} expiredAt={sub.get('expiredAt')}")
+    log(verbose, f"[check] selected subscription id={sub_id} plan={plan_id} status={sub.get('status')}")
 
     if check_only:
-        expiry = ts_to_date(sub["expiredAt"])
-        print("STATUS: expired")
-        print(f"EXPIRY: {expiry}")
-        print("MESSAGE: Subscription expired. Run without --check-only to renew.")
+        if active:
+            expiry = ts_to_date(active["endingAt"])
+            print("STATUS: active")
+            print(f"EXPIRY: {expiry}")
+            print("MESSAGE: Subscription is active.")
+        else:
+            expiry = ts_to_date(sub["expiredAt"])
+            print("STATUS: expired")
+            print(f"EXPIRY: {expiry}")
+            print("MESSAGE: Subscription expired. Run without --check-only to renew.")
         return
 
     # 4. Place renewal order

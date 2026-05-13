@@ -266,6 +266,19 @@ wyckoff/
 | Watchlist analysis | `20 20 * * 1-5` | 23:20 Mon–Fri | Approved watchlist after US close |
 | Prescreener | `0 6 * * 0` | 09:00 Sunday | Scan ~600 tickers, propose candidates |
 
+## Hermes Tool: Bulk Load from Israeli Broker Export
+
+Roy's broker exports a Hebrew table with columns: שם נייר (name), מספר נייר (TASE security #), שער אחרון (last price), כמות בתיק (qty), שער עלות (avg cost), נתח מהתיק (portfolio %).
+
+To load these into Wyckoff holdings:
+1. Map Hebrew names + TASE IDs to Yahoo Finance tickers (see `references/roy-portfolio-tickers.md`)
+2. Use `manage.py holdings-add <TICKER> <QTY> <AVG_COST>` for each
+3. Watch for TASE tickers (`.TA` suffix) — some return 404 from yfinance (e.g., `SLRL.TA`)
+
+**Known portfolio**: `references/roy-portfolio-tickers.md` has the full confirmed mapping and known broken tickers.
+
+**About qty and avg_cost**: These values only affect the P&L display line in the digest header (e.g., `10 @ $520 · $532 (+2.3%)`). They have **zero effect** on Wyckoff analysis — phase detection and signals are OHLCV-only. Placeholder values (1 @ 0) are functional but produce meaningless P&L numbers.
+
 ## Notes
 
 - Data source: Yahoo Finance API (direct) — free, no API key, covers all major ETFs and stocks
@@ -274,3 +287,5 @@ wyckoff/
 - Wyckoff is a swing/position methodology; daily candles are the appropriate timeframe
 - Treat recommendations as a second opinion, not automated trading signals
 - Prescreener candidates in `data/watchlist_candidates.json` are suggestions only; you decide what goes in `config.yaml`
+
+- TASE-listed securities use `.TA` suffix on Yahoo Finance (e.g., `AMOT.TA`, `TCH-F3.TA`); not all are available
