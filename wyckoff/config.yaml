@@ -1,9 +1,5 @@
 watchlist:
   - SPY
-  - QQQ
-  - VTI
-  - GLD
-  - TLT
 
 llm:
   model: anthropic/claude-sonnet-4-5
