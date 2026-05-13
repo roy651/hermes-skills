@@ -1,5 +1,19 @@
 watchlist:
   - SPY
+  - IBN
+  - INFY
+  - DGRO
+  - IEMG
+  - IFGL
+  - IGRO
+  - INDA
+  - MBLY
+  - NICE
+  - PFE
+  - XFIV
+  - AMOT.TA
+  - SLARL.TA
+  - TCH-F3.TA
 
 llm:
   model: anthropic/claude-sonnet-4-5
