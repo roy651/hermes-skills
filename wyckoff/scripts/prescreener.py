@@ -11,7 +11,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import io
 import pandas as pd
+import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -33,11 +35,25 @@ TOP_N = 30
 MIN_SCORE = 3
 
 
+_WIKI_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+}
+
+
+def _wiki_tables(url: str) -> list:
+    resp = requests.get(url, headers=_WIKI_HEADERS, timeout=30)
+    resp.raise_for_status()
+    return pd.read_html(io.StringIO(resp.text))
+
+
 def _get_universe() -> list[str]:
     tickers: list[str] = []
 
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        tables = _wiki_tables("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
         sp500 = tables[0]["Symbol"].tolist()
         tickers.extend(sp500)
         print(f"[prescreener] S&P 500: {len(sp500)} tickers", file=sys.stderr)
@@ -45,8 +61,7 @@ def _get_universe() -> list[str]:
         print(f"[prescreener] S&P 500 fetch failed: {e}", file=sys.stderr)
 
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
-        # Try common table indices; the Nasdaq-100 constituents table varies
+        tables = _wiki_tables("https://en.wikipedia.org/wiki/Nasdaq-100")
         ndx: list[str] = []
         for t in tables:
             if "Ticker" in t.columns and len(t) > 50:
