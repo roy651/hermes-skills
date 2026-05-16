@@ -62,6 +62,7 @@ _session: dict = {
     "msg_count": 0,   # message count when session was last updated
 }
 _active_proc: subprocess.Popen | None = None  # currently running claude subprocess
+_last_result: dict | None = None  # raw JSON from last Claude Code invocation
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +166,17 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
         raise RuntimeError(f"claude exited {proc.returncode}: {stderr[:300]}")
 
     try:
+        global _last_result
         data = json.loads(stdout)
-        text = data.get("result") or data.get("content") or stdout
+        _last_result = data
+        # Use "result" or "content" if the key exists (even if empty); only fall
+        # back to raw stdout for non-standard formats that lack both keys.
+        if "result" in data:
+            text = data["result"] or ""
+        elif "content" in data:
+            text = data["content"] or ""
+        else:
+            text = stdout.strip()
         session_id = data.get("session_id")
     except (json.JSONDecodeError, AttributeError):
         text = stdout.strip()
@@ -218,6 +228,14 @@ def _stream_response(content: str, model: str):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@app.route("/v1/debug/last-result", methods=["GET"])
+def debug_last_result():
+    """Return the raw JSON from the last Claude Code invocation."""
+    if _last_result is None:
+        return jsonify({"error": "no result yet"}), 404
+    return jsonify(_last_result)
+
 
 @app.route("/v1/chat/completions", methods=["POST"])
 def chat_completions():
