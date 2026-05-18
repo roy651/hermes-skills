@@ -154,7 +154,13 @@ def _fetch_and_score(ticker: str) -> dict | None:
         return None
 
 
-def run():
+def screen_universe() -> list[dict]:
+    """Scan the full universe and return top candidates as a list of dicts.
+
+    Saves results to CANDIDATES_FILE as a side-effect.
+    Returns the top list (score >= MIN_SCORE, sorted score desc then pct_off asc).
+    Does NOT send a Telegram message.
+    """
     universe = _get_universe()
     print(f"[prescreener] scanning {len(universe)} tickers…", file=sys.stderr)
 
@@ -179,10 +185,17 @@ def run():
         "candidates": top,
     }, indent=2))
 
+    print(f"[prescreener] {len(top)} candidates from {len(results)} scanned", file=sys.stderr)
+    return top
+
+
+def run():
+    top = screen_universe()
+
     date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     lines = [
         f"📋 <b>Wyckoff Watchlist Candidates — {date_str}</b>",
-        f"<i>{len(top)} candidates from {len(results)} tickers scanned (≥{MIN_SCORE}/5 criteria)</i>",
+        f"<i>{len(top)} candidates (≥{MIN_SCORE}/5 criteria)</i>",
         "",
     ]
 
