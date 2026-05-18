@@ -112,49 +112,8 @@ def find_pair(points, target_km):
                 best = (p1, p2, d)
     return best
 
-def run_scenario(label, min_km, max_km, n_per_nav, n_participants):
-    # Target direct distance: slightly below min_km so waypoints push it into range
-    target_direct = min_km * 0.85
-    pair = find_pair(all_points, target_direct)
-    if pair is None:
-        print(f"  SKIP: no suitable point pair found")
-        return
-
-    start_pt, finish_pt, actual_direct = pair
-    special_ids = {start_pt["id"], finish_pt["id"]}
-    pool = [p for p in all_points if p["id"] not in special_ids]
-    pool_ids = [p["id"] for p in pool]
+def _print_algo_results(label, assignments, start_pt, finish_pt, special_ids, filtered, n_participants, n_per_nav, min_km, max_km):
     pt_map = {p["id"]: p for p in all_points}
-
-    print(f"  Start:  #{start_pt['id']} ({start_pt['x']:.0f}, {start_pt['y']:.0f})")
-    print(f"  Finish: #{finish_pt['id']} ({finish_pt['x']:.0f}, {finish_pt['y']:.0f})")
-    print(f"  Direct: {actual_direct:.2f}km  (target was {target_direct:.2f}km)  Pool: {len(pool)} pts")
-
-    # Check feasibility filter
-    dist_cache = algo.build_dist_cache(all_points)
-    filtered = algo.filter_feasible_points(
-        pool, start_pt, finish_pt, dist_cache, n_per_nav, min_km, max_km
-    )
-    print(f"  Filter: {len(filtered)}/{len(pool)} pts pass [{min_km}–{max_km}km]")
-
-    if len(filtered) < n_per_nav:
-        print("  SKIP: fewer feasible points than waypoints needed")
-        return
-
-    try:
-        assignments = algo.generate_solo_a_assignments(
-            points_db=all_points,
-            filtered_point_ids=pool_ids,
-            special={"start_id": start_pt["id"], "finish_id": finish_pt["id"]},
-            n_per_nav=n_per_nav,
-            min_km=min_km,
-            max_km=max_km,
-            n_participants=n_participants,
-        )
-    except ValueError as e:
-        print(f"  SKIP: {e}")
-        return
-
     errors = []
     cvs = []
     used_ids: set[int] = set()
@@ -177,12 +136,84 @@ def run_scenario(label, min_km, max_km, n_per_nav, n_participants):
 
     max_unique = n_participants * n_per_nav
     mean_cv = sum(cvs) / len(cvs) if cvs else 0
-    print(f"  Coverage: {len(used_ids)}/{len(filtered)} filtered  [{len(used_ids)}/{max_unique} unique]")
-    print(f"  Mean CV:  {mean_cv:.3f}")
+    print(f"  Coverage: {len(used_ids)}/{len(filtered)} filtered  [{len(used_ids)}/{max_unique} unique]  Mean CV: {mean_cv:.3f}")
     if errors:
         print(f"  FAIL: {errors}")
     else:
         print("  PASS")
+    return mean_cv, len(used_ids)
+
+
+def run_scenario(label, min_km, max_km, n_per_nav, n_participants):
+    # Target direct distance: slightly below min_km so waypoints push it into range
+    target_direct = min_km * 0.85
+    pair = find_pair(all_points, target_direct)
+    if pair is None:
+        print(f"  SKIP: no suitable point pair found")
+        return
+
+    start_pt, finish_pt, actual_direct = pair
+    special_ids = {start_pt["id"], finish_pt["id"]}
+    pool = [p for p in all_points if p["id"] not in special_ids]
+    pool_ids = [p["id"] for p in pool]
+    special = {"start_id": start_pt["id"], "finish_id": finish_pt["id"]}
+
+    print(f"  Start:  #{start_pt['id']} ({start_pt['x']:.0f}, {start_pt['y']:.0f})")
+    print(f"  Finish: #{finish_pt['id']} ({finish_pt['x']:.0f}, {finish_pt['y']:.0f})")
+    print(f"  Direct: {actual_direct:.2f}km  (target was {target_direct:.2f}km)  Pool: {len(pool)} pts")
+
+    # Check feasibility filter
+    dist_cache = algo.build_dist_cache(all_points)
+    filtered = algo.filter_feasible_points(
+        pool, start_pt, finish_pt, dist_cache, n_per_nav, min_km, max_km
+    )
+    print(f"  Filter: {len(filtered)}/{len(pool)} pts pass [{min_km}–{max_km}km]")
+
+    if len(filtered) < n_per_nav:
+        print("  SKIP: fewer feasible points than waypoints needed")
+        return
+
+    # --- Current algorithm (greedy + SA) ---
+    print(f"\n  [GREEDY+SA]")
+    try:
+        assignments_gs = algo.generate_solo_a_assignments(
+            points_db=all_points, filtered_point_ids=pool_ids, special=special,
+            n_per_nav=n_per_nav, min_km=min_km, max_km=max_km, n_participants=n_participants,
+        )
+        cv_gs, cov_gs = _print_algo_results(
+            "greedy+SA", assignments_gs, start_pt, finish_pt, special_ids,
+            filtered, n_participants, n_per_nav, min_km, max_km,
+        )
+    except ValueError as e:
+        print(f"  SKIP: {e}")
+        cv_gs, cov_gs = None, None
+
+    # --- Zone-based algorithm ---
+    print(f"\n  [ZONE-BASED]")
+    try:
+        assignments_zb = algo.generate_zone_based_assignments(
+            points_db=all_points, filtered_point_ids=pool_ids, special=special,
+            n_per_nav=n_per_nav, min_km=min_km, max_km=max_km, n_participants=n_participants,
+        )
+        cv_zb, cov_zb = _print_algo_results(
+            "zone-based", assignments_zb, start_pt, finish_pt, special_ids,
+            filtered, n_participants, n_per_nav, min_km, max_km,
+        )
+    except ValueError as e:
+        print(f"  SKIP: {e}")
+        cv_zb, cov_zb = None, None
+
+    # --- Summary comparison ---
+    print(f"\n  [COMPARISON]")
+    if cv_gs is not None and cv_zb is not None:
+        winner_cv = "greedy+SA" if cv_gs <= cv_zb else "zone-based"
+        winner_cov = "greedy+SA" if cov_gs >= cov_zb else "zone-based"
+        print(f"    CV:       greedy+SA={cv_gs:.3f}  zone-based={cv_zb:.3f}  → better: {winner_cv}")
+        print(f"    Coverage: greedy+SA={cov_gs}  zone-based={cov_zb}  → better: {winner_cov}")
+    elif cv_gs is None:
+        print("    greedy+SA failed; zone-based only")
+    else:
+        print("    zone-based failed; greedy+SA only")
 
 # ---------------------------------------------------------------------------
 # Run
