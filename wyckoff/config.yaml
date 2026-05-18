@@ -46,5 +46,5 @@ watchlist:
   - CVNA
 
 llm:
-  model: anthropic/claude-sonnet-4-5
+  model: anthropic/claude-opus-4-6
   lookback_days: 120
