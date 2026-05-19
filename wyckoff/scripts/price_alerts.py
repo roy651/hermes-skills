@@ -68,13 +68,15 @@ def run():
             if r:
                 alerts.append(r)
 
+    date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+
     if not alerts:
-        print("[price_alerts] no significant movers — silent", file=sys.stderr)
+        notifier.send(f"⚡ <b>Wyckoff Price Alerts — {date_str}</b>\n\n<i>No significant movers today (threshold: {MOVE_THRESHOLD*100:.0f}%).</i>")
+        print("[price_alerts] no significant movers — sent quiet notice", file=sys.stderr)
         return
 
     alerts.sort(key=lambda x: abs(x["pct_chg"]), reverse=True)
 
-    date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     lines = [f"⚡ <b>Wyckoff Price Alerts — {date_str}</b>",
              f"<i>Moves ≥{MOVE_THRESHOLD*100:.0f}% today</i>", ""]
 
