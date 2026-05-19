@@ -87,8 +87,12 @@ def run():
         curr_price = float(df["close"].iloc[-1])
         to_usd = (1.0 / usdils_rate) if td.currency == "ILS" else 1.0
 
+        # avg_cost for ILS stocks is stored in agorot (ILA); data.py already normalises
+        # market prices to ILS (÷100), so align avg_cost to the same unit.
+        avg_cost_local = avg_cost / 100 if td.currency == "ILS" else avg_cost
+
         curr_value_usd = qty * curr_price * to_usd
-        cost_basis_usd = qty * avg_cost * to_usd
+        cost_basis_usd = qty * avg_cost_local * to_usd
         pnl_start_usd = curr_value_usd - cost_basis_usd
         pnl_start_pct = pnl_start_usd / cost_basis_usd if cost_basis_usd else 0.0
 
@@ -116,7 +120,7 @@ def run():
         notifier.send("📊 <b>Portfolio Value</b>\n\n<i>Could not fetch data for any holding.</i>")
         return
 
-    rows.sort(key=lambda r: r["value_usd"], reverse=True)
+    rows.sort(key=lambda r: r["pnl_start_usd"], reverse=True)
 
     total_pnl_start = total_value_usd - total_cost_usd
     total_pnl_pct = total_pnl_start / total_cost_usd if total_cost_usd else 0.0
