@@ -50,7 +50,7 @@ def explain(ticker: str):
         {"role": "user", "content": f"Ticker: {label}\nCurrent price: {price:.2f} {td.currency}\n{context}\n\nOHLCV (last {len(td.df)} trading days):\n{csv}"},
     ]
 
-    model = os.environ.get("WYCKOFF_LLM_MODEL", "anthropic/claude-sonnet-4-5")
+    model = os.environ.get("WYCKOFF_LLM_MODEL", "claude-sonnet-4-6")
     resp = requests.post(
         API_URL,
         headers={

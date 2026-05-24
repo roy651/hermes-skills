@@ -14,7 +14,7 @@ except ImportError:
 
 LLM_URL = os.environ.get("LLM_API_URL", "http://localhost:8765/v1/chat/completions")
 LLM_KEY = os.environ.get("LLM_API_KEY", "")
-LLM_MODEL = os.environ.get("LLM_MODEL", "google/gemini-flash-1.5")
+LLM_MODEL = os.environ.get("LLM_MODEL", "claude-haiku-4-5-20251001")
 
 _SYSTEM = """You are a personal finance assistant for an Israeli family.
 You have access to their ActualBudget data provided as JSON context.

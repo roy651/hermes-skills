@@ -65,7 +65,7 @@ def analyze(ticker: str, df: pd.DataFrame, held: bool = False, name: str = "") -
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": f"Ticker: {label}\n{context}\n\nOHLCV (last {len(df)} trading days):\n{csv}"},
     ]
-    model = os.environ.get("WYCKOFF_LLM_MODEL", "anthropic/claude-opus-4-6")
+    model = os.environ.get("WYCKOFF_LLM_MODEL", "claude-opus-4-6")
     resp = requests.post(
         API_URL,
         headers={

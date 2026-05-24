@@ -79,7 +79,7 @@ def parse_intent(message: str, history: list[dict] | None = None) -> dict:
             "Content-Type": "application/json",
         },
         json={
-            "model": os.environ.get("LLM_MODEL", "anthropic/claude-haiku-4.5"),
+            "model": os.environ.get("LLM_MODEL", "claude-haiku-4-5-20251001"),
             "messages": messages,
             "temperature": 0,
         },
