@@ -25,5 +25,6 @@ navman/test_data/
 navman/data/
 navman/logs/
 data/
+!wyckoff/data/factor_tags.yaml
 logs/
 .claude/

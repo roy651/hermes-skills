@@ -1,0 +1,117 @@
+# Factor tags for concentration check in the Wyckoff prescreener.
+# Warn when ≥3 candidates share a tag — likely a single macro bet in disguise.
+# Refresh quarterly or when macro regime changes.
+#
+# Tags: oil_beta, rate_sensitive, credit_spread, consumer_cyclical,
+#       defensive, ai_capex, dollar_sensitive, china_beta, crypto_adjacent
+
+# --- Oil / Energy ---
+XOM: [oil_beta]
+CVX: [oil_beta]
+COP: [oil_beta]
+OXY: [oil_beta]
+APA: [oil_beta]
+MPC: [oil_beta]
+VLO: [oil_beta]
+PSX: [oil_beta]
+HAL: [oil_beta]
+SLB: [oil_beta]
+EOG: [oil_beta]
+PXD: [oil_beta]
+DVN: [oil_beta]
+FANG: [oil_beta]
+MRO: [oil_beta]
+HES: [oil_beta]
+XLE: [oil_beta]
+
+# --- Rate Sensitive: REITs ---
+O: [rate_sensitive]
+SPG: [rate_sensitive]
+PSA: [rate_sensitive]
+EQR: [rate_sensitive]
+AVB: [rate_sensitive]
+VICI: [rate_sensitive]
+AMT: [rate_sensitive]
+CCI: [rate_sensitive]
+EQIX: [rate_sensitive]
+DLR: [rate_sensitive]
+PLD: [rate_sensitive]
+WELL: [rate_sensitive]
+XLRE: [rate_sensitive]
+
+# --- Rate Sensitive: Utilities ---
+NEE: [rate_sensitive]
+DUK: [rate_sensitive]
+SO: [rate_sensitive]
+AEP: [rate_sensitive]
+EXC: [rate_sensitive]
+SRE: [rate_sensitive]
+AES: [rate_sensitive]
+PCG: [rate_sensitive]
+XLU: [rate_sensitive]
+
+# --- Rate Sensitive: Long-duration bonds ---
+TLT: [rate_sensitive]
+LQD: [rate_sensitive]
+HYG: [credit_spread, rate_sensitive]
+
+# --- Credit Spread Sensitive ---
+APO: [credit_spread, rate_sensitive]
+KKR: [credit_spread]
+BX: [credit_spread]
+BAC: [credit_spread]
+C: [credit_spread]
+GS: [credit_spread]
+MS: [credit_spread]
+JPM: [credit_spread]
+WFC: [credit_spread]
+XLF: [credit_spread]
+
+# --- AI / Capex Cycle ---
+NVDA: [ai_capex]
+AMD: [ai_capex]
+AVGO: [ai_capex]
+AMAT: [ai_capex]
+LRCX: [ai_capex]
+KLAC: [ai_capex]
+ASML: [ai_capex]
+TSM: [ai_capex, china_beta]
+MU: [ai_capex]
+SMCI: [ai_capex]
+XLK: [ai_capex]
+
+# --- China / EM Sensitive ---
+BABA: [china_beta]
+JD: [china_beta]
+PDD: [china_beta]
+BIDU: [china_beta]
+EEM: [china_beta]
+FXI: [china_beta]
+KWEB: [china_beta]
+NIO: [china_beta]
+
+# --- Dollar Sensitive (inverse USD) ---
+GLD: [dollar_sensitive]
+SLV: [dollar_sensitive]
+EFA: [dollar_sensitive]
+EEM: [dollar_sensitive, china_beta]
+
+# --- Consumer Cyclical ---
+AMZN: [consumer_cyclical, ai_capex]
+HD: [consumer_cyclical]
+LOW: [consumer_cyclical]
+TGT: [consumer_cyclical]
+MCD: [consumer_cyclical]
+SBUX: [consumer_cyclical]
+NKE: [consumer_cyclical]
+XLY: [consumer_cyclical]
+
+# --- Defensive ---
+JNJ: [defensive]
+PG: [defensive]
+KO: [defensive]
+PEP: [defensive]
+WMT: [defensive]
+COST: [defensive]
+XLP: [defensive]
+XLV: [defensive]
