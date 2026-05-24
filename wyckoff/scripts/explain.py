@@ -17,7 +17,7 @@ import data as market_data
 import holdings as portfolio
 import notifier
 
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
+API_URL = os.environ.get("LLM_API_URL", "http://localhost:8765/v1/chat/completions")
 
 _SYSTEM = """You are a knowledgeable financial educator and Wyckoff method analyst.
 The user wants a plain-language explanation of a specific stock or ETF and its current Wyckoff situation.
@@ -54,7 +54,7 @@ def explain(ticker: str):
     resp = requests.post(
         API_URL,
         headers={
-            "Authorization": f"Bearer {os.environ.get('LLM_API_KEY') or os.environ['OPENROUTER_API_KEY']}",
+            "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'local')}",
             "Content-Type": "application/json",
         },
         json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": 1024},

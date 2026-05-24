@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path.home() / ".hermes" / ".env")
 
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
+API_URL = os.environ.get("WYCKOFF_NEWS_API_URL", "https://openrouter.ai/api/v1/chat/completions")
 NEWS_MODEL = os.environ.get("WYCKOFF_NEWS_MODEL", "perplexity/sonar")
 
 
@@ -35,7 +35,7 @@ def validate(ticker: str, name: str, recommendation: str) -> dict:
     resp = requests.post(
         API_URL,
         headers={
-            "Authorization": f"Bearer {os.environ.get('LLM_API_KEY') or os.environ['OPENROUTER_API_KEY']}",
+            "Authorization": f"Bearer {os.environ.get('WYCKOFF_NEWS_API_KEY') or os.environ.get('LLM_API_KEY', 'local')}",
             "Content-Type": "application/json",
         },
         json={"model": NEWS_MODEL, "messages": messages, "temperature": 0, "max_tokens": 300},

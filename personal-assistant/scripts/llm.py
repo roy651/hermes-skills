@@ -7,7 +7,7 @@ import requests
 
 TZ = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Jerusalem"))
 
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
+API_URL = os.environ.get("LLM_API_URL", "http://localhost:8765/v1/chat/completions")
 
 _SYSTEM = """אתה מנתח בקשות של משתמש ומחזיר JSON בלבד — ללא הסברים, ללא markdown.
 

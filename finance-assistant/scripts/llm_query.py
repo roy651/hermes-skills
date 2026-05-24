@@ -12,7 +12,7 @@ try:
 except ImportError:
     pass
 
-LLM_URL = os.environ.get("LLM_API_URL", "https://openrouter.ai/api/v1/chat/completions")
+LLM_URL = os.environ.get("LLM_API_URL", "http://localhost:8765/v1/chat/completions")
 LLM_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "google/gemini-flash-1.5")
 
