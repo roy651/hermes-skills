@@ -105,6 +105,12 @@ cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section portf
 cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section watchlist
 ```
 
+Examples of what the user might say → what to run:
+- "run wyckoff analysis" / "תריץ ניתוח וויקוף" → `daily.py` (full)
+- "analyze my portfolio" / "תנתח את הפורטפוליו" → `daily.py --section portfolio`
+- "check the watchlist" / "תבדוק את רשימת המעקב" → `daily.py --section watchlist`
+- "refresh the digest" / "תעדכן את הסיכום" → `daily.py` (full)
+
 ## Hermes Tool: Run Weekly Prescreener On-Demand
 
 When the user asks to scan for new watchlist candidates or wants to refresh the candidate list:
@@ -114,6 +120,12 @@ cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/prescreener.py >> logs/p
 ```
 
 This scans ~600 tickers from S&P 500 + NASDAQ 100 + sector ETFs using 5 programmatic Wyckoff accumulation filters (no LLM). The top ~30 candidates are sent to Telegram and saved to `data/watchlist_candidates.json`. The user reviews and adds approved tickers via `manage.py watchlist-add TICKER`.
+
+Examples of what the user might say → what to run:
+- "scan for watchlist candidates" / "תמצא מועמדים לרשימת המעקב" → `prescreener.py`
+- "run the prescreener" / "תריץ את ה-prescreener" → `prescreener.py`
+- "find me new stocks to watch" / "תמצא מניות חדשות למעקב" → `prescreener.py`
+- "refresh the candidate list" → `prescreener.py`
 
 ## Hermes Tool: Deep-Dive Explanation for a Specific Ticker
 
@@ -180,6 +192,38 @@ cd ~/.hermes/skills/wyckoff
 # Remove a ticker
 .venv/bin/python scripts/manage.py watchlist-remove TLT
 ```
+
+### Bulk add from prescreener candidates
+
+When the user says "add them all", "add AAPL MSFT NVDA", or "add all except X Y Z":
+
+1. Read `~/.hermes/skills/wyckoff/data/watchlist_candidates.json` to get the full candidate list
+2. Apply the user's filter (all / specific tickers / all except listed)
+3. Run `manage.py watchlist-add TICKER` once per approved ticker
+
+```bash
+cd ~/.hermes/skills/wyckoff
+
+# Example: add all candidates
+python3 -c "
+import json
+candidates = json.load(open('data/watchlist_candidates.json'))['candidates']
+for c in candidates:
+    import subprocess
+    subprocess.run(['.venv/bin/python', 'scripts/manage.py', 'watchlist-add', c['ticker']])
+"
+
+# Or loop manually for a specific subset
+.venv/bin/python scripts/manage.py watchlist-add AAPL
+.venv/bin/python scripts/manage.py watchlist-add MSFT
+```
+
+Examples of what the user might say → what to do:
+- "add them all to the watchlist" → read candidates, add all
+- "add AAPL, MSFT, and NVDA from the list" → add just those three
+- "add all except TSLA and META" → read candidates, skip those two, add the rest
+- "תוסיף את כולם לרשימת המעקב" → same as "add them all"
+- "תוסיף את כולם חוץ מ-TSLA" → add all except TSLA
 
 ## Configuration
 
