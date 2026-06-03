@@ -13,6 +13,8 @@ Usage:
 
 import argparse
 import os
+import random
+import string
 import sys
 import time
 from datetime import datetime, timezone
@@ -32,19 +34,31 @@ ASSOCIATE_URL   = f"{API_BASE}/v2/cloud/subscriptions/devices/associate"
 CLIENT_ID       = "REO-.AJ,HO/L6_TG44T78KB7"
 RETENTION_DAYS  = 7
 
+CHROME_VERSION = "148"
+
+def _make_prid():
+    """Generate an x-prid matching Reolink's client format: YYMMDDHHmmssSSS-{hex8}-{alnum7}."""
+    now = datetime.now()
+    ts = now.strftime("%y%m%d%H%M%S") + f"{now.microsecond // 1000:03d}"
+    hex_part  = "".join(random.choices(string.hexdigits[:16], k=8))
+    alnum_part = "".join(random.choices(string.ascii_letters + string.digits, k=7))
+    return f"{ts}-{hex_part}-{alnum_part}"
+
 HEADERS = {
-    "User-Agent":       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept":           "application/json, text/plain, */*",
-    "Accept-Language":  "en-US,en;q=0.9",
-    "Accept-Encoding":  "gzip, deflate, br",
-    "sec-ch-ua":        '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
+    "User-Agent":         f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{CHROME_VERSION}.0.0.0 Safari/537.36",
+    "Accept":             "application/json, text/plain, */*",
+    "Accept-Language":    "en-US,en;q=0.9",
+    "Accept-Encoding":    "gzip, deflate, br, zstd",
+    "sec-ch-ua":          f'"Chromium";v="{CHROME_VERSION}", "Google Chrome";v="{CHROME_VERSION}", "Not/A)Brand";v="99"',
+    "sec-ch-ua-mobile":   "?0",
     "sec-ch-ua-platform": '"macOS"',
-    "Sec-Fetch-Dest":   "empty",
-    "Sec-Fetch-Mode":   "cors",
-    "Sec-Fetch-Site":   "cross-site",
-    "origin":           "https://cloud.reolink.com",
-    "referer":          "https://cloud.reolink.com/",
+    "Sec-Fetch-Dest":     "empty",
+    "Sec-Fetch-Mode":     "cors",
+    "Sec-Fetch-Site":     "cross-site",
+    "dnt":                "1",
+    "sec-gpc":            "1",
+    "origin":             "https://cloud.reolink.com",
+    "referer":            "https://cloud.reolink.com/",
 }
 
 # ---------------------------------------------------------------------------
@@ -115,7 +129,7 @@ def login(session, email, password, verbose):
         "client_id":    CLIENT_ID,
         "mfa_trusted":  "true",
     }, headers={"origin": "https://my.reolink.com", "referer": "https://my.reolink.com/",
-                "Sec-Fetch-Site": "same-site"}, timeout=15)
+                "Sec-Fetch-Site": "same-site", "x-prid": _make_prid()}, timeout=15)
 
     log(verbose, f"[login] status={resp.status_code} body={resp.text[:300]}")
 
