@@ -33,9 +33,18 @@ CLIENT_ID       = "REO-.AJ,HO/L6_TG44T78KB7"
 RETENTION_DAYS  = 7
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-    "origin":     "https://cloud.reolink.com",
-    "referer":    "https://cloud.reolink.com/",
+    "User-Agent":       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept":           "application/json, text/plain, */*",
+    "Accept-Language":  "en-US,en;q=0.9",
+    "Accept-Encoding":  "gzip, deflate, br",
+    "sec-ch-ua":        '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "Sec-Fetch-Dest":   "empty",
+    "Sec-Fetch-Mode":   "cors",
+    "Sec-Fetch-Site":   "cross-site",
+    "origin":           "https://cloud.reolink.com",
+    "referer":          "https://cloud.reolink.com/",
 }
 
 # ---------------------------------------------------------------------------
@@ -104,15 +113,21 @@ def login(session, email, password, verbose):
         "grant_type":   "password",
         "session_mode": "true",
         "client_id":    CLIENT_ID,
-        "mfa_trusted":  "false",
-    }, headers={"origin": "https://my.reolink.com", "referer": "https://my.reolink.com/"}, timeout=15)
+        "mfa_trusted":  "true",
+    }, headers={"origin": "https://my.reolink.com", "referer": "https://my.reolink.com/",
+                "Sec-Fetch-Site": "same-site"}, timeout=15)
 
     log(verbose, f"[login] status={resp.status_code} body={resp.text[:300]}")
 
     if resp.status_code != 200:
         bail("login", f"Login failed (HTTP {resp.status_code}) — check credentials.")
 
-    token = resp.json().get("access_token")
+    body = resp.json()
+    if body.get("code") == 8208 or body.get("error") == "mfa_required":
+        bail("login", "The Reolink account now requires MFA (multi-factor authentication). "
+             "The API returned error mfa_required (code 8208) — email OTP (8-digit code) is enabled on the account.\n\n"
+             "To restore automatic renewal, disable email MFA on the Reolink account.")
+    token = body.get("access_token")
     if not token:
         bail("login", f"No access_token in login response: {resp.text[:200]}")
 
