@@ -10,7 +10,6 @@ import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import pandas as pd
@@ -36,7 +35,17 @@ CANDIDATES_FILE = Path(__file__).parent.parent / "data" / "watchlist_candidates.
 FACTOR_TAGS_FILE = Path(__file__).parent.parent / "data" / "factor_tags.yaml"
 TOP_N = 30
 MIN_SCORE = 3
-REL_PERF_CAP = 0.15  # disqualify if outperforming SPY by >15pp over either window
+REL_PERF_CAP = 0.15    # disqualify if outperforming SPY/sector by >15pp (markup, not accumulation)
+REL_PERF_FLOOR = 0.30  # disqualify if underperforming SPY by >30pp over 6m (falling knife)
+MIN_ADV = 20_000_000   # min 20-day average dollar volume (liquidity floor)
+
+# GICS sector (from the S&P 500 Wikipedia table) → SPDR sector ETF, for sector-relative strength
+_GICS_TO_ETF = {
+    "Energy": "XLE", "Financials": "XLF", "Information Technology": "XLK",
+    "Health Care": "XLV", "Industrials": "XLI", "Communication Services": "XLC",
+    "Consumer Discretionary": "XLY", "Consumer Staples": "XLP",
+    "Utilities": "XLU", "Materials": "XLB", "Real Estate": "XLRE",
+}
 
 
 _WIKI_HEADERS = {
@@ -53,14 +62,22 @@ def _wiki_tables(url: str) -> list:
     return pd.read_html(io.StringIO(resp.text))
 
 
-def _get_universe() -> list[str]:
+def _get_universe() -> tuple[list[str], dict[str, str]]:
+    """Return (tickers, sector_map) where sector_map maps an S&P ticker to its sector ETF."""
     tickers: list[str] = []
+    sector_map: dict[str, str] = {}
 
     try:
         tables = _wiki_tables("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-        sp500 = tables[0]["Symbol"].tolist()
+        df0 = tables[0]
+        sp500 = df0["Symbol"].tolist()
         tickers.extend(sp500)
-        print(f"[prescreener] S&P 500: {len(sp500)} tickers", file=sys.stderr)
+        if "GICS Sector" in df0.columns:
+            for sym, sec in zip(df0["Symbol"], df0["GICS Sector"]):
+                etf = _GICS_TO_ETF.get(str(sec).strip())
+                if etf:
+                    sector_map[str(sym).replace(".", "-")] = etf
+        print(f"[prescreener] S&P 500: {len(sp500)} tickers, {len(sector_map)} sector-mapped", file=sys.stderr)
     except Exception as e:
         print(f"[prescreener] S&P 500 fetch failed: {e}", file=sys.stderr)
 
@@ -80,7 +97,21 @@ def _get_universe() -> list[str]:
     tickers.extend(SECTOR_ETFS)
 
     cleaned = [t.replace(".", "-") for t in tickers]
-    return list(dict.fromkeys(cleaned))
+    return list(dict.fromkeys(cleaned)), sector_map
+
+
+def _get_sector_context(etfs: set[str]) -> dict[str, float]:
+    """6-month return per sector ETF, for sector-relative strength filtering."""
+    out: dict[str, float] = {}
+    for etf in etfs:
+        try:
+            td = market_data.fetch_ohlcv(etf, days=252)
+            close = td.df["close"]
+            base = float(close.iloc[-126]) if len(close) >= 126 else float(close.iloc[0])
+            out[etf] = (float(close.iloc[-1]) - base) / base
+        except Exception as e:
+            print(f"[prescreener] sector ctx {etf} failed: {e}", file=sys.stderr)
+    return out
 
 
 def _load_factor_tags() -> dict[str, list[str]]:
@@ -181,21 +212,33 @@ def _fetch_and_score(
     required_pct_off_high: float,
     spy_ret_6m: float,
     spy_ret_12m: float,
+    sector_etf: str | None = None,
+    sector_ret_6m: float | None = None,
 ) -> dict | None:
     try:
         td = market_data.fetch_ohlcv(ticker, days=252)
         close = td.df["close"]
+        volume = td.df["volume"]
         price = float(close.iloc[-1])
 
-        # Relative performance disqualifiers — outperforming SPY means markup, not accumulation
+        # Liquidity floor — 20-day average dollar volume
+        adv = float((close.tail(20) * volume.tail(20)).mean())
+        if adv < MIN_ADV:
+            return None
+
+        # Relative-performance disqualifiers
         base_6m = float(close.iloc[-126]) if len(close) >= 126 else float(close.iloc[0])
         base_12m = float(close.iloc[0])
         ret_6m = (price - base_6m) / base_6m
         ret_12m = (price - base_12m) / base_12m
-        if (ret_6m - spy_ret_6m) > REL_PERF_CAP:
-            return None
-        if (ret_12m - spy_ret_12m) > REL_PERF_CAP:
-            return None
+        rel_6m = ret_6m - spy_ret_6m
+        rel_12m = ret_12m - spy_ret_12m
+        if rel_6m > REL_PERF_CAP or rel_12m > REL_PERF_CAP:
+            return None                      # outperforming SPY → markup, not accumulation
+        if rel_6m < -REL_PERF_FLOOR:
+            return None                      # >30pp underperformance → falling knife
+        if sector_ret_6m is not None and (ret_6m - sector_ret_6m) > REL_PERF_CAP:
+            return None                      # leading a (possibly weak) sector → markup vs peers
 
         total, breakdown = _score(td.df, required_pct_off_high)
         hi_52 = float(td.df["high"].tail(252).max())
@@ -205,8 +248,11 @@ def _fetch_and_score(
             "name": td.name,
             "price": round(price, 2),
             "pct_off_52w_high": round(pct_off, 1),
-            "rel_6m": round((ret_6m - spy_ret_6m) * 100, 1),
-            "rel_12m": round((ret_12m - spy_ret_12m) * 100, 1),
+            "rel_6m": round(rel_6m * 100, 1),
+            "rel_12m": round(rel_12m * 100, 1),
+            "rel_sector_6m": round((ret_6m - sector_ret_6m) * 100, 1) if sector_ret_6m is not None else None,
+            "sector": sector_etf,
+            "adv_musd": round(adv / 1e6, 1),
             "score": total,
             "breakdown": breakdown,
         }
@@ -229,22 +275,27 @@ def _factor_warnings(candidates: list[dict], tags: dict[str, list[str]]) -> list
     return warnings
 
 
-def screen_universe() -> list[dict]:
-    """Scan the full universe and return top candidates. Saves to CANDIDATES_FILE."""
+def screen_universe() -> tuple[list[dict], dict]:
+    """Scan the full universe and return (top candidates, spy_ctx). Saves to CANDIDATES_FILE."""
     spy_ctx = _get_spy_context()
-    universe = _get_universe()
+    universe, sector_map = _get_universe()
+    sector_ctx = _get_sector_context(set(sector_map.values()))
     print(f"[prescreener] scanning {len(universe)} tickers…", file=sys.stderr)
 
-    fetch_fn = partial(
-        _fetch_and_score,
-        required_pct_off_high=spy_ctx["required_pct_off_high"],
-        spy_ret_6m=spy_ctx["spy_ret_6m"],
-        spy_ret_12m=spy_ctx["spy_ret_12m"],
-    )
+    def fetch_one(ticker: str) -> dict | None:
+        se = sector_map.get(ticker)
+        return _fetch_and_score(
+            ticker,
+            spy_ctx["required_pct_off_high"],
+            spy_ctx["spy_ret_6m"],
+            spy_ctx["spy_ret_12m"],
+            sector_etf=se,
+            sector_ret_6m=sector_ctx.get(se) if se else None,
+        )
 
     results: list[dict] = []
     with ThreadPoolExecutor(max_workers=10) as pool:
-        futures = {pool.submit(fetch_fn, t): t for t in universe}
+        futures = {pool.submit(fetch_one, t): t for t in universe}
         for i, fut in enumerate(as_completed(futures), 1):
             r = fut.result()
             if r:

@@ -261,6 +261,14 @@ llm:
 
 Override LLM model per-session via env var: `WYCKOFF_LLM_MODEL=anthropic/claude-opus-4-7`.
 
+### Environment (`~/.hermes/.env`)
+
+- `LLM_API_URL` — Wyckoff/news LLM endpoint (defaults to the local claude-proxy `http://localhost:8765/v1/chat/completions`).
+- `FINNHUB_API_KEY` — required for the weekly funnel's news/fundamentals stage (earnings-calendar exclusion, market cap, company news, analyst consensus). Free key at https://finnhub.io/. Without it, the weekly run still produces picks but skips earnings exclusion and news validation (so nothing reaches the STRONG tier).
+- `WYCKOFF_NEWS_MODEL` — model used to reason over Finnhub headlines (default `claude-haiku-4-5`).
+
+News validation pulls headlines + analyst consensus from Finnhub and reasons over them via the local claude-proxy — no Perplexity/OpenRouter dependency.
+
 ## Install
 
 ```bash
@@ -347,8 +355,9 @@ To load these into Wyckoff holdings:
 ## Notes
 
 - Data source: Yahoo Finance API (direct) — free, no API key, covers all major ETFs and stocks
-- Prescreener: pure Python/math, no LLM — fetches concurrently (10 workers), takes ~2-3 min for ~600 tickers
-- Daily analysis: LLM (Claude Sonnet via OpenRouter) on 120 days OHLCV — not algorithmic signal detection
+- Prescreener: pure Python/math, no LLM — fetches concurrently (10 workers), takes ~2-3 min for ~600 tickers. Filters: regime-aware off-high floor, two-sided rel-perf vs SPY, sector-relative strength, liquidity (ADV), 5 accumulation-shape criteria
+- LLM analysis: via the local claude-proxy on 120 days OHLCV (entry vs exit prompt) — not algorithmic signal detection
+- News/fundamentals: Finnhub (earnings calendar, market cap, company news, analyst consensus) + local claude-proxy reasoning
 - Wyckoff is a swing/position methodology; daily candles are the appropriate timeframe
 - Treat recommendations as a second opinion, not automated trading signals
 - Prescreener candidates in `data/watchlist_candidates.json` are suggestions only; you decide what goes in `config.yaml`

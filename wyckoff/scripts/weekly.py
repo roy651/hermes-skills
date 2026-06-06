@@ -22,6 +22,7 @@ import data as market_data
 import analysis as wyckoff
 import notifier
 import news as news_validator
+import finnhub
 from prescreener import screen_universe, _factor_warnings, _load_factor_tags
 
 TZ = ZoneInfo("Asia/Jerusalem")
@@ -144,6 +145,9 @@ def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
         "name": td.name,
         "currency": td.currency,
         "quant_score": c.get("score"),
+        "adv_musd": c.get("adv_musd"),
+        "sector": c.get("sector"),
+        "market_cap": None,
         "news_info": None,
     }
 
@@ -229,6 +233,18 @@ def _position_size(criteria: int) -> str:
 
 # ── digest ────────────────────────────────────────────────────────────────
 
+def _stats_line(b: dict) -> str:
+    parts = []
+    if b.get("adv_musd"):
+        parts.append(f"ADV ${b['adv_musd']:.0f}M")
+    cap = b.get("market_cap")
+    if cap:
+        parts.append(f"Cap ${cap / 1e9:.1f}B" + (" ⚠️small-cap" if cap < 2e9 else ""))
+    if b.get("sector"):
+        parts.append(b["sector"])
+    return ("  💧 " + " · ".join(parts)) if parts else ""
+
+
 def _build_weekly_digest(
     spy_ctx: dict,
     strong: list[dict],
@@ -252,6 +268,9 @@ def _build_weekly_digest(
                 b["result"], None, b["price"], name=b["name"],
                 currency=b["currency"], news_info=b.get("news_info"),
             ))
+            stats = _stats_line(b)
+            if stats:
+                lines.append(stats)
             lines.append(f"  📐 Suggested size: {_position_size(_criteria(b['result']))}")
             lines.append("")
     else:
@@ -265,6 +284,9 @@ def _build_weekly_digest(
                 b["result"], None, b["price"], name=b["name"],
                 currency=b["currency"], news_info=b.get("news_info"),
             ))
+            stats = _stats_line(b)
+            if stats:
+                lines.append(stats)
             miss = _missing(b)
             if miss:
                 lines.append(f"  <i>Missing: {', '.join(miss)}</i>")
@@ -296,6 +318,15 @@ def run(dry_run: bool = False) -> None:
     candidates, spy_ctx = screen_universe()
     print(f"[weekly] {len(candidates)} candidates from prescreen", file=sys.stderr)
 
+    # Stage 2: drop candidates reporting earnings within 14 days (signal unreliable across earnings)
+    try:
+        soon = finnhub.earnings_within({c["ticker"] for c in candidates}, days=14)
+        if soon:
+            candidates = [c for c in candidates if c["ticker"] not in soon]
+            print(f"[weekly] excluded {len(soon)} earnings-imminent: {sorted(soon)}", file=sys.stderr)
+    except Exception as e:
+        print(f"[weekly] earnings calendar unavailable, skipping exclusion: {e}", file=sys.stderr)
+
     # Stage 3: LLM Wyckoff on each candidate (entry mode, market context)
     bundles, errors = _analyze_candidates(candidates, spy_ctx)
     print(f"[weekly] analyzed {len(bundles)} candidates", file=sys.stderr)
@@ -318,6 +349,13 @@ def run(dry_run: bool = False) -> None:
     borderline = sorted(
         [b for b in bundles if b["ticker"] not in strong_tickers], key=_composite, reverse=True
     )[: MAX_PICKS - len(strong)]
+
+    # Enrich the final picks with market cap (cheap — only ≤5 lookups)
+    for b in strong + borderline:
+        try:
+            b["market_cap"] = finnhub.market_cap(b["ticker"])
+        except Exception as e:
+            print(f"[weekly] market cap unavailable for {b['ticker']}: {e}", file=sys.stderr)
 
     msg = _build_weekly_digest(spy_ctx, strong, borderline, factor_tags, date_str, errors)
     if dry_run:
