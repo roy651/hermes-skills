@@ -18,7 +18,13 @@ import analysis as wyckoff
 import holdings as portfolio
 import notifier
 import news as news_validator
-from prescreener import screen_universe, CANDIDATES_FILE, TOP_N
+from prescreener import (
+    screen_universe,
+    CANDIDATES_FILE,
+    TOP_N,
+    build_candidates_message,
+    _load_factor_tags,
+)
 
 TZ = ZoneInfo("Asia/Jerusalem")
 LOOKBACK_DAYS = 120
@@ -41,15 +47,6 @@ _REC_EMOJI = {
     "watch": "🔵 Watch",
     "pass": "⬜ Pass",
 }
-
-_FLAG_LABELS = {
-    "off_high": "range",
-    "above_ma200": "MA200✓",
-    "atr_contraction": "ATR↓",
-    "vol_contraction": "vol↓",
-    "bb_squeeze": "squeeze",
-}
-
 
 def _format_result(
     result: dict,
@@ -174,22 +171,9 @@ def _analyze_batch(tickers: list[str], holdings_map: dict, label: str = "") -> t
     return [b for _, b in blocks], errors
 
 
-def _send_prescreener_message(candidates: list[dict], date_str: str) -> None:
-    lines = [
-        f"📋 <b>Wyckoff Watchlist Candidates — {date_str}</b>",
-        f"<i>{len(candidates)} candidates (≥3/5 criteria)</i>",
-        "",
-    ]
-    for r in candidates:
-        flags = [label for key, label in _FLAG_LABELS.items() if r["breakdown"].get(key)]
-        name_part = f" ({r['name']})" if r["name"] != r["ticker"] else ""
-        lines.append(
-            f"<b>{r['ticker']}</b>{name_part} · ${r['price']} "
-            f"· {r['pct_off_52w_high']:.0f}% off hi · {r['score']}/5 [{', '.join(flags)}]"
-        )
-    lines.append("")
-    lines.append("<i>Add approved tickers via: manage.py watchlist-add TICKER</i>")
-    notifier.send("\n".join(lines))
+def _send_prescreener_message(candidates: list[dict], spy_ctx: dict, date_str: str) -> None:
+    factor_tags = _load_factor_tags()
+    notifier.send(build_candidates_message(candidates, spy_ctx, factor_tags, date_str))
 
 
 def run():
@@ -197,10 +181,10 @@ def run():
 
     # Step 1: Prescreener
     print("[weekly] running prescreener...", file=sys.stderr)
-    candidates = screen_universe()
+    candidates, spy_ctx = screen_universe()
 
     # Step 2: Send prescreener candidates list to Telegram
-    _send_prescreener_message(candidates, date_str)
+    _send_prescreener_message(candidates, spy_ctx, date_str)
     print(f"[weekly] sent prescreener list ({len(candidates)} candidates)", file=sys.stderr)
 
     # Step 3: Full Wyckoff analysis on prescreener candidates

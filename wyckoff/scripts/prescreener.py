@@ -267,46 +267,59 @@ def screen_universe() -> list[dict]:
     return top, spy_ctx
 
 
-def run():
-    factor_tags = _load_factor_tags()
-    top, spy_ctx = screen_universe()
+_FLAG_LABELS = {
+    "off_high": "range",
+    "above_ma200": "MA200✓",
+    "atr_contraction": "ATR↓",
+    "vol_contraction": "vol↓",
+    "bb_squeeze": "squeeze",
+}
 
-    date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+
+def format_header(spy_ctx: dict, n: int, date_str: str) -> list[str]:
+    """Candidate-message header lines. Shared by prescreener.run() and weekly.py."""
     spy_off = spy_ctx["spy_pct_off_high"] * 100
     req_off = spy_ctx["required_pct_off_high"] * 100
-    lines = [
+    return [
         f"📋 <b>Wyckoff Watchlist Candidates — {date_str}</b>",
         f"<i>SPY {spy_off:.1f}% off 52w high → min {req_off:.0f}% off required</i>",
-        f"<i>{len(top)} candidates (≥{MIN_SCORE}/5 criteria, rel perf filtered)</i>",
+        f"<i>{n} candidates (≥{MIN_SCORE}/5 criteria, rel perf filtered)</i>",
         "",
     ]
 
-    _flag_labels = {
-        "off_high": "range",
-        "above_ma200": "MA200✓",
-        "atr_contraction": "ATR↓",
-        "vol_contraction": "vol↓",
-        "bb_squeeze": "squeeze",
-    }
 
+def format_candidate_line(r: dict) -> str:
+    """One candidate row. Shared by prescreener.run() and weekly.py."""
+    flags = [label for key, label in _FLAG_LABELS.items() if r["breakdown"].get(key)]
+    name_part = f" ({r['name']})" if r["name"] != r["ticker"] else ""
+    rel = f"6m={r['rel_6m']:+.0f}pp 12m={r['rel_12m']:+.0f}pp vs SPY"
+    return (
+        f"<b>{r['ticker']}</b>{name_part} · ${r['price']} "
+        f"· {r['pct_off_52w_high']:.0f}% off hi · {r['score']}/5 [{', '.join(flags)}] · <i>{rel}</i>"
+    )
+
+
+def build_candidates_message(
+    top: list[dict], spy_ctx: dict, factor_tags: dict, date_str: str
+) -> str:
+    """Full candidate Telegram message. Single source of truth for both schedulers."""
+    lines = format_header(spy_ctx, len(top), date_str)
     for r in top:
-        flags = [label for key, label in _flag_labels.items() if r["breakdown"].get(key)]
-        name_part = f" ({r['name']})" if r["name"] != r["ticker"] else ""
-        rel = f"6m={r['rel_6m']:+.0f}pp 12m={r['rel_12m']:+.0f}pp vs SPY"
-        lines.append(
-            f"<b>{r['ticker']}</b>{name_part} · ${r['price']} "
-            f"· {r['pct_off_52w_high']:.0f}% off hi · {r['score']}/5 [{', '.join(flags)}] · <i>{rel}</i>"
-        )
-
+        lines.append(format_candidate_line(r))
     warnings = _factor_warnings(top, factor_tags)
     if warnings:
         lines.append("")
         lines.extend(warnings)
-
     lines.append("")
     lines.append("<i>Add approved tickers via: manage.py watchlist-add TICKER</i>")
+    return "\n".join(lines)
 
-    notifier.send("\n".join(lines))
+
+def run():
+    factor_tags = _load_factor_tags()
+    top, spy_ctx = screen_universe()
+    date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    notifier.send(build_candidates_message(top, spy_ctx, factor_tags, date_str))
     print(f"[prescreener] sent {len(top)} candidates to Telegram", file=sys.stderr)
 
 
