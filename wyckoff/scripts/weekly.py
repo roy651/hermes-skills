@@ -31,6 +31,7 @@ LOOKBACK_DAYS = 120
 
 MAX_PICKS = 5               # total picks emitted (STRONG + BORDERLINE)
 NEWS_CUT = 8                # news-validate only the top-N by composite (saves API calls)
+ANALYZE_WORKERS = 4         # concurrent LLM analyses — keep low; the local proxy chokes at 10
 STRONG_MIN_CRITERIA = 7     # Gate B threshold
 NEWS_RECS = {"buy", "add", "reduce", "sell"}   # recs worth a news check
 ENTRY_RECS = {"buy", "add"}                    # Gate A
@@ -161,7 +162,7 @@ def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
 def _analyze_candidates(candidates: list[dict], spy_ctx: dict) -> tuple[list[dict], list[str]]:
     bundles: list[dict] = []
     errors: list[str] = []
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=ANALYZE_WORKERS) as pool:
         futures = {pool.submit(_analyze_candidate, c, spy_ctx): c["ticker"] for c in candidates}
         for fut in as_completed(futures):
             ticker = futures[fut]

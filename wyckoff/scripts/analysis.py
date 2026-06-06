@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import os
+import time
 import requests
 import pandas as pd
 from pathlib import Path
@@ -148,22 +149,30 @@ def analyze(
         {"role": "user", "content": "\n".join(user_parts)},
     ]
     model = os.environ.get("WYCKOFF_LLM_MODEL", "claude-opus-4-6")
-    resp = requests.post(
-        API_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'local')}",
-            "Content-Type": "application/json",
-        },
-        json={"model": model, "messages": messages, "temperature": 0, "max_tokens": 512},
-        timeout=90,
-    )
-    resp.raise_for_status()
-    text = resp.json()["choices"][0]["message"]["content"].strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    result = json.loads(text)
-    result["ticker"] = ticker
-    return result
+    payload = {"model": model, "messages": messages, "temperature": 0, "max_tokens": 512}
+    headers = {
+        "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'local')}",
+        "Content-Type": "application/json",
+    }
+
+    # Retry: the local proxy can return an empty body or time out under concurrent load.
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
+            resp.raise_for_status()
+            text = resp.json()["choices"][0]["message"]["content"].strip()
+            if not text:
+                raise ValueError("empty LLM response")
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+            result = json.loads(text)
+            result["ticker"] = ticker
+            return result
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+    raise last_err
