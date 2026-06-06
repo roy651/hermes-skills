@@ -18,6 +18,7 @@ import data as market_data
 import analysis as wyckoff
 import holdings as portfolio
 import notifier
+from prescreener import _get_spy_context
 
 TZ = ZoneInfo("Asia/Jerusalem")
 
@@ -91,8 +92,13 @@ def run():
     parser.add_argument(
         "--section",
         choices=["portfolio", "watchlist", "all"],
-        default="all",
-        help="Which section to run (default: all)",
+        default="portfolio",
+        help="Which section to run (default: portfolio — daily exit-watch)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the digest instead of sending to Telegram",
     )
     args = parser.parse_args()
 
@@ -115,12 +121,21 @@ def run():
     watchlist_lines = []
     errors = []
 
+    # Market regime context — grounds Wyckoff criteria 1 (broad trend) and 2 (rel strength)
+    market_ctx = None
+    if all_tickers:
+        try:
+            market_ctx = _get_spy_context()
+        except Exception as e:
+            print(f"[daily] SPY context fetch failed: {e}", file=sys.stderr)
+
     for ticker in all_tickers:
         try:
             td = market_data.fetch_ohlcv(ticker, days=lookback)
             price = float(td.df["close"].iloc[-1])
             held = ticker in holdings
-            result = wyckoff.analyze(ticker, td.df, held=held, name=td.name)
+            mode = "exit" if held else "entry"
+            result = wyckoff.analyze(ticker, td.df, held=held, name=td.name, mode=mode, market_ctx=market_ctx)
             block = _format_result(result, holdings.get(ticker), price, name=td.name, currency=td.currency)
             if held:
                 portfolio_lines.append(block)
@@ -131,7 +146,7 @@ def run():
             print(f"[daily] error on {ticker}: {e}", file=sys.stderr)
 
     section_label = {
-        "portfolio": "Portfolio",
+        "portfolio": "Portfolio — Exit Watch",
         "watchlist": "Watchlist",
         "all": "Daily",
     }[args.section]
@@ -150,8 +165,12 @@ def run():
         safe_errors = ", ".join(html.escape(str(e)) for e in errors)
         parts.append(f"\n<i>Errors: {safe_errors}</i>")
 
-    notifier.send("\n".join(parts))
-    print(f"[daily] sent digest for {len(all_tickers)} tickers", file=sys.stderr)
+    msg = "\n".join(parts)
+    if args.dry_run:
+        print(msg)
+    else:
+        notifier.send(msg)
+    print(f"[daily] {'(dry-run) ' if args.dry_run else ''}digest for {len(all_tickers)} tickers", file=sys.stderr)
 
 
 if __name__ == "__main__":

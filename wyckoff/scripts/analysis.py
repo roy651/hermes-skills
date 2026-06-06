@@ -57,13 +57,88 @@ Return ONLY valid JSON:
 }"""
 
 
-def analyze(ticker: str, df: pd.DataFrame, held: bool = False, name: str = "") -> dict:
+_SYSTEM_EXIT = """You are a Wyckoff method analyst reviewing a CURRENTLY HELD position for EXIT risk. Analyze the OHLCV data and return a JSON object — no markdown, no explanation.
+
+Your job is defensive: detect distribution and weakness early, but do not cry wolf. "hold" is the default for a healthy position; only escalate when distribution evidence is concrete.
+
+Four Wyckoff phases:
+- accumulation: consolidation below resistance, volume contracting, institutional buying
+- markup: sustained uptrend, expanding volume on advances, contracting on pullbacks
+- distribution: consolidation near highs, erratic volume, institutional selling
+- markdown: sustained downtrend, volume expands on declines
+
+Distribution / weakness signals to prioritize (identify by date when visible):
+- UT: Upthrust — pierce above resistance that closes weak
+- UTAD: Upthrust After Distribution — final UT confirming distribution (strong exit signal)
+- SOW: Sign of Weakness — volume-heavy decline breaking support
+- LPSY: Last Point of Supply — weak low-volume rally failing below prior highs
+- Break below a prior LPS / loss of an established support level on rising volume
+- Climactic or churning volume at highs with no further price progress
+- Markup exhaustion: SOS attempts failing, narrowing upward thrusts
+
+Recommendation guidance for a held position:
+- hold: trend intact, no distribution evidence (DEFAULT)
+- reduce: early distribution signs (UT, SOW, support tested on volume) — trim risk
+- sell: distribution confirmed (UTAD, major support broken on volume, markdown underway)
+- buy/add: only for a clean, confirmed markup pullback (rare in exit review)
+
+The nine entry criteria still apply for context (count 0–9, same as long setups).
+
+Return ONLY valid JSON:
+{
+  "phase": "accumulation|markup|distribution|markdown|unclear",
+  "phase_confidence": "high|medium|low",
+  "key_events": ["UT on 2026-03-15", "SOW on 2026-03-22"],
+  "active_signals": ["distribution forming"],
+  "criteria_met": 4,
+  "recommendation": "buy|add|hold|reduce|sell|watch|pass",
+  "entry_zone": "225–228" or null,
+  "stop": "219.00" or null,
+  "note": "One concise sentence summary."
+}"""
+
+
+def _market_context_block(market_ctx: dict) -> str:
+    """Render SPY regime + this instrument's relative strength so the LLM can ground
+    criteria 1 (broad market trend) and 2 (relative strength vs market)."""
+    off = market_ctx.get("spy_pct_off_high")
+    r6 = market_ctx.get("spy_ret_6m")
+    r12 = market_ctx.get("spy_ret_12m")
+    lines = ["Market context (S&P 500 / SPY):"]
+    if off is not None and r6 is not None and r12 is not None:
+        lines.append(
+            f"- SPY is {off*100:.1f}% off its 52-week high; 6-month return {r6*100:+.1f}%, "
+            f"12-month {r12*100:+.1f}%."
+        )
+    rel6 = market_ctx.get("rel_6m")
+    rel12 = market_ctx.get("rel_12m")
+    if rel6 is not None and rel12 is not None:
+        lines.append(
+            f"- This instrument vs SPY: 6m {rel6:+.1f}pp, 12m {rel12:+.1f}pp "
+            f"(positive = outperforming the market)."
+        )
+    return "\n".join(lines)
+
+
+def analyze(
+    ticker: str,
+    df: pd.DataFrame,
+    held: bool = False,
+    name: str = "",
+    mode: str = "entry",
+    market_ctx: dict | None = None,
+) -> dict:
     context = "Currently HELD in portfolio." if held else "On watchlist (not held)."
     label = f"{ticker} ({name})" if name and name != ticker else ticker
+    system = _SYSTEM_EXIT if mode == "exit" else _SYSTEM
     csv = df.to_csv()
+    user_parts = [f"Ticker: {label}", context]
+    if market_ctx:
+        user_parts.append("\n" + _market_context_block(market_ctx))
+    user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{csv}")
     messages = [
-        {"role": "system", "content": _SYSTEM},
-        {"role": "user", "content": f"Ticker: {label}\n{context}\n\nOHLCV (last {len(df)} trading days):\n{csv}"},
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n".join(user_parts)},
     ]
     model = os.environ.get("WYCKOFF_LLM_MODEL", "claude-opus-4-6")
     resp = requests.post(

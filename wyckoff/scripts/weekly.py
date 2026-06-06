@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""Sunday Wyckoff weekly run: prescreener → full LLM on candidates + portfolio."""
+"""Sunday Wyckoff weekly run: prescreen → LLM Wyckoff on candidates → news-validate the
+top cut → emit up to 5 tiered entry picks (STRONG / BORDERLINE) to Telegram.
+
+The weekly digest IS the entry signal. Portfolio exit-watch is the separate daily job.
+"""
 from __future__ import annotations
+import argparse
 import html
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,20 +20,19 @@ load_dotenv(Path.home() / ".hermes" / ".env")
 
 import data as market_data
 import analysis as wyckoff
-import holdings as portfolio
 import notifier
 import news as news_validator
-from prescreener import (
-    screen_universe,
-    CANDIDATES_FILE,
-    TOP_N,
-    build_candidates_message,
-    _load_factor_tags,
-)
+from prescreener import screen_universe, _factor_warnings, _load_factor_tags
 
 TZ = ZoneInfo("Asia/Jerusalem")
 LOOKBACK_DAYS = 120
-STRONG_RECS = {"buy", "add", "reduce", "sell"}
+
+MAX_PICKS = 5               # total picks emitted (STRONG + BORDERLINE)
+NEWS_CUT = 8                # news-validate only the top-N by composite (saves API calls)
+STRONG_MIN_CRITERIA = 7     # Gate B threshold
+NEWS_RECS = {"buy", "add", "reduce", "sell"}   # recs worth a news check
+ENTRY_RECS = {"buy", "add"}                    # Gate A
+_ENTRY_EVENTS = ("spring", "sos", "lps")       # Gate D tokens (fuzzy until P3)
 
 _PHASE_EMOJI = {
     "accumulation": "🟡",
@@ -47,6 +51,7 @@ _REC_EMOJI = {
     "watch": "🔵 Watch",
     "pass": "⬜ Pass",
 }
+
 
 def _format_result(
     result: dict,
@@ -112,114 +117,222 @@ def _format_result(
     return "\n".join(lines)
 
 
-def _analyze_one(ticker: str, holdings_map: dict) -> dict:
-    """Fetch data, run Wyckoff analysis, optionally validate news. Returns a result bundle."""
-    held = ticker in holdings_map
-    td = market_data.fetch_ohlcv(ticker, days=LOOKBACK_DAYS)
-    price = float(td.df["close"].iloc[-1])
-    result = wyckoff.analyze(ticker, td.df, held=held, name=td.name)
+# ── analysis ───────────────────────────────────────────────────────────────
 
-    news_info = None
-    rec = result.get("recommendation", "")
-    if rec in STRONG_RECS:
-        try:
-            news_info = news_validator.validate(ticker, td.name, rec)
-        except Exception as e:
-            print(f"[weekly] news validation failed for {ticker}: {e}", file=sys.stderr)
-
+def _market_ctx(spy_ctx: dict, c: dict) -> dict:
     return {
-        "ticker": ticker,
-        "result": result,
-        "holding": holdings_map.get(ticker),
-        "price": price,
-        "name": td.name,
-        "currency": td.currency,
-        "news_info": news_info,
+        "spy_pct_off_high": spy_ctx.get("spy_pct_off_high"),
+        "spy_ret_6m": spy_ctx.get("spy_ret_6m"),
+        "spy_ret_12m": spy_ctx.get("spy_ret_12m"),
+        "rel_6m": c.get("rel_6m"),
+        "rel_12m": c.get("rel_12m"),
     }
 
 
-def _analyze_batch(tickers: list[str], holdings_map: dict, label: str = "") -> tuple[list[str], list[str]]:
-    """Run Wyckoff analysis on a list of tickers in parallel (10 workers).
+def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
+    """Fetch + Wyckoff-analyze one candidate (entry mode, with market context). No news."""
+    ticker = c["ticker"]
+    td = market_data.fetch_ohlcv(ticker, days=LOOKBACK_DAYS)
+    price = float(td.df["close"].iloc[-1])
+    result = wyckoff.analyze(
+        ticker, td.df, held=False, name=td.name, mode="entry", market_ctx=_market_ctx(spy_ctx, c)
+    )
+    return {
+        "ticker": ticker,
+        "result": result,
+        "price": price,
+        "name": td.name,
+        "currency": td.currency,
+        "quant_score": c.get("score"),
+        "news_info": None,
+    }
 
-    Returns (formatted_blocks, error_strings).
-    """
-    blocks: list[tuple[int, str]] = []  # (original_index, block)
+
+def _analyze_candidates(candidates: list[dict], spy_ctx: dict) -> tuple[list[dict], list[str]]:
+    bundles: list[dict] = []
     errors: list[str] = []
-
     with ThreadPoolExecutor(max_workers=10) as pool:
-        future_to_idx = {pool.submit(_analyze_one, t, holdings_map): i for i, t in enumerate(tickers)}
-        for fut in as_completed(future_to_idx):
-            idx = future_to_idx[fut]
-            ticker = tickers[idx]
+        futures = {pool.submit(_analyze_candidate, c, spy_ctx): c["ticker"] for c in candidates}
+        for fut in as_completed(futures):
+            ticker = futures[fut]
             try:
-                bundle = fut.result()
-                block = _format_result(
-                    bundle["result"],
-                    bundle["holding"],
-                    bundle["price"],
-                    name=bundle["name"],
-                    currency=bundle["currency"],
-                    news_info=bundle["news_info"],
-                )
-                blocks.append((idx, block))
+                bundles.append(fut.result())
             except Exception as e:
                 errors.append(f"{ticker}: {e}")
-                print(f"[weekly] error on {ticker} ({label}): {e}", file=sys.stderr)
-
-    # Restore original order
-    blocks.sort(key=lambda x: x[0])
-    return [b for _, b in blocks], errors
+                print(f"[weekly] analysis error on {ticker}: {e}", file=sys.stderr)
+    return bundles, errors
 
 
-def _send_prescreener_message(candidates: list[dict], spy_ctx: dict, date_str: str) -> None:
-    factor_tags = _load_factor_tags()
-    notifier.send(build_candidates_message(candidates, spy_ctx, factor_tags, date_str))
+# ── scoring / tiering ────────────────────────────────────────────────────────
+
+def _criteria(result: dict) -> int:
+    try:
+        return int(result.get("criteria_met") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
-def run():
+def _event_blob(result: dict) -> str:
+    return " ".join(result.get("key_events", []) + result.get("active_signals", [])).lower()
+
+
+def _signal_weight(result: dict) -> int:
+    blob = _event_blob(result)
+    return sum(1 for s in _ENTRY_EVENTS if s in blob)  # 0–3
+
+
+def _composite(bundle: dict) -> float:
+    """Normalized 0–1 rank: equal weight of criteria, entry-signal richness, quant score."""
+    r = bundle["result"]
+    crit = _criteria(r) / 9.0
+    sig = _signal_weight(r) / 3.0
+    quant = float(bundle.get("quant_score") or 0) / 5.0
+    return (crit + sig + quant) / 3.0
+
+
+def _gates(bundle: dict) -> dict:
+    """Four STRONG gates. Gate C requires news to have been validated AND clean — an
+    unvalidated candidate can be BORDERLINE but never STRONG."""
+    r = bundle["result"]
+    news = bundle.get("news_info")
+    return {
+        "A_rec": r.get("recommendation", "") in ENTRY_RECS,
+        "B_criteria": _criteria(r) >= STRONG_MIN_CRITERIA,
+        "C_news": news is not None and news.get("clean", True),
+        "D_event": any(s in _event_blob(r) for s in _ENTRY_EVENTS),
+    }
+
+
+def _missing(bundle: dict) -> list[str]:
+    g = _gates(bundle)
+    miss = []
+    if not g["A_rec"]:
+        miss.append("rec≠buy/add")
+    if not g["B_criteria"]:
+        miss.append(f"criteria {_criteria(bundle['result'])}<{STRONG_MIN_CRITERIA}")
+    if not g["C_news"]:
+        miss.append("news unverified/flagged")
+    if not g["D_event"]:
+        miss.append("no Spring/SOS/LPS")
+    return miss
+
+
+def _position_size(criteria: int) -> str:
+    if criteria >= 9:
+        return "full position"
+    if criteria >= 7:
+        return "50% position"
+    if criteria >= 5:
+        return "30% position"
+    return "starter only"
+
+
+# ── digest ────────────────────────────────────────────────────────────────
+
+def _build_weekly_digest(
+    spy_ctx: dict,
+    strong: list[dict],
+    borderline: list[dict],
+    factor_tags: dict,
+    date_str: str,
+    errors: list[str],
+) -> str:
+    spy_off = spy_ctx.get("spy_pct_off_high", 0) * 100
+    r6 = spy_ctx.get("spy_ret_6m", 0) * 100
+    r12 = spy_ctx.get("spy_ret_12m", 0) * 100
+    lines = [
+        f"📈 <b>Wyckoff Weekly — {date_str}</b>",
+        f"<i>SPY {spy_off:.1f}% off 52w high · 6m {r6:+.1f}% · 12m {r12:+.1f}%</i>",
+        "",
+        f"🟢 <b>STRONG ({len(strong)})</b>",
+    ]
+    if strong:
+        for b in strong:
+            lines.append(_format_result(
+                b["result"], None, b["price"], name=b["name"],
+                currency=b["currency"], news_info=b.get("news_info"),
+            ))
+            lines.append(f"  📐 Suggested size: {_position_size(_criteria(b['result']))}")
+            lines.append("")
+    else:
+        lines.append("<i>None this week — no candidate cleared all four gates.</i>")
+        lines.append("")
+
+    lines.append(f"🟡 <b>BORDERLINE ({len(borderline)})</b>")
+    if borderline:
+        for b in borderline:
+            lines.append(_format_result(
+                b["result"], None, b["price"], name=b["name"],
+                currency=b["currency"], news_info=b.get("news_info"),
+            ))
+            miss = _missing(b)
+            if miss:
+                lines.append(f"  <i>Missing: {', '.join(miss)}</i>")
+            lines.append("")
+    else:
+        lines.append("<i>None.</i>")
+        lines.append("")
+
+    warnings = _factor_warnings(strong + borderline, factor_tags)
+    if warnings:
+        lines.extend(warnings)
+        lines.append("")
+
+    if errors:
+        safe = ", ".join(html.escape(str(e)) for e in errors)
+        lines.append(f"<i>Errors: {safe}</i>")
+
+    return "\n".join(lines).strip()
+
+
+# ── run ──────────────────────────────────────────────────────────────────────
+
+def run(dry_run: bool = False) -> None:
     date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    factor_tags = _load_factor_tags()
 
-    # Step 1: Prescreener
+    # Stage 1: quantitative prescreen
     print("[weekly] running prescreener...", file=sys.stderr)
     candidates, spy_ctx = screen_universe()
+    print(f"[weekly] {len(candidates)} candidates from prescreen", file=sys.stderr)
 
-    # Step 2: Send prescreener candidates list to Telegram
-    _send_prescreener_message(candidates, spy_ctx, date_str)
-    print(f"[weekly] sent prescreener list ({len(candidates)} candidates)", file=sys.stderr)
+    # Stage 3: LLM Wyckoff on each candidate (entry mode, market context)
+    bundles, errors = _analyze_candidates(candidates, spy_ctx)
+    print(f"[weekly] analyzed {len(bundles)} candidates", file=sys.stderr)
 
-    # Step 3: Full Wyckoff analysis on prescreener candidates
-    candidate_tickers = [c["ticker"] for c in candidates]
-    print(f"[weekly] running Wyckoff on {len(candidate_tickers)} candidates...", file=sys.stderr)
-    # Candidates are not holdings — pass empty map so they show as watchlist entries
-    candidate_blocks, candidate_errors = _analyze_batch(candidate_tickers, {}, label="candidates")
+    # Stage 4: news-validate only the top cut by composite
+    bundles.sort(key=_composite, reverse=True)
+    for b in bundles[:NEWS_CUT]:
+        rec = b["result"].get("recommendation", "")
+        if rec in NEWS_RECS:
+            try:
+                b["news_info"] = news_validator.validate(b["ticker"], b["name"], rec)
+            except Exception as e:
+                print(f"[weekly] news validation failed for {b['ticker']}: {e}", file=sys.stderr)
 
-    # Send candidates Wyckoff report
-    candidate_parts = [f"🔍 <b>Wyckoff Candidates Analysis — {date_str}</b>", ""]
-    candidate_parts.extend(candidate_blocks)
-    if candidate_errors:
-        safe_errors = ", ".join(html.escape(str(e)) for e in candidate_errors)
-        candidate_parts.append(f"\n<i>Errors: {safe_errors}</i>")
-    notifier.send("\n".join(candidate_parts))
-    print(f"[weekly] sent candidates Wyckoff report", file=sys.stderr)
+    # Stage 5: tier STRONG (all gates) vs BORDERLINE (top remaining by composite)
+    strong = sorted(
+        [b for b in bundles if all(_gates(b).values())], key=_composite, reverse=True
+    )[:MAX_PICKS]
+    strong_tickers = {b["ticker"] for b in strong}
+    borderline = sorted(
+        [b for b in bundles if b["ticker"] not in strong_tickers], key=_composite, reverse=True
+    )[: MAX_PICKS - len(strong)]
 
-    # Step 4: Full Wyckoff analysis on portfolio holdings
-    holdings_map = portfolio.load()
-    holding_tickers = list(holdings_map.keys())
-    print(f"[weekly] running Wyckoff on {len(holding_tickers)} holdings...", file=sys.stderr)
-    holdings_blocks, holdings_errors = _analyze_batch(holding_tickers, holdings_map, label="portfolio")
-
-    # Step 5: Send portfolio Wyckoff report
-    portfolio_parts = [f"📊 <b>Wyckoff Portfolio Analysis — {date_str}</b>", ""]
-    portfolio_parts.extend(holdings_blocks)
-    if holdings_errors:
-        safe_errors = ", ".join(html.escape(str(e)) for e in holdings_errors)
-        portfolio_parts.append(f"\n<i>Errors: {safe_errors}</i>")
-    notifier.send("\n".join(portfolio_parts))
-    print(f"[weekly] sent portfolio Wyckoff report", file=sys.stderr)
-
-    total = len(candidate_tickers) + len(holding_tickers)
-    print(f"[weekly] done — {total} tickers analyzed", file=sys.stderr)
+    msg = _build_weekly_digest(spy_ctx, strong, borderline, factor_tags, date_str, errors)
+    if dry_run:
+        print(msg)
+    else:
+        notifier.send(msg)
+    print(
+        f"[weekly] {'(dry-run) ' if dry_run else ''}done — "
+        f"{len(strong)} STRONG, {len(borderline)} BORDERLINE",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="Print digest instead of sending")
+    args = parser.parse_args()
+    run(dry_run=args.dry_run)

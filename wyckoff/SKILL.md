@@ -1,7 +1,7 @@
 ---
 name: wyckoff
-description: Daily Wyckoff method analysis for ETFs and stocks — phase detection, signal identification, and buy/hold/sell recommendations via Telegram. Weekly prescreener proposes watchlist candidates from S&P 500 + NASDAQ 100.
-version: 1.1.0
+description: Wyckoff method analysis for ETFs and stocks via Telegram. Weekly entry funnel (prescreen → Wyckoff LLM → up to 5 tiered buy picks) plus a daily portfolio exit-watch for distribution signals.
+version: 1.2.0
 license: MIT
 metadata:
   hermes:
@@ -10,7 +10,11 @@ metadata:
 
 # Wyckoff Trading Assistant
 
-Runs a daily Wyckoff method analysis on a tracked watchlist and portfolio. Sends a Telegram digest each weekday morning (09:00 Israel time) with phase classification, detected signals, and actionable recommendations.
+Two complementary jobs:
+- **Weekly entry funnel** (Sunday): screens ~600 S&P 500 + NASDAQ 100 names, runs Wyckoff LLM analysis on the survivors, news-validates the top cut, and sends up to **5 tiered entry picks** (🟢 STRONG / 🟡 BORDERLINE) to Telegram. The weekly digest *is* the entry signal.
+- **Daily exit-watch** (Mon–Fri after US close): runs Wyckoff analysis on **held positions only**, tuned to surface distribution/weakness (UT, UTAD, SOW, LPSY, broken support) so you know when to reduce or exit.
+
+Two lightweight daily jobs round it out: a price-move alert scan (≥3.5%) and a portfolio valuation report.
 
 ## Output Example
 
@@ -90,42 +94,55 @@ Key events detected recently. Common signals:
 
 ---
 
-## Hermes Tool: Run Analysis On-Demand
+## Hermes Tool: Run Weekly Entry Funnel On-Demand
 
-When the user asks for a Wyckoff analysis or wants to refresh the digest:
+The weekly funnel is the main entry-signal generator: prescreen ~600 tickers → Wyckoff LLM on survivors → news-validate the top cut → up to 5 tiered picks (STRONG / BORDERLINE).
 
 ```bash
-# Full digest (portfolio + watchlist)
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/weekly.py >> logs/weekly.log 2>&1
 
-# Portfolio only
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section portfolio
-
-# Watchlist only
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section watchlist
+# Preview without sending to Telegram:
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/weekly.py --dry-run
 ```
 
 Examples of what the user might say → what to run:
-- "run wyckoff analysis" / "תריץ ניתוח וויקוף" → `daily.py` (full)
-- "analyze my portfolio" / "תנתח את הפורטפוליו" → `daily.py --section portfolio`
+- "run the weekly analysis" / "תריץ את הניתוח השבועי" → `weekly.py`
+- "find me entry picks" / "מה כדאי לקנות?" → `weekly.py`
+- "what are this week's buys" → `weekly.py`
+
+## Hermes Tool: Run Daily Exit-Watch On-Demand
+
+The daily job reviews **held positions only** for distribution/exit risk (default `--section portfolio`, exit-tuned prompt).
+
+```bash
+# Held positions, exit-watch (default)
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py
+
+# Also available on-demand (entry-tuned): approved watchlist, or everything
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section watchlist
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section all
+
+# Preview without sending:
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --dry-run
+```
+
+Examples of what the user might say → what to run:
+- "analyze my portfolio" / "תנתח את הפורטפוליו" → `daily.py` (portfolio exit-watch)
+- "any exit signals?" / "יש סימני מכירה?" → `daily.py`
 - "check the watchlist" / "תבדוק את רשימת המעקב" → `daily.py --section watchlist`
-- "refresh the digest" / "תעדכן את הסיכום" → `daily.py` (full)
 
-## Hermes Tool: Run Weekly Prescreener On-Demand
+## Hermes Tool: Raw Candidate Scan On-Demand
 
-When the user asks to scan for new watchlist candidates or wants to refresh the candidate list:
+For just the quantitative prescreen (no LLM) — the ~30 raw candidates with scores, saved to `data/watchlist_candidates.json`:
 
 ```bash
 cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/prescreener.py >> logs/prescreener.log 2>&1
 ```
 
-This scans ~600 tickers from S&P 500 + NASDAQ 100 + sector ETFs using 5 programmatic Wyckoff accumulation filters (no LLM). The top ~30 candidates are sent to Telegram and saved to `data/watchlist_candidates.json`. The user reviews and adds approved tickers via `manage.py watchlist-add TICKER`.
-
 Examples of what the user might say → what to run:
 - "scan for watchlist candidates" / "תמצא מועמדים לרשימת המעקב" → `prescreener.py`
 - "run the prescreener" / "תריץ את ה-prescreener" → `prescreener.py`
-- "find me new stocks to watch" / "תמצא מניות חדשות למעקב" → `prescreener.py`
-- "refresh the candidate list" → `prescreener.py`
+- "find me new stocks to watch" → `prescreener.py`
 
 ## Hermes Tool: Deep-Dive Explanation for a Specific Ticker
 
@@ -255,7 +272,7 @@ cd ~/.hermes/skills/wyckoff
 python3 -m venv .venv
 .venv/bin/pip install -q -r requirements.txt
 
-# 3. Register all cron jobs in Hermes (job.json is now an array of 3 jobs)
+# 3. Register all cron jobs in Hermes (job.json is an array of 4 jobs)
 python3 - << 'EOF'
 import json
 JOBS_FILE = "/home/roy650/.hermes/cron/jobs.json"
@@ -282,33 +299,37 @@ cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py
 ```
 wyckoff/
 ├── SKILL.md
-├── job.json              # array of 3 cron jobs (portfolio, watchlist, prescreener)
+├── job.json              # array of 4 cron jobs (weekly, portfolio, price_alerts, portfolio_value)
 ├── requirements.txt
 ├── config.yaml           # approved watchlist + LLM settings
 ├── scripts/
-│   ├── daily.py          # daily runner: fetch → LLM analyze → send digest
-│   │                     #   --section portfolio|watchlist|all
-│   ├── prescreener.py    # weekly screener: S&P 500 + NASDAQ 100 → top 30 candidates
-│   ├── analysis.py       # Wyckoff LLM analysis via OpenRouter
+│   ├── weekly.py         # Sunday entry funnel: prescreen → Wyckoff LLM → news → top-5 tiered
+│   ├── daily.py          # daily exit-watch (default --section portfolio, exit mode)
+│   ├── prescreener.py    # quant screener (no LLM): S&P 500 + NASDAQ 100 → ~30 candidates
+│   ├── analysis.py       # Wyckoff LLM analysis (entry/exit modes + market context)
+│   ├── news.py           # news/fundamental validation for strong recs
+│   ├── price_alerts.py   # daily ≥3.5% move scan (no LLM)
+│   ├── portfolio_value.py# daily P&L valuation report
+│   ├── explain.py        # on-demand plain-language deep dive for one ticker
 │   ├── data.py           # Yahoo Finance OHLCV fetch
 │   ├── holdings.py       # portfolio state (data/holdings.json)
 │   ├── manage.py         # CLI: add/remove holdings and watchlist
-│   └── notifier.py       # Telegram sender
+│   └── notifier.py       # Telegram sender (4096-char auto-split)
 ├── data/
-│   ├── holdings.json           # portfolio positions
+│   ├── holdings.json              # portfolio positions
+│   ├── factor_tags.yaml           # factor concentration tags (committed)
 │   └── watchlist_candidates.json  # latest prescreener output (not committed)
 └── logs/
-    ├── daily.log
-    └── prescreener.log
 ```
 
 ## Schedule
 
-| Job | Cron (UTC) | Israel Time | Description |
-|-----|-----------|-------------|-------------|
-| Portfolio analysis | `0 20 * * 1-5` | 23:00 Mon–Fri | Holdings after US market close |
-| Watchlist analysis | `20 20 * * 1-5` | 23:20 Mon–Fri | Approved watchlist after US close |
-| Prescreener | `0 6 * * 0` | 09:00 Sunday | Scan ~600 tickers, propose candidates |
+| Job | id | Cron (UTC) | Israel Time | Description |
+|-----|-----|-----------|-------------|-------------|
+| Weekly entry funnel | `wyckoff_weekly` | `0 8 * * 0` | 11:00 Sun | Prescreen → Wyckoff → up to 5 tiered picks |
+| Daily exit-watch | `wyckoff_portfolio` | `0 20 * * 1-5` | 23:00 Mon–Fri | Held positions, distribution signals |
+| Price alerts | `wyckoff_price_alerts` | `1 20 * * *` | 23:01 daily | ≥3.5% move scan, no LLM |
+| Portfolio value | `wyckoff_portfolio_value` | `5 20 * * 1-5` | 23:05 Mon–Fri | Daily P&L valuation |
 
 ## Hermes Tool: Bulk Load from Israeli Broker Export
 
