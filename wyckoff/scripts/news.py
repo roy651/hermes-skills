@@ -41,14 +41,18 @@ def validate(ticker: str, name: str, recommendation: str) -> dict:
 
     news_block = "\n".join(f"- {h['headline']}" for h in headlines if h["headline"])
     prompt = (
+        "Base your answer ONLY on the headlines listed below. Do NOT use any prior knowledge "
+        "about this company or events outside this list; if an event is not in these headlines, "
+        "it does not exist for this analysis.\n\n"
         f"Stock {ticker} ({name}). A Wyckoff technical analysis recommends: {recommendation.upper()}.\n\n"
         f"Recent headlines (past 30 days):\n{news_block}\n\n"
-        f"Does any of this contain a corporate event that would INVALIDATE the {recommendation} signal "
+        f"Do these headlines contain a corporate event that would INVALIDATE the {recommendation} signal "
         f"— pending merger/acquisition/buyout, going-private, major regulatory action (FDA/SEC/DOJ), "
         f"bankruptcy, or a severe earnings miss?\n\n"
         f"Respond ONLY with valid JSON, no markdown:\n"
-        f'{{"clean": true, "flag": null, "summary": "1-2 sentence news context"}}\n'
-        f"Set clean=false and describe the flag if such an event exists."
+        f'{{"clean": true, "flag": null, "summary": "1-2 sentence context grounded only in the headlines above"}}\n'
+        f"If no disqualifying event appears in the headlines, return clean=true. "
+        f"Set clean=false and describe the flag only if such an event is present in the headlines."
     )
 
     resp = requests.post(
@@ -71,7 +75,13 @@ def validate(ticker: str, name: str, recommendation: str) -> dict:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        parsed = {"clean": True, "flag": None, "summary": text[:200]}
+        # Fail closed: an unparseable news response must NOT read as "clean" (C4).
+        return {
+            "clean": False,
+            "flag": "news parse failed — unverified",
+            "analyst_consensus": consensus,
+            "summary": text[:200],
+        }
 
     parsed.setdefault("clean", True)
     parsed.setdefault("flag", None)
