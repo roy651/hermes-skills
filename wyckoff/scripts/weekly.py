@@ -159,7 +159,7 @@ def _reconcile_with_events(result: dict, has_event: bool) -> dict:
         result["criteria_met"] = min(int(result.get("criteria_met") or 0), STRONG_MIN_CRITERIA - 1)
     except (TypeError, ValueError):
         result["criteria_met"] = 0
-    result["note"] = "[no programmatic Spring/SOS/LPS] " + (result.get("note") or "")
+    result["note"] = "[unconfirmed — detector found no SOS/LPS] " + (result.get("note") or "")
     return result
 
 
@@ -250,7 +250,7 @@ def _missing(bundle: dict) -> list[str]:
     if not g["C_news"]:
         miss.append("news unverified/flagged")
     if not g["D_event"]:
-        miss.append("no Spring/SOS/LPS")
+        miss.append("no confirmed SOS/LPS")  # a lone Spring is early-stage, not a confirmed entry
     return miss
 
 
