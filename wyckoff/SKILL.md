@@ -314,8 +314,10 @@ wyckoff/
 │   ├── weekly.py         # Sunday entry funnel: prescreen → Wyckoff LLM → news → top-5 tiered
 │   ├── daily.py          # daily exit-watch (default --section portfolio, exit mode)
 │   ├── prescreener.py    # quant screener (no LLM): S&P 500 + NASDAQ 100 → ~30 candidates
-│   ├── analysis.py       # Wyckoff LLM analysis (entry/exit modes + market context)
-│   ├── news.py           # news/fundamental validation for strong recs
+│   ├── events.py         # programmatic range/Spring/SOS/LPS detection (no LLM) + calibration CLI
+│   ├── analysis.py       # Wyckoff LLM analysis (entry/exit modes + market & event context)
+│   ├── news.py           # Finnhub + claude-proxy news/fundamental validation
+│   ├── finnhub.py        # Finnhub client (earnings calendar, market cap, news, consensus)
 │   ├── price_alerts.py   # daily ≥3.5% move scan (no LLM)
 │   ├── portfolio_value.py# daily P&L valuation report
 │   ├── explain.py        # on-demand plain-language deep dive for one ticker
@@ -358,6 +360,7 @@ To load these into Wyckoff holdings:
 - Prescreener: pure Python/math, no LLM — fetches concurrently (10 workers), takes ~2-3 min for ~600 tickers. Filters: regime-aware off-high floor, two-sided rel-perf vs SPY, sector-relative strength, liquidity (ADV), 5 accumulation-shape criteria
 - LLM analysis: via the local claude-proxy on 120 days OHLCV (entry vs exit prompt) — not algorithmic signal detection
 - News/fundamentals: Finnhub (earnings calendar, market cap, company news, analyst consensus) + local claude-proxy reasoning
+- Event detection: `events.py` programmatically detects the trading range, Spring, SOS, and LPS and feeds them to the LLM as ground truth (so criteria 3–8 aren't eyeballed). Calibrate/inspect with `python scripts/events.py TICKER [days]`. Thresholds documented in `references/wyckoff-events-glossary.md`
 - Wyckoff is a swing/position methodology; daily candles are the appropriate timeframe
 - Treat recommendations as a second opinion, not automated trading signals
 - Prescreener candidates in `data/watchlist_candidates.json` are suggestions only; you decide what goes in `config.yaml`

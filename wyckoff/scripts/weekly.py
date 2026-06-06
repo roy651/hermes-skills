@@ -23,6 +23,7 @@ import analysis as wyckoff
 import notifier
 import news as news_validator
 import finnhub
+import events as wyckoff_events
 from prescreener import screen_universe, _factor_warnings, _load_factor_tags
 
 TZ = ZoneInfo("Asia/Jerusalem")
@@ -33,7 +34,6 @@ NEWS_CUT = 8                # news-validate only the top-N by composite (saves A
 STRONG_MIN_CRITERIA = 7     # Gate B threshold
 NEWS_RECS = {"buy", "add", "reduce", "sell"}   # recs worth a news check
 ENTRY_RECS = {"buy", "add"}                    # Gate A
-_ENTRY_EVENTS = ("spring", "sos", "lps")       # Gate D tokens (fuzzy until P3)
 
 _PHASE_EMOJI = {
     "accumulation": "🟡",
@@ -131,12 +131,15 @@ def _market_ctx(spy_ctx: dict, c: dict) -> dict:
 
 
 def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
-    """Fetch + Wyckoff-analyze one candidate (entry mode, with market context). No news."""
+    """Fetch → detect events → Wyckoff-analyze one candidate (entry mode). No news."""
     ticker = c["ticker"]
     td = market_data.fetch_ohlcv(ticker, days=LOOKBACK_DAYS)
     price = float(td.df["close"].iloc[-1])
+    ev = wyckoff_events.detect_events(td.df)
+    event_score, event_labels = wyckoff_events.event_summary(ev)
     result = wyckoff.analyze(
-        ticker, td.df, held=False, name=td.name, mode="entry", market_ctx=_market_ctx(spy_ctx, c)
+        ticker, td.df, held=False, name=td.name, mode="entry",
+        market_ctx=_market_ctx(spy_ctx, c), detected_events=event_labels,
     )
     return {
         "ticker": ticker,
@@ -148,6 +151,9 @@ def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
         "adv_musd": c.get("adv_musd"),
         "sector": c.get("sector"),
         "market_cap": None,
+        "event_score": event_score,
+        "event_labels": event_labels,
+        "has_event": wyckoff_events.has_entry_event(ev),
         "news_info": None,
     }
 
@@ -176,34 +182,24 @@ def _criteria(result: dict) -> int:
         return 0
 
 
-def _event_blob(result: dict) -> str:
-    return " ".join(result.get("key_events", []) + result.get("active_signals", [])).lower()
-
-
-def _signal_weight(result: dict) -> int:
-    blob = _event_blob(result)
-    return sum(1 for s in _ENTRY_EVENTS if s in blob)  # 0–3
-
-
 def _composite(bundle: dict) -> float:
-    """Normalized 0–1 rank: equal weight of criteria, entry-signal richness, quant score."""
-    r = bundle["result"]
-    crit = _criteria(r) / 9.0
-    sig = _signal_weight(r) / 3.0
+    """Normalized 0–1 rank: equal weight of LLM criteria, programmatic event score, quant score."""
+    crit = _criteria(bundle["result"]) / 9.0
+    ev = bundle.get("event_score", 0) / 4.0   # range + Spring + SOS + LPS
     quant = float(bundle.get("quant_score") or 0) / 5.0
-    return (crit + sig + quant) / 3.0
+    return (crit + ev + quant) / 3.0
 
 
 def _gates(bundle: dict) -> dict:
-    """Four STRONG gates. Gate C requires news to have been validated AND clean — an
-    unvalidated candidate can be BORDERLINE but never STRONG."""
+    """Four STRONG gates. Gate C requires news validated AND clean (unvalidated → never STRONG).
+    Gate D is the hard programmatic event flag from events.py."""
     r = bundle["result"]
     news = bundle.get("news_info")
     return {
         "A_rec": r.get("recommendation", "") in ENTRY_RECS,
         "B_criteria": _criteria(r) >= STRONG_MIN_CRITERIA,
         "C_news": news is not None and news.get("clean", True),
-        "D_event": any(s in _event_blob(r) for s in _ENTRY_EVENTS),
+        "D_event": bool(bundle.get("has_event")),
     }
 
 
@@ -242,7 +238,12 @@ def _stats_line(b: dict) -> str:
         parts.append(f"Cap ${cap / 1e9:.1f}B" + (" ⚠️small-cap" if cap < 2e9 else ""))
     if b.get("sector"):
         parts.append(b["sector"])
-    return ("  💧 " + " · ".join(parts)) if parts else ""
+    out = []
+    if parts:
+        out.append("  💧 " + " · ".join(parts))
+    if b.get("event_labels"):
+        out.append("  🔎 Events: " + ", ".join(b["event_labels"]))
+    return "\n".join(out)
 
 
 def _build_weekly_digest(

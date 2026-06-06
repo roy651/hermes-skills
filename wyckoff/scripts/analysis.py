@@ -127,6 +127,7 @@ def analyze(
     name: str = "",
     mode: str = "entry",
     market_ctx: dict | None = None,
+    detected_events: list[str] | None = None,
 ) -> dict:
     context = "Currently HELD in portfolio." if held else "On watchlist (not held)."
     label = f"{ticker} ({name})" if name and name != ticker else ticker
@@ -135,6 +136,12 @@ def analyze(
     user_parts = [f"Ticker: {label}", context]
     if market_ctx:
         user_parts.append("\n" + _market_context_block(market_ctx))
+    if detected_events:
+        user_parts.append(
+            "\nProgrammatically detected Wyckoff events (ground truth from price/volume — "
+            "trust these over your own visual reading of the numbers): "
+            + ", ".join(detected_events) + "."
+        )
     user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{csv}")
     messages = [
         {"role": "system", "content": system},
