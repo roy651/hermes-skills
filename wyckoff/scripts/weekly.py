@@ -80,7 +80,7 @@ def _format_result(
 
     title = f"<b>{ticker}</b>"
     if name and name != ticker:
-        title += f" <i>({name})</i>"
+        title += f" <i>({html.escape(name)})</i>"
 
     if holding:
         qty = holding["qty"]
@@ -93,17 +93,17 @@ def _format_result(
         header = f"{title} · {price_str}"
 
     lines = [header]
-    lines.append(f"  {phase_icon} {phase.title()} ({confidence}) · {criteria}/9 criteria")
+    lines.append(f"  {phase_icon} {html.escape(phase.title())} ({html.escape(str(confidence))}) · {criteria}/9 criteria")
     if signals:
-        lines.append(f"  Signals: {', '.join(signals)}")
+        lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in signals))}")
     action_line = f"  {rec_label}"
     if entry:
-        action_line += f" · Entry ${entry}"
+        action_line += f" · Entry ${html.escape(str(entry))}"
     if stop:
-        action_line += f" · Stop ${stop}"
+        action_line += f" · Stop ${html.escape(str(stop))}"
     lines.append(action_line)
     if note:
-        lines.append(f"  <i>{note}</i>")
+        lines.append(f"  <i>{html.escape(str(note))}</i>")
 
     if news_info:
         if not news_info.get("clean", True):
@@ -210,7 +210,7 @@ def _missing(bundle: dict) -> list[str]:
     if not g["A_rec"]:
         miss.append("rec≠buy/add")
     if not g["B_criteria"]:
-        miss.append(f"criteria {_criteria(bundle['result'])}<{STRONG_MIN_CRITERIA}")
+        miss.append(f"criteria {_criteria(bundle['result'])}, need ≥{STRONG_MIN_CRITERIA}")
     if not g["C_news"]:
         miss.append("news unverified/flagged")
     if not g["D_event"]:

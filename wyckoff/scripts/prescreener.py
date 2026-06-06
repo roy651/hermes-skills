@@ -5,6 +5,7 @@ Fetches S&P 500 + NASDAQ 100 + sector ETFs, scores each on 5 accumulation
 criteria, and sends the top ~30 candidates to Telegram for approval.
 """
 from __future__ import annotations
+import html
 import io
 import json
 import sys
@@ -342,7 +343,7 @@ def format_header(spy_ctx: dict, n: int, date_str: str) -> list[str]:
 def format_candidate_line(r: dict) -> str:
     """One candidate row. Shared by prescreener.run() and weekly.py."""
     flags = [label for key, label in _FLAG_LABELS.items() if r["breakdown"].get(key)]
-    name_part = f" ({r['name']})" if r["name"] != r["ticker"] else ""
+    name_part = f" ({html.escape(str(r['name']))})" if r["name"] != r["ticker"] else ""
     rel = f"6m={r['rel_6m']:+.0f}pp 12m={r['rel_12m']:+.0f}pp vs SPY"
     adv = r.get("adv_musd")
     liq = " ⚠️low-liq" if adv is not None and adv < 50 else ""

@@ -2,6 +2,7 @@
 """Daily Wyckoff analysis — fetches data, runs LLM analysis, sends Telegram digest."""
 from __future__ import annotations
 import argparse
+import html
 import sys
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -62,7 +63,7 @@ def _format_result(result: dict, holding: dict | None, price: float, name: str =
 
     title = f"<b>{ticker}</b>"
     if name and name != ticker:
-        title += f" <i>({name})</i>"
+        title += f" <i>({html.escape(name)})</i>"
 
     if holding:
         qty = holding["qty"]
@@ -74,17 +75,17 @@ def _format_result(result: dict, holding: dict | None, price: float, name: str =
         header = f"{title} · {price_str}"
 
     lines = [header]
-    lines.append(f"  {phase_icon} {phase.title()} ({confidence}) · {criteria}/9 criteria")
+    lines.append(f"  {phase_icon} {html.escape(phase.title())} ({html.escape(str(confidence))}) · {criteria}/9 criteria")
     if signals:
-        lines.append(f"  Signals: {', '.join(signals)}")
+        lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in signals))}")
     action_line = f"  {rec_label}"
     if entry:
-        action_line += f" · Entry ${entry}"
+        action_line += f" · Entry ${html.escape(str(entry))}"
     if stop:
-        action_line += f" · Stop ${stop}"
+        action_line += f" · Stop ${html.escape(str(stop))}"
     lines.append(action_line)
     if note:
-        lines.append(f"  <i>{note}</i>")
+        lines.append(f"  <i>{html.escape(str(note))}</i>")
     return "\n".join(lines)
 
 
