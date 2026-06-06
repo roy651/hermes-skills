@@ -344,9 +344,11 @@ def format_candidate_line(r: dict) -> str:
     flags = [label for key, label in _FLAG_LABELS.items() if r["breakdown"].get(key)]
     name_part = f" ({r['name']})" if r["name"] != r["ticker"] else ""
     rel = f"6m={r['rel_6m']:+.0f}pp 12m={r['rel_12m']:+.0f}pp vs SPY"
+    adv = r.get("adv_musd")
+    liq = " ⚠️low-liq" if adv is not None and adv < 50 else ""
     return (
         f"<b>{r['ticker']}</b>{name_part} · ${r['price']} "
-        f"· {r['pct_off_52w_high']:.0f}% off hi · {r['score']}/5 [{', '.join(flags)}] · <i>{rel}</i>"
+        f"· {r['pct_off_52w_high']:.0f}% off hi · {r['score']}/5 [{', '.join(flags)}] · <i>{rel}{liq}</i>"
     )
 
 
