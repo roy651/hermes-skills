@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import sys
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -129,21 +130,30 @@ def run():
         except Exception as e:
             print(f"[daily] SPY context fetch failed: {e}", file=sys.stderr)
 
-    for ticker in all_tickers:
-        try:
-            td = market_data.fetch_ohlcv(ticker, days=lookback)
-            price = float(td.df["close"].iloc[-1])
-            held = ticker in holdings
-            mode = "exit" if held else "entry"
-            result = wyckoff.analyze(ticker, td.df, held=held, name=td.name, mode=mode, market_ctx=market_ctx)
-            block = _format_result(result, holdings.get(ticker), price, name=td.name, currency=td.currency)
-            if held:
-                portfolio_lines.append(block)
-            else:
-                watchlist_lines.append(block)
-        except Exception as e:
-            errors.append(f"{ticker}: {e}")
-            print(f"[daily] error on {ticker}: {e}", file=sys.stderr)
+    def _analyze(ticker: str):
+        td = market_data.fetch_ohlcv(ticker, days=lookback)
+        price = float(td.df["close"].iloc[-1])
+        held = ticker in holdings
+        mode = "exit" if held else "entry"
+        result = wyckoff.analyze(ticker, td.df, held=held, name=td.name, mode=mode, market_ctx=market_ctx)
+        block = _format_result(result, holdings.get(ticker), price, name=td.name, currency=td.currency)
+        return held, block
+
+    # Parallel (4 workers) — keep low so the local LLM proxy doesn't choke; preserve order
+    ordered: dict[int, tuple[bool, str]] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs = {pool.submit(_analyze, t): i for i, t in enumerate(all_tickers)}
+        for fut in as_completed(futs):
+            i = futs[fut]
+            try:
+                ordered[i] = fut.result()
+            except Exception as e:
+                errors.append(f"{all_tickers[i]}: {e}")
+                print(f"[daily] error on {all_tickers[i]}: {e}", file=sys.stderr)
+    for i in range(len(all_tickers)):
+        if i in ordered:
+            held, block = ordered[i]
+            (portfolio_lines if held else watchlist_lines).append(block)
 
     section_label = {
         "portfolio": "Portfolio — Exit Watch",
