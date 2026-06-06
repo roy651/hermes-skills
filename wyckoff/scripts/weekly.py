@@ -7,6 +7,7 @@ The weekly digest IS the entry signal. Portfolio exit-watch is the separate dail
 from __future__ import annotations
 import argparse
 import html
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -55,6 +56,15 @@ _REC_EMOJI = {
 }
 
 
+def _entry_below_price(entry, price: float) -> bool:
+    """True if the whole entry zone sits below the current price (a limit/pullback order,
+    not a market buy) — used to flag the digest so 'Buy' rows aren't read as buy-now (P2.5)."""
+    nums = re.findall(r"\d+\.?\d*", str(entry))
+    if not nums:
+        return False
+    return price > max(float(x) for x in nums)
+
+
 def _format_result(
     result: dict,
     holding: dict | None,
@@ -97,10 +107,14 @@ def _format_result(
     if signals:
         lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in signals))}")
     action_line = f"  {rec_label}"
-    if entry:
-        action_line += f" · Entry ${html.escape(str(entry))}"
-    if stop:
-        action_line += f" · Stop ${html.escape(str(stop))}"
+    # Only show actionable Entry/Stop for a real buy/add; Watch/Pass rows must not read as tradeable (P1)
+    if rec in ("buy", "add"):
+        if entry:
+            action_line += f" · Entry ${html.escape(str(entry))}"
+            if _entry_below_price(entry, price):
+                action_line += " ⏳ limit (await pullback)"   # entry zone is below current price (P2.5)
+        if stop:
+            action_line += f" · Stop ${html.escape(str(stop))}"
     lines.append(action_line)
     if note:
         lines.append(f"  <i>{html.escape(str(note))}</i>")
@@ -131,6 +145,24 @@ def _market_ctx(spy_ctx: dict, c: dict) -> dict:
     }
 
 
+def _reconcile_with_events(result: dict, has_event: bool) -> dict:
+    """Programmatic events are ground truth. With no confirming Spring/SOS/LPS detected, a
+    bullish high-confidence markup read cannot stand — demote it in code, not the prompt.
+    This makes 'Markup (high) · 9/9 · Buy' impossible without detected structure (S1/S2)."""
+    if has_event:
+        return result
+    if result.get("phase") == "markup":
+        result["phase_confidence"] = "low"
+    if result.get("recommendation") in ("buy", "add"):
+        result["recommendation"] = "watch"
+    try:
+        result["criteria_met"] = min(int(result.get("criteria_met") or 0), STRONG_MIN_CRITERIA - 1)
+    except (TypeError, ValueError):
+        result["criteria_met"] = 0
+    result["note"] = "[no programmatic Spring/SOS/LPS] " + (result.get("note") or "")
+    return result
+
+
 def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
     """Fetch → detect events → Wyckoff-analyze one candidate (entry mode). No news."""
     ticker = c["ticker"]
@@ -138,10 +170,12 @@ def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
     price = float(td.df["close"].iloc[-1])
     ev = wyckoff_events.detect_events(td.df)
     event_score, event_labels = wyckoff_events.event_summary(ev)
+    has_event = wyckoff_events.has_entry_event(ev)
     result = wyckoff.analyze(
         ticker, td.df, held=False, name=td.name, mode="entry",
         market_ctx=_market_ctx(spy_ctx, c), detected_events=event_labels,
     )
+    result = _reconcile_with_events(result, has_event)
     return {
         "ticker": ticker,
         "result": result,
@@ -154,7 +188,7 @@ def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
         "market_cap": None,
         "event_score": event_score,
         "event_labels": event_labels,
-        "has_event": wyckoff_events.has_entry_event(ev),
+        "has_event": has_event,
         "news_info": None,
     }
 
@@ -184,11 +218,13 @@ def _criteria(result: dict) -> int:
 
 
 def _composite(bundle: dict) -> float:
-    """Normalized 0–1 rank: equal weight of LLM criteria, programmatic event score, quant score."""
+    """Structure-dominant 0–1 rank. Entry-event presence is a multiplier (not just additive),
+    so an ungrounded 'range-only' momentum name cannot rank alongside confirmed structure."""
     crit = _criteria(bundle["result"]) / 9.0
-    ev = bundle.get("event_score", 0) / 4.0   # range + Spring + SOS + LPS
-    quant = float(bundle.get("quant_score") or 0) / 5.0
-    return (crit + ev + quant) / 3.0
+    ev = bundle.get("event_score", 0) / 4.0                       # range + Spring + SOS + LPS
+    quant = min(float(bundle.get("quant_score") or 0), 5.0) / 5.0  # clamp (N3)
+    has_ev = 1.0 if bundle.get("has_event") else 0.0
+    return (0.4 * crit + 0.4 * ev + 0.2 * quant) * (0.5 + 0.5 * has_ev)
 
 
 def _gates(bundle: dict) -> dict:
@@ -218,8 +254,9 @@ def _missing(bundle: dict) -> list[str]:
     return miss
 
 
-def _position_size(criteria: int) -> str:
-    if criteria >= 9:
+def _position_size(criteria: int, event_score: int = 0) -> str:
+    # "full position" requires the complete Spring→SOS→LPS chain (event_score 4), not just a high LLM count (N1)
+    if criteria >= 9 and event_score >= 4:
         return "full position"
     if criteria >= 7:
         return "50% position"
@@ -273,7 +310,7 @@ def _build_weekly_digest(
             stats = _stats_line(b)
             if stats:
                 lines.append(stats)
-            lines.append(f"  📐 Suggested size: {_position_size(_criteria(b['result']))}")
+            lines.append(f"  📐 Suggested size: {_position_size(_criteria(b['result']), b.get('event_score', 0))}")
             lines.append("")
     else:
         lines.append("<i>None this week — no candidate cleared all four gates.</i>")
