@@ -36,7 +36,11 @@ CANDIDATES_FILE = Path(__file__).parent.parent / "data" / "watchlist_candidates.
 FACTOR_TAGS_FILE = Path(__file__).parent.parent / "data" / "factor_tags.yaml"
 TOP_N = 30
 MIN_SCORE = 3
-REL_PERF_CAP = 0.15    # disqualify if outperforming SPY/sector by >15pp (markup, not accumulation)
+# The funnel targets BOTH accumulation AND markup-pullback (e.g. a leader basing on an LPS).
+# The regime-aware off-high floor already requires the name to have pulled back, so the
+# rel-perf CAP only needs to exclude *parabolic* momentum still ripping at the highs — hence
+# 30pp, not 15pp. Tightening it back to 15pp drops legitimate strong-RS markup pullbacks (M5).
+REL_PERF_CAP = 0.30    # disqualify only if outperforming SPY/sector by >30pp (parabolic momentum)
 REL_PERF_FLOOR = 0.30  # disqualify if underperforming SPY by >30pp over 6m (falling knife)
 MIN_ADV = 20_000_000   # min 20-day average dollar volume (liquidity floor)
 
