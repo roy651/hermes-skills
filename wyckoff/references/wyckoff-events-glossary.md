@@ -12,12 +12,16 @@ A horizontal base in the recent window. Constants:
 | Constant | Value | Meaning |
 |---|---|---|
 | `RANGE_LOOKBACK` | 60 | bars examined for the range |
-| `RANGE_MAX_WIDTH` | 0.20 | max `close.max/close.min − 1`; wider ⇒ not horizontal |
+| `RANGE_MAX_WIDTH` | 0.20 | max band-to-band spread; wider ⇒ not horizontal |
+| `RANGE_BAND_Q` | 0.10 | support/resistance percentile (10th low / 90th high) |
 | `TOUCH_TOL` | 0.02 | within 2% of a band counts as a touch |
 | `MIN_TOUCHES` | 3 | touches required of **each** of support and resistance |
 
-`support = low.min()`, `resistance = high.max()`, `mid = midpoint`. Returns bounds, width,
-duration, touch counts. All later events require a range first.
+`support = lows.quantile(0.10)`, `resistance = highs.quantile(0.90)`, `mid = midpoint`.
+Percentile *bands* (not absolute min/max) are used deliberately: the Spring is the lowest
+low and an Upthrust the highest high, so if support were `low.min()` a Spring could never
+sit *below* support and would be undetectable. Returns bounds, width, duration, touch
+counts. All later events require a range first.
 
 ## Spring (`detect_events` → `spring`)
 

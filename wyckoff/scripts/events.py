@@ -12,7 +12,8 @@ import pandas as pd
 
 # Detection thresholds (see references/wyckoff-events-glossary.md)
 RANGE_LOOKBACK = 60       # bars to look for a trading range
-RANGE_MAX_WIDTH = 0.20    # max (high-low)/low spread to count as horizontal
+RANGE_MAX_WIDTH = 0.20    # max band-to-band spread to count as horizontal
+RANGE_BAND_Q = 0.10       # support/resistance = 10th/90th percentile (range body, not extremes)
 TOUCH_TOL = 0.02          # within 2% of the band counts as a touch
 MIN_TOUCHES = 3           # touches of each band required
 EVENT_SCAN = 40           # bars back to scan for Spring/SOS/LPS
@@ -24,20 +25,22 @@ LPS_NEAR_SOS = 0.03       # LPS close within 3% of the SOS high
 
 
 def detect_range(df: pd.DataFrame) -> dict | None:
-    """Identify a horizontal trading range in the recent window, or None."""
+    """Identify a horizontal trading range in the recent window, or None.
+
+    Support/resistance are percentile *bands* (the range body), not absolute extremes —
+    so a Spring (lowest low) or Upthrust (highest high) sits below/above the band and stays
+    detectable. Width is measured band-to-band.
+    """
     window = df.tail(RANGE_LOOKBACK)
     if len(window) < 20:
         return None
-    c = window["close"]
-    lo_c, hi_c = float(c.min()), float(c.max())
-    if lo_c <= 0 or (hi_c / lo_c - 1) >= RANGE_MAX_WIDTH:
+    lows, highs = window["low"], window["high"]
+    support = float(lows.quantile(RANGE_BAND_Q))
+    resistance = float(highs.quantile(1 - RANGE_BAND_Q))
+    if support <= 0 or (resistance / support - 1) >= RANGE_MAX_WIDTH:
         return None
-    support = float(window["low"].min())
-    resistance = float(window["high"].max())
-    if support <= 0:
-        return None
-    sup_touches = int((window["low"] <= support * (1 + TOUCH_TOL)).sum())
-    res_touches = int((window["high"] >= resistance * (1 - TOUCH_TOL)).sum())
+    sup_touches = int((lows <= support * (1 + TOUCH_TOL)).sum())
+    res_touches = int((highs >= resistance * (1 - TOUCH_TOL)).sum())
     if sup_touches < MIN_TOUCHES or res_touches < MIN_TOUCHES:
         return None
     return {
@@ -86,8 +89,8 @@ def detect_events(df: pd.DataFrame) -> dict:
         if (close[i] - pc) / pc > SOS_GAIN and vol[i] > SOS_VOL_X * v20[i] and close[i] >= mid:
             out["sos"] = {
                 "date": str(idx[i]),
-                "gain_pct": round((close[i] - pc) / pc * 100, 1),
-                "vol_x": round(vol[i] / v20[i], 1),
+                "gain_pct": round(float((close[i] - pc) / pc * 100), 1),
+                "vol_x": round(float(vol[i] / v20[i]), 1),
                 "high": round(float(high[i]), 2),
             }
             break
@@ -107,7 +110,7 @@ def detect_events(df: pd.DataFrame) -> dict:
                 out["lps"] = {
                     "date": str(idx[i]),
                     "close": round(float(close[i]), 2),
-                    "vol_x_sos": round(vol[i] / sos_vol, 2),
+                    "vol_x_sos": round(float(vol[i] / sos_vol), 2),
                 }
                 break
 
