@@ -23,74 +23,10 @@ import data as market_data
 import analysis as wyckoff
 import holdings as portfolio
 import notifier
+import digest
 from prescreener import _get_spy_context
 
 TZ = ZoneInfo("Asia/Jerusalem")
-
-_PHASE_EMOJI = {
-    "accumulation": "🟡",
-    "markup": "✅",
-    "distribution": "⚠️",
-    "markdown": "🔴",
-    "unclear": "⬜",
-}
-
-_REC_EMOJI = {
-    "buy": "🟢 Buy",
-    "add": "🟢 Add",
-    "hold": "✅ Hold",
-    "reduce": "🟠 Reduce",
-    "sell": "🔴 Sell",
-    "watch": "🔵 Watch",
-    "pass": "⬜ Pass",
-}
-
-
-def _format_result(result: dict, holding: dict | None, price: float, name: str = "", currency: str = "USD") -> str:
-    ticker = result["ticker"]
-    phase = result.get("phase", "unclear")
-    confidence = result.get("phase_confidence", "")
-    criteria = result.get("criteria_met", "?")
-    rec = result.get("recommendation", "")
-    note = result.get("note", "")
-    signals = result.get("active_signals", [])
-    entry = result.get("entry_zone")
-    stop = result.get("stop")
-
-    phase_icon = _PHASE_EMOJI.get(phase, "⬜")
-    rec_label = _REC_EMOJI.get(rec, rec)
-    _sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
-    price_str = f"{_sym}{price:.2f}"
-    if holding:
-        cost_str = f"{_sym}{holding['avg_cost']:.2f}"
-
-    title = f"<b>{ticker}</b>"
-    if name and name != ticker:
-        title += f" <i>({html.escape(name)})</i>"
-
-    if holding:
-        qty = holding["qty"]
-        cost = holding["avg_cost"]
-        pnl_pct = (price - cost) / cost * 100
-        pnl_sign = "+" if pnl_pct >= 0 else ""
-        header = f"{title} · {qty} @ {cost_str} · {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
-    else:
-        header = f"{title} · {price_str}"
-
-    lines = [header]
-    lines.append(f"  {phase_icon} {html.escape(phase.title())} ({html.escape(str(confidence))}) · {criteria}/9 criteria")
-    if signals:
-        lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in signals))}")
-    action_line = f"  {rec_label}"
-    if entry:
-        action_line += f" · Entry ${html.escape(str(entry))}"
-    if stop:
-        action_line += f" · Stop ${html.escape(str(stop))}"
-    lines.append(action_line)
-    if note:
-        lines.append(f"  <i>{html.escape(str(note))}</i>")
-    return "\n".join(lines)
-
 
 _LOCK_PATH = "/tmp/wyckoff_daily.lock"
 _lock_fh = None              # kept alive for the process lifetime; flock releases when the fd closes
@@ -175,7 +111,7 @@ def run():
         held = ticker in holdings
         mode = "exit" if held else "entry"
         result = wyckoff.analyze(ticker, td.df, held=held, name=td.name, mode=mode, market_ctx=market_ctx)
-        block = _format_result(result, holdings.get(ticker), price, name=td.name, currency=td.currency)
+        block = digest.format_block(result, holdings.get(ticker), price, name=td.name, currency=td.currency, gate_action=False)
         return held, block
 
     # Parallel (4 workers) — keep low so the local LLM proxy doesn't choke; preserve order

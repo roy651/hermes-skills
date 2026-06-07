@@ -9,7 +9,6 @@ import argparse
 import fcntl
 import html
 import os
-import re
 import sys
 import threading
 import time
@@ -29,6 +28,7 @@ import notifier
 import news as news_validator
 import finnhub
 import events as wyckoff_events
+import digest
 from prescreener import screen_universe, _factor_warnings, _load_factor_tags
 
 TZ = ZoneInfo("Asia/Jerusalem")
@@ -40,102 +40,6 @@ ANALYZE_WORKERS = 4         # concurrent LLM analyses — keep low; the local pr
 STRONG_MIN_CRITERIA = 7     # Gate B threshold
 NEWS_RECS = {"buy", "add", "reduce", "sell"}   # recs worth a news check
 ENTRY_RECS = {"buy", "add"}                    # Gate A
-
-_PHASE_EMOJI = {
-    "accumulation": "🟡",
-    "markup": "✅",
-    "distribution": "⚠️",
-    "markdown": "🔴",
-    "unclear": "⬜",
-}
-
-_REC_EMOJI = {
-    "buy": "🟢 Buy",
-    "add": "🟢 Add",
-    "hold": "✅ Hold",
-    "reduce": "🟠 Reduce",
-    "sell": "🔴 Sell",
-    "watch": "🔵 Watch",
-    "pass": "⬜ Pass",
-}
-
-
-def _entry_below_price(entry, price: float) -> bool:
-    """True if the whole entry zone sits below the current price (a limit/pullback order,
-    not a market buy) — used to flag the digest so 'Buy' rows aren't read as buy-now (P2.5)."""
-    nums = re.findall(r"\d+\.?\d*", str(entry))
-    if not nums:
-        return False
-    return price > max(float(x) for x in nums)
-
-
-def _format_result(
-    result: dict,
-    holding: dict | None,
-    price: float,
-    name: str = "",
-    currency: str = "USD",
-    news_info: dict | None = None,
-) -> str:
-    ticker = result["ticker"]
-    phase = result.get("phase", "unclear")
-    confidence = result.get("phase_confidence", "")
-    criteria = result.get("criteria_met", "?")
-    rec = result.get("recommendation", "")
-    note = result.get("note", "")
-    signals = result.get("active_signals", [])
-    entry = result.get("entry_zone")
-    stop = result.get("stop")
-
-    phase_icon = _PHASE_EMOJI.get(phase, "⬜")
-    rec_label = _REC_EMOJI.get(rec, rec)
-    _sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
-    price_str = f"{_sym}{price:.2f}"
-
-    title = f"<b>{ticker}</b>"
-    if name and name != ticker:
-        title += f" <i>({html.escape(name)})</i>"
-
-    if holding:
-        qty = holding["qty"]
-        cost = holding["avg_cost"]
-        pnl_pct = (price - cost) / cost * 100
-        pnl_sign = "+" if pnl_pct >= 0 else ""
-        cost_str = f"{_sym}{cost:.2f}"
-        header = f"{title} · {qty} @ {cost_str} · {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
-    else:
-        header = f"{title} · {price_str}"
-
-    lines = [header]
-    lines.append(f"  {phase_icon} {html.escape(phase.title())} ({html.escape(str(confidence))}) · {criteria}/9 criteria")
-    if signals:
-        lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in signals))}")
-    action_line = f"  {rec_label}"
-    # Only show actionable Entry/Stop for a real buy/add; Watch/Pass rows must not read as tradeable (P1)
-    if rec in ("buy", "add"):
-        if entry:
-            action_line += f" · Entry ${html.escape(str(entry))}"
-            if _entry_below_price(entry, price):
-                action_line += " ⏳ limit (await pullback)"   # entry zone is below current price (P2.5)
-        if stop:
-            action_line += f" · Stop ${html.escape(str(stop))}"
-    lines.append(action_line)
-    if note:
-        lines.append(f"  <i>{html.escape(str(note))}</i>")
-
-    if news_info:
-        if not news_info.get("clean", True):
-            flag = news_info.get("flag") or "unknown issue"
-            lines.append(f"  ⚠️ NEWS FLAG: {html.escape(flag)}")
-        consensus = news_info.get("analyst_consensus", "unknown")
-        if consensus and consensus != "unknown":
-            lines.append(f"  👥 Analysts: {html.escape(consensus)}")
-        summary = news_info.get("summary", "")
-        if summary:
-            lines.append(f"  <i>📰 {html.escape(summary)}</i>")
-
-    return "\n".join(lines)
-
 
 # ── analysis ───────────────────────────────────────────────────────────────
 
@@ -311,9 +215,9 @@ def _build_weekly_digest(
     ]
     if strong:
         for b in strong:
-            lines.append(_format_result(
+            lines.append(digest.format_block(
                 b["result"], None, b["price"], name=b["name"],
-                currency=b["currency"], news_info=b.get("news_info"),
+                currency=b["currency"], news_info=b.get("news_info"), gate_action=True,
             ))
             stats = _stats_line(b)
             if stats:
@@ -328,9 +232,9 @@ def _build_weekly_digest(
     lines.append(f"🟡 <b>BORDERLINE ({len(borderline)})</b>")
     if borderline:
         for b in borderline:
-            lines.append(_format_result(
+            lines.append(digest.format_block(
                 b["result"], None, b["price"], name=b["name"],
-                currency=b["currency"], news_info=b.get("news_info"),
+                currency=b["currency"], news_info=b.get("news_info"), gate_action=True,
             ))
             stats = _stats_line(b)
             if stats:
