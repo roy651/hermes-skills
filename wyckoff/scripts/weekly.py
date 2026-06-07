@@ -6,6 +6,7 @@ The weekly digest IS the entry signal. Portfolio exit-watch is the separate dail
 """
 from __future__ import annotations
 import argparse
+import fcntl
 import html
 import re
 import sys
@@ -348,7 +349,26 @@ def _build_weekly_digest(
 
 # ── run ──────────────────────────────────────────────────────────────────────
 
+_LOCK_PATH = "/tmp/wyckoff_weekly.lock"
+_lock_fh = None   # kept alive for the process lifetime; flock releases when the fd closes
+
+
+def _acquire_singleton_lock() -> bool:
+    """Non-blocking exclusive lock so a slow run can't be duplicated by an agent retry.
+    flock is held until the process exits (incl. crash/kill), so it never goes stale."""
+    global _lock_fh
+    _lock_fh = open(_LOCK_PATH, "w")
+    try:
+        fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except (BlockingIOError, OSError):
+        return False
+
+
 def run(dry_run: bool = False) -> None:
+    if not dry_run and not _acquire_singleton_lock():
+        print("[weekly] another run already in progress — exiting (singleton lock)", file=sys.stderr)
+        return
     date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     factor_tags = _load_factor_tags()
 

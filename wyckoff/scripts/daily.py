@@ -2,6 +2,7 @@
 """Daily Wyckoff analysis — fetches data, runs LLM analysis, sends Telegram digest."""
 from __future__ import annotations
 import argparse
+import fcntl
 import html
 import sys
 import os
@@ -89,6 +90,21 @@ def _format_result(result: dict, holding: dict | None, price: float, name: str =
     return "\n".join(lines)
 
 
+_LOCK_PATH = "/tmp/wyckoff_daily.lock"
+_lock_fh = None   # kept alive for the process lifetime; flock releases when the fd closes
+
+
+def _acquire_singleton_lock() -> bool:
+    """Non-blocking exclusive lock so a slow run can't be duplicated by an agent retry."""
+    global _lock_fh
+    _lock_fh = open(_LOCK_PATH, "w")
+    try:
+        fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except (BlockingIOError, OSError):
+        return False
+
+
 def run():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -103,6 +119,10 @@ def run():
         help="Print the digest instead of sending to Telegram",
     )
     args = parser.parse_args()
+
+    if not args.dry_run and not _acquire_singleton_lock():
+        print("[daily] another run already in progress — exiting (singleton lock)", file=sys.stderr)
+        return
 
     cfg_path = Path(__file__).parent.parent / "config.yaml"
     cfg = yaml.safe_load(cfg_path.read_text())
