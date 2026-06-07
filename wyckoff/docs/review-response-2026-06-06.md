@@ -99,7 +99,45 @@ N1: `_position_size` requires the full Spring→SOS→LPS chain (`event_score≥
 position." N2: integer positions in `events.py`. N3: `quant` clamped in `_composite`.
 
 ## Open items for the next pass
-1. **SOS recall calibration** on labeled historical setups (the one quantitative unknown).
+1. **STRONG is structurally rare in strong markets — design decision needed** (see the data point below).
 2. Whether lone-Spring names should ever be STRONG (I say no; flagging the policy choice).
 3. The two `_format_result` copies (`weekly.py`/`daily.py`) remain duplicated — any new digest
    field must be escaped/changed in both.
+
+## Added data point (2026-06-07): why a live run produced 0 STRONG — a prescreen↔SOS tension
+
+The first post-fix scheduled run (SPY ~3% off its 52-week high — i.e. near all-time highs)
+produced **0 STRONG / 5 BORDERLINE (all Watch)**. To check whether that is correct behavior or
+over-strict detection, the event detector was run across **all 30 candidates** for that run:
+
+```
+30 candidates → range: 8 · Spring: 5 · SOS: 0 · LPS: 0   →  STRONG-eligible (SOS or LPS): NONE
+```
+
+The detector is working (it finds ranges and Springs); there were simply **no confirmed SOS/LPS
+anywhere in the funnel**. Control: **IEX** (the prior week's STRONG with SOS+LPS) now detects
+**no range at all** — it has broken out and is no longer basing, so it correctly drops out.
+
+**Root cause — structural, not a detector bug.** The prescreener's regime-aware **off-high floor**
+required candidates to be **≥23% off their 52-week high** in this near-ATH regime. An **SOS is a
+breakout that lifts price back toward the highs**, so a post-SOS name is *less* off its high and
+is **filtered out at Stage 1** before the event detector ever sees it. Consequence: in a strong
+market the funnel surfaces **pre-breakout bases** (range/Spring) and rarely confirmed breakouts,
+so **STRONG is rare by construction**. The earlier M5 change addressed the *relative-performance*
+cap; this run shows the **off-high floor** is the binding constraint.
+
+**Is 0 STRONG correct?** For a precision-first accumulation funnel — yes. An all-Watch week with a
+ranked Spring watch-list ("based + shaken out; waiting on the SOS") is the honest output. The
+question is whether that is the *intended* product behavior near ATHs.
+
+**Decision to make (with the reviewer) — held; no code changed:**
+1. **Leave as-is (recommended).** STRONG = confirmed breakout entry, genuinely rare near ATHs;
+   the Spring watch-list is the actionable output.
+2. **Add a markup-pullback lane** — let a name qualify if it shows a programmatic **LPS near a
+   recent breakout**, bypassing the off-high floor for that specific case. The "proper" fix for
+   the off-high↔SOS tension; meaningful work.
+3. **Ease the off-high floor** (e.g. cap the regime floor at ~15%) so post-SOS names survive
+   Stage 1 — simplest, but admits more near-high momentum names and dilutes accumulation intent.
+
+Recommend folding this into the review and deciding 1–3 deliberately; the current code implements
+option 1.
