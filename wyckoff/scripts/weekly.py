@@ -168,15 +168,19 @@ def _reconcile_with_events(result: dict, has_event: bool) -> dict:
 
 
 def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
-    """Fetch → detect events → Wyckoff-analyze one candidate (entry mode). No news."""
+    """Fetch → detect events → Wyckoff-analyze one candidate (entry mode). No news.
+
+    Detection runs on full history (252d) so the markup-pullback lookback matches the
+    prescreen; the LLM still sees the last LOOKBACK_DAYS for a focused read."""
     ticker = c["ticker"]
-    td = market_data.fetch_ohlcv(ticker, days=LOOKBACK_DAYS)
-    price = float(td.df["close"].iloc[-1])
-    ev = wyckoff_events.detect_events(td.df)
+    td = market_data.fetch_ohlcv(ticker, days=252)
+    df = td.df
+    price = float(df["close"].iloc[-1])
+    ev = wyckoff_events.detect_events(df)
     event_score, event_labels = wyckoff_events.event_summary(ev)
     has_event = wyckoff_events.has_entry_event(ev)
     result = wyckoff.analyze(
-        ticker, td.df, held=False, name=td.name, mode="entry",
+        ticker, df.tail(LOOKBACK_DAYS), held=False, name=td.name, mode="entry",
         market_ctx=_market_ctx(spy_ctx, c), detected_events=event_labels,
     )
     result = _reconcile_with_events(result, has_event)

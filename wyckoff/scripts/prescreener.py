@@ -24,6 +24,7 @@ load_dotenv(Path.home() / ".hermes" / ".env")
 
 import data as market_data
 import notifier
+import events
 
 TZ = ZoneInfo("Asia/Jerusalem")
 
@@ -226,24 +227,31 @@ def _fetch_and_score(
         volume = td.df["volume"]
         price = float(close.iloc[-1])
 
-        # Liquidity floor — 20-day average dollar volume
+        # Liquidity floor — 20-day average dollar volume (always applies)
         adv = float((close.tail(20) * volume.tail(20)).mean())
         if adv < MIN_ADV:
             return None
 
-        # Relative-performance disqualifiers
         base_6m = float(close.iloc[-126]) if len(close) >= 126 else float(close.iloc[0])
         base_12m = float(close.iloc[0])
         ret_6m = (price - base_6m) / base_6m
         ret_12m = (price - base_12m) / base_12m
         rel_6m = ret_6m - spy_ret_6m
         rel_12m = ret_12m - spy_ret_12m
-        if rel_6m > REL_PERF_CAP or rel_12m > REL_PERF_CAP:
-            return None                      # outperforming SPY → markup, not accumulation
-        if rel_6m < -REL_PERF_FLOOR:
-            return None                      # >30pp underperformance → falling knife
-        if sector_ret_6m is not None and (ret_6m - sector_ret_6m) > REL_PERF_CAP:
-            return None                      # leading a (possibly weak) sector → markup vs peers
+
+        # Markup-pullback lane (Option 2): a confirmed-breakout pullback is legitimately near its
+        # highs and outperforming, so it bypasses the off-high floor and rel-perf cap. Still drop
+        # genuine falling knives. Accumulation lane keeps the full rel-perf/sector disqualifiers.
+        mp = events.detect_markup_pullback(td.df)
+        if mp is None:
+            if rel_6m > REL_PERF_CAP or rel_12m > REL_PERF_CAP:
+                return None                  # outperforming SPY → markup, not accumulation
+            if rel_6m < -REL_PERF_FLOOR:
+                return None                  # >30pp underperformance → falling knife
+            if sector_ret_6m is not None and (ret_6m - sector_ret_6m) > REL_PERF_CAP:
+                return None                  # leading a (possibly weak) sector → markup vs peers
+        elif rel_6m < -REL_PERF_FLOOR:
+            return None                      # markup lane, but still avoid a collapsing name
 
         total, breakdown = _score(td.df, required_pct_off_high)
         hi_52 = float(td.df["high"].tail(252).max())
@@ -260,6 +268,7 @@ def _fetch_and_score(
             "adv_musd": round(adv / 1e6, 1),
             "score": total,
             "breakdown": breakdown,
+            "lane": "markup_pullback" if mp else "accumulation",
         }
     except Exception as e:
         print(f"[prescreener] skip {ticker}: {e}", file=sys.stderr)
@@ -309,7 +318,14 @@ def screen_universe() -> tuple[list[dict], dict]:
                 print(f"[prescreener] {i}/{len(universe)} fetched", file=sys.stderr)
 
     results.sort(key=lambda x: (-x["score"], x["pct_off_52w_high"]))
-    top = [r for r in results if r["score"] >= MIN_SCORE][:TOP_N]
+    # Markup-pullback candidates bypass the MIN_SCORE accumulation-shape gate and get priority
+    # (they are confirmed-breakout setups); accumulation candidates fill the remaining slots.
+    mp_cands = [r for r in results if r.get("lane") == "markup_pullback"]
+    acc_cands = [r for r in results if r.get("lane") != "markup_pullback" and r["score"] >= MIN_SCORE]
+    top = (mp_cands + acc_cands)[:TOP_N]
+    if mp_cands:
+        print(f"[prescreener] {len(mp_cands)} markup-pullback candidate(s): "
+              f"{', '.join(r['ticker'] for r in mp_cands[:10])}", file=sys.stderr)
 
     CANDIDATES_FILE.parent.mkdir(parents=True, exist_ok=True)
     CANDIDATES_FILE.write_text(json.dumps({

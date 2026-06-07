@@ -32,6 +32,18 @@ SOS_CUM_VOL_X = 1.3        # window-average volume vs 20d average
 # --- LPS ---
 LPS_VOL_X = 0.7            # LPS volume must be below SOS-bar volume * this (contracting)
 
+# --- Markup-pullback lane (Option 2): a confirmed-breakout pullback, independent of detect_range.
+#     A name in an established markup is no longer in a 60-bar horizontal range, so this is a
+#     separate detection mode that bypasses the prescreen off-high floor for that specific case.
+MP_LOOKBACK = 150         # bars to establish the prior ceiling (breakout level)
+MP_RECENT = 45            # recent window in which the breakout + pullback happen
+MP_BREAKOUT_MARGIN = 0.03 # price must clear the prior ceiling by this to count as a breakout
+MP_PULLBACK_MIN = 0.03    # must pull back at least this from the post-breakout peak (not still extended)
+MP_PULLBACK_MAX = 0.15    # but not MORE than this — a deep give-back near the breakout is a
+                          # near-failed markup, not a shallow LPS "near recent highs"
+MP_HOLD_TOL = 0.02        # LPS low may dip this far below the breakout level but must close above it
+MP_VOL_X = 0.8            # LPS volume must be below the breakout-rally avg * this (contracting)
+
 
 def _cluster_count(positions: list[int], gap: int) -> int:
     """Number of time-separated clusters in a sorted list of bar positions."""
@@ -81,11 +93,59 @@ def detect_range(df: pd.DataFrame) -> dict | None:
     }
 
 
+def detect_markup_pullback(df: pd.DataFrame) -> dict | None:
+    """Second detection mode (Option 2): a confirmed breakout above a prior ceiling, followed by
+    a pullback that *holds above that breakout level* on contracting volume. Independent of
+    detect_range — a name in an established markup is no longer in a horizontal base. Returns
+    None for: no breakout, still-extended (no pullback), or a failed breakout (fell back below)."""
+    n = len(df)
+    if n < 40:
+        return None
+    close = df["close"].values
+    high = df["high"].values
+    low = df["low"].values
+    vol = df["volume"].values
+    idx = df.index
+
+    lb_start = max(0, n - MP_LOOKBACK)
+    recent_start = n - min(MP_RECENT, n - 1)
+    if recent_start <= lb_start + 5:
+        return None
+
+    breakout = float(high[lb_start:recent_start].max())     # prior ceiling
+    if breakout <= 0:
+        return None
+    peak_i = recent_start + int(high[recent_start:n].argmax())
+    peak = float(high[peak_i])
+    if peak < breakout * (1 + MP_BREAKOUT_MARGIN):
+        return None                                          # never cleared the ceiling
+    cur = float(close[-1])
+    if cur >= peak * (1 - MP_PULLBACK_MIN):
+        return None                                          # still extended at the highs, no pullback
+    if cur < peak * (1 - MP_PULLBACK_MAX):
+        return None                                          # deep give-back → near-failed markup, not an LPS
+    if cur < breakout:
+        return None                                          # fell back below breakout → failed breakout
+
+    rally_vol = float(vol[recent_start:peak_i + 1].mean()) if peak_i >= recent_start else 0.0
+    for i in range(peak_i + 1, n):
+        if (low[i] >= breakout * (1 - MP_HOLD_TOL) and close[i] > breakout
+                and rally_vol > 0 and vol[i] < MP_VOL_X * rally_vol):
+            return {
+                "breakout_level": round(breakout, 2),
+                "peak": round(peak, 2),
+                "lps": {"date": str(idx[i]), "close": round(float(close[i]), 2),
+                        "vol_x_rally": round(float(vol[i] / rally_vol), 2)},
+            }
+    return None
+
+
 def detect_events(df: pd.DataFrame) -> dict:
-    """Return {'range','spring','sos','lps'} (each a dict or None), with Spring→SOS→LPS
-    chronology enforced: an SOS that predates the most recent Spring is a failed/prior
-    attempt and is dropped (along with any LPS that depended on it)."""
-    out = {"range": None, "spring": None, "sos": None, "lps": None}
+    """Return {'range','spring','sos','lps','markup_pullback'} (each a dict or None). Spring→SOS→LPS
+    chronology is enforced (an SOS predating the most recent Spring is dropped with its LPS). The
+    markup-pullback lane is detected independently of the range."""
+    out = {"range": None, "spring": None, "sos": None, "lps": None, "markup_pullback": None}
+    out["markup_pullback"] = detect_markup_pullback(df)
     rng = detect_range(df)
     out["range"] = rng
     if not rng:
@@ -162,30 +222,35 @@ def detect_events(df: pd.DataFrame) -> dict:
 
 
 def event_summary(events: dict) -> tuple[int, list[str]]:
-    """(score, display_labels). score: 0 none, 1 range only, 2+ range plus event(s)."""
-    if not events.get("range"):
-        return 0, []
-    score, labels = 1, ["range"]
-    sp = events.get("spring")
-    if sp:
+    """(score, display_labels). Range lane: 1 (range) + Spring/SOS/LPS. Markup-pullback lane: +2."""
+    score, labels = 0, []
+    if events.get("range"):
         score += 1
-        labels.append(f"Spring {sp['date']}" + ("✓" if sp["confirmed"] else ""))
-    so = events.get("sos")
-    if so:
-        score += 1
-        labels.append(f"SOS {so['date']}")
-    lp = events.get("lps")
-    if lp:
-        score += 1
-        labels.append(f"LPS {lp['date']}")
+        labels.append("range")
+        sp = events.get("spring")
+        if sp:
+            score += 1
+            labels.append(f"Spring {sp['date']}" + ("✓" if sp["confirmed"] else ""))
+        so = events.get("sos")
+        if so:
+            score += 1
+            labels.append(f"SOS {so['date']}")
+        lp = events.get("lps")
+        if lp:
+            score += 1
+            labels.append(f"LPS {lp['date']}")
+    mp = events.get("markup_pullback")
+    if mp:
+        score += 2
+        labels.append(f"Markup-pullback LPS {mp['lps']['date']} (holds >breakout {mp['breakout_level']})")
     return score, labels
 
 
 def has_entry_event(events: dict) -> bool:
-    """A *confirmed* entry needs strength (SOS) or the entry pullback (LPS). A lone Spring
-    is early-stage accumulation (watch for SOS), not a confirmed markup entry — so it does
-    NOT clear the hard entry gate on its own."""
-    return bool(events.get("sos") or events.get("lps"))
+    """A *confirmed* entry needs strength (SOS), the range LPS, or a markup-pullback LPS above a
+    breakout. A lone Spring is early-stage accumulation (watch for SOS), not a confirmed entry —
+    so it does NOT clear the hard entry gate on its own."""
+    return bool(events.get("sos") or events.get("lps") or events.get("markup_pullback"))
 
 
 if __name__ == "__main__":

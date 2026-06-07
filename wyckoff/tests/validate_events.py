@@ -196,10 +196,52 @@ def f_uptrend():
     return _df([_bar(p, p + 1, p - 1, p, 1_000_000) for p in (50 + 50 * (i / 119) for i in range(120))])
 
 
+# Markup-pullback lane (Option 2). Large breakouts isolate it from the range lane (tail-60
+# width > 20% → no range), so only `markup_pullback` should fire.
+def _markup_base(rows):
+    for _ in range(4):
+        _hover(rows, 90, 6); _ramp(rows, 90, 99.5, 4); _hover(rows, 99.5, 4); _ramp(rows, 99.5, 90, 4)
+
+
+def f_mp_over():
+    r = []; _markup_base(r)
+    _ramp(r, 90, 120, 6, vol=1_800_000)          # breakout well above ceiling 100, peak ~120
+    _ramp(r, 120, 106, 4, vol=700_000)           # pullback holds above breakout 100, contracting vol
+    return _df(r)
+
+
+def f_mp_extended():
+    r = []; _markup_base(r)
+    _ramp(r, 90, 120, 6, vol=1_800_000)
+    _hover(r, 119, 6, vol=900_000)               # stays at the highs, no pullback (isolates: no range)
+    return _df(r)
+
+
+def f_mp_failed():
+    r = []; _markup_base(r)
+    _ramp(r, 90, 120, 6, vol=1_800_000)
+    _ramp(r, 120, 95, 6, vol=1_500_000)          # fell back below breakout 100 → failed breakout
+    return _df(r)
+
+
+def f_mp_vol_under():
+    r = []; _markup_base(r)
+    _ramp(r, 90, 120, 6, vol=1_800_000)
+    _ramp(r, 120, 106, 4, vol=1_700_000)         # pullback but volume NOT contracting (~0.9x rally)
+    return _df(r)
+
+
+def f_mp_deep():
+    r = []; _markup_base(r)
+    _ramp(r, 90, 130, 6, vol=1_800_000)          # big breakout, peak ~130
+    _ramp(r, 130, 105, 5, vol=700_000)           # deep give-back ~19% off peak (> MAX) though still > breakout
+    return _df(r)
+
+
 # ── corpus: (name, builder, expected, class) ───────────────────────────────────
-# expected: range, spring, sos, lps (bools), score (int), has (bool)
-def _exp(rng, sp, so, lp, score, has):
-    return {"range": rng, "spring": sp, "sos": so, "lps": lp, "score": score, "has": has}
+# expected may be partial — only the keys present are asserted.
+def _exp(rng, sp, so, lp, score, has, mp=False):
+    return {"range": rng, "spring": sp, "sos": so, "lps": lp, "score": score, "has": has, "mp": mp}
 
 
 CORPUS = [
@@ -220,6 +262,12 @@ CORPUS = [
     ("chrono_valid",   f_chrono_valid,   _exp(True, True, True, False, 3, True),  "pos"),
     ("chrono_invalid", f_chrono_invalid, _exp(True, True, False, False, 2, False), "dist"),
     ("uptrend",        f_uptrend,        _exp(False, False, False, False, 0, False), "neg"),
+    # Markup-pullback lane (partial expectations: range isolated out)
+    ("mp_over",        f_mp_over,        {"range": False, "mp": True,  "has": True},  "pos"),
+    ("mp_extended",    f_mp_extended,    {"range": False, "mp": False, "has": False}, "neg"),
+    ("mp_failed",      f_mp_failed,      {"range": False, "mp": False, "has": False}, "dist"),
+    ("mp_vol_under",   f_mp_vol_under,   {"range": False, "mp": False, "has": False}, "neg"),
+    ("mp_deep",        f_mp_deep,        {"range": False, "mp": False, "has": False}, "neg"),
 ]
 
 
@@ -237,6 +285,7 @@ def main() -> int:
             "lps": ev["lps"] is not None,
             "score": events.event_summary(ev)[0],
             "has": events.has_entry_event(ev),
+            "mp": ev.get("markup_pullback") is not None,
         }
         ok = all(got[k] == exp[k] for k in exp)
         if not ok:
