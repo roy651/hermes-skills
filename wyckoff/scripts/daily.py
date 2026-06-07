@@ -6,6 +6,8 @@ import fcntl
 import html
 import sys
 import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -91,7 +93,8 @@ def _format_result(result: dict, holding: dict | None, price: float, name: str =
 
 
 _LOCK_PATH = "/tmp/wyckoff_daily.lock"
-_lock_fh = None   # kept alive for the process lifetime; flock releases when the fd closes
+_lock_fh = None              # kept alive for the process lifetime; flock releases when the fd closes
+MAX_RUNTIME_SEC = 900        # 15 min hard ceiling — bounds a hang so the lock can't be held forever
 
 
 def _acquire_singleton_lock() -> bool:
@@ -103,6 +106,19 @@ def _acquire_singleton_lock() -> bool:
         return True
     except (BlockingIOError, OSError):
         return False
+
+
+def _start_watchdog(seconds: int) -> None:
+    """Daemon timer: if the run hangs past `seconds`, alert + force-exit (releasing the lock)."""
+    def _kill():
+        time.sleep(seconds)
+        print(f"[daily] watchdog: exceeded {seconds}s — force exit", file=sys.stderr)
+        try:
+            notifier.send(f"⚠️ <b>Wyckoff Exit-Watch</b> watchdog: run exceeded {seconds // 60} min and was killed.")
+        except Exception:
+            pass
+        os._exit(2)
+    threading.Thread(target=_kill, daemon=True).start()
 
 
 def run():
@@ -120,9 +136,11 @@ def run():
     )
     args = parser.parse_args()
 
-    if not args.dry_run and not _acquire_singleton_lock():
-        print("[daily] another run already in progress — exiting (singleton lock)", file=sys.stderr)
-        return
+    if not args.dry_run:
+        if not _acquire_singleton_lock():
+            print("[daily] another run already in progress — exiting (singleton lock)", file=sys.stderr)
+            return
+        _start_watchdog(MAX_RUNTIME_SEC)
 
     cfg_path = Path(__file__).parent.parent / "config.yaml"
     cfg = yaml.safe_load(cfg_path.read_text())
@@ -205,4 +223,15 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception as e:
+        # The job runs detached, so surface a hard failure to Telegram (not just the log).
+        import traceback
+        traceback.print_exc()
+        if "--dry-run" not in sys.argv:
+            try:
+                notifier.send(f"⚠️ <b>Wyckoff Exit-Watch failed</b>: {html.escape(str(e)[:300])}")
+            except Exception:
+                pass
+        sys.exit(1)

@@ -2,7 +2,7 @@
   {
     "id": "wyckoff_weekly",
     "name": "Wyckoff Sunday Weekly Analysis",
-    "prompt": "Run the Wyckoff weekly entry funnel (prescreen → Wyckoff LLM → news-validate top cut → up to 5 tiered STRONG/BORDERLINE picks):\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/weekly.py >> logs/weekly.log 2>&1\n```\n\nIf the command exits with a non-zero status, report the last 30 lines of logs/weekly.log to Roy. Otherwise respond with [SILENT].",
+    "prompt": "Launch the Wyckoff weekly entry funnel in the background — it runs ~6 min, holds a singleton lock (so a retry can't duplicate it), and posts its own Telegram digest (and alerts on failure):\n\n```bash\ncd ~/.hermes/skills/wyckoff && nohup .venv/bin/python scripts/weekly.py >> logs/weekly.log 2>&1 & disown\n```\n\nThe job is detached and self-reporting; do not wait for it. Respond with [SILENT].",
     "schedule": {
       "kind": "cron",
       "expr": "0 8 * * 0"
@@ -13,7 +13,7 @@
   {
     "id": "wyckoff_portfolio",
     "name": "Wyckoff Daily Exit Watch",
-    "prompt": "Run the Wyckoff daily portfolio exit-watch:\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section portfolio >> logs/daily.log 2>&1\n```\n\nIf the command exits with a non-zero status, report the last 30 lines of logs/daily.log to Roy. Otherwise respond with [SILENT].",
+    "prompt": "Launch the Wyckoff daily portfolio exit-watch in the background — it holds a singleton lock (so a retry can't duplicate it) and posts its own Telegram digest (and alerts on failure):\n\n```bash\ncd ~/.hermes/skills/wyckoff && nohup .venv/bin/python scripts/daily.py --section portfolio >> logs/daily.log 2>&1 & disown\n```\n\nThe job is detached and self-reporting; do not wait for it. Respond with [SILENT].",
     "schedule": {
       "kind": "cron",
       "expr": "0 20 * * 1-5"

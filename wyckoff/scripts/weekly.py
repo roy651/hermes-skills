@@ -8,8 +8,11 @@ from __future__ import annotations
 import argparse
 import fcntl
 import html
+import os
 import re
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -350,7 +353,8 @@ def _build_weekly_digest(
 # ── run ──────────────────────────────────────────────────────────────────────
 
 _LOCK_PATH = "/tmp/wyckoff_weekly.lock"
-_lock_fh = None   # kept alive for the process lifetime; flock releases when the fd closes
+_lock_fh = None              # kept alive for the process lifetime; flock releases when the fd closes
+MAX_RUNTIME_SEC = 1500       # 25 min hard ceiling — bounds a hang so the lock can't be held forever
 
 
 def _acquire_singleton_lock() -> bool:
@@ -365,10 +369,26 @@ def _acquire_singleton_lock() -> bool:
         return False
 
 
+def _start_watchdog(seconds: int) -> None:
+    """Daemon timer: if the run hangs past `seconds`, alert + force-exit (releasing the lock).
+    A daemon thread never keeps the process alive, so a normal finish ignores it."""
+    def _kill():
+        time.sleep(seconds)
+        print(f"[weekly] watchdog: exceeded {seconds}s — force exit", file=sys.stderr)
+        try:
+            notifier.send(f"⚠️ <b>Wyckoff Weekly</b> watchdog: run exceeded {seconds // 60} min and was killed.")
+        except Exception:
+            pass
+        os._exit(2)
+    threading.Thread(target=_kill, daemon=True).start()
+
+
 def run(dry_run: bool = False) -> None:
-    if not dry_run and not _acquire_singleton_lock():
-        print("[weekly] another run already in progress — exiting (singleton lock)", file=sys.stderr)
-        return
+    if not dry_run:
+        if not _acquire_singleton_lock():
+            print("[weekly] another run already in progress — exiting (singleton lock)", file=sys.stderr)
+            return
+        _start_watchdog(MAX_RUNTIME_SEC)
     date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     factor_tags = _load_factor_tags()
 
@@ -432,4 +452,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Print digest instead of sending")
     args = parser.parse_args()
-    run(dry_run=args.dry_run)
+    try:
+        run(dry_run=args.dry_run)
+    except Exception as e:
+        # The job runs detached, so surface a hard failure to Telegram (not just the log).
+        import traceback
+        traceback.print_exc()
+        if not args.dry_run:
+            try:
+                notifier.send(f"⚠️ <b>Wyckoff Weekly failed</b>: {html.escape(str(e)[:300])}")
+            except Exception:
+                pass
+        sys.exit(1)
