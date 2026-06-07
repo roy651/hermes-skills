@@ -37,6 +37,7 @@ CANDIDATES_FILE = Path(__file__).parent.parent / "data" / "watchlist_candidates.
 FACTOR_TAGS_FILE = Path(__file__).parent.parent / "data" / "factor_tags.yaml"
 TOP_N = 30
 MIN_SCORE = 3
+MP_PRESCREEN_CAP = 10  # max markup-pullback candidates admitted, so they don't crowd out accumulation
 # The funnel targets BOTH accumulation AND markup-pullback (e.g. a leader basing on an LPS).
 # The regime-aware off-high floor already requires the name to have pulled back, so the
 # rel-perf CAP only needs to exclude *parabolic* momentum still ripping at the highs — hence
@@ -269,6 +270,7 @@ def _fetch_and_score(
             "score": total,
             "breakdown": breakdown,
             "lane": "markup_pullback" if mp else "accumulation",
+            "mp_depth_pct": round((mp["peak"] - price) / mp["peak"] * 100, 1) if mp else None,
         }
     except Exception as e:
         print(f"[prescreener] skip {ticker}: {e}", file=sys.stderr)
@@ -318,14 +320,19 @@ def screen_universe() -> tuple[list[dict], dict]:
                 print(f"[prescreener] {i}/{len(universe)} fetched", file=sys.stderr)
 
     results.sort(key=lambda x: (-x["score"], x["pct_off_52w_high"]))
-    # Markup-pullback candidates bypass the MIN_SCORE accumulation-shape gate and get priority
-    # (they are confirmed-breakout setups); accumulation candidates fill the remaining slots.
+    # Markup-pullback candidates bypass the MIN_SCORE accumulation-shape gate, but are capped
+    # (and ranked shallowest-pullback first, i.e. nearest the highs) so they don't crowd out
+    # the accumulation lane; accumulation candidates fill the remaining slots.
     mp_cands = [r for r in results if r.get("lane") == "markup_pullback"]
+    mp_cands.sort(key=lambda x: x.get("mp_depth_pct") if x.get("mp_depth_pct") is not None else 99)
+    mp_total = len(mp_cands)
+    mp_cands = mp_cands[:MP_PRESCREEN_CAP]
     acc_cands = [r for r in results if r.get("lane") != "markup_pullback" and r["score"] >= MIN_SCORE]
+    acc_cands.sort(key=lambda x: (-x["score"], x["pct_off_52w_high"]))
     top = (mp_cands + acc_cands)[:TOP_N]
-    if mp_cands:
-        print(f"[prescreener] {len(mp_cands)} markup-pullback candidate(s): "
-              f"{', '.join(r['ticker'] for r in mp_cands[:10])}", file=sys.stderr)
+    if mp_total:
+        print(f"[prescreener] {mp_total} markup-pullback candidate(s); admitting top {len(mp_cands)}: "
+              f"{', '.join(r['ticker'] for r in mp_cands)}", file=sys.stderr)
 
     CANDIDATES_FILE.parent.mkdir(parents=True, exist_ok=True)
     CANDIDATES_FILE.write_text(json.dumps({
