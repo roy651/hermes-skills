@@ -317,7 +317,8 @@ def _build_weekly_digest(
             lines.append(f"  📐 Suggested size: {_position_size(_criteria(b['result']), b.get('event_score', 0))}")
             lines.append("")
     else:
-        lines.append("<i>None this week — no candidate cleared all four gates.</i>")
+        lines.append("<i>No confirmed breakouts this week — bases still forming. "
+                     "The Watch list below shows the strongest setups (range + Spring) awaiting an SOS.</i>")
         lines.append("")
 
     lines.append(f"🟡 <b>BORDERLINE ({len(borderline)})</b>")

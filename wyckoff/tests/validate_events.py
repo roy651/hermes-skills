@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Re-runnable calibration harness for events.py — synthetic controls.
+"""Ground-truth calibration harness for events.py (Tier 1: synthetic boundary pairs).
 
-Controls:
-  1. valid accumulation  : range → Spring → single-bar SOS → LPS    (all fire, has_event=True)
-  2. out-of-order         : SOS then a *later* Spring                 (SOS dropped, has_event=False)
-  3. multi-bar SOS + LPS  : 3-bar push clears resistance (no +4% bar);
-                            LPS low sits well below the SOS high      (SOS kind=multi, LPS fires)
-  4. uptrend              : steady markup                             (no range)
+For each decision threshold in events.py we hand-build a *matched pair* of OHLCV fixtures
+that straddle the boundary (one just inside, one just outside) and label the expected
+`range/spring/sos/lps`, `event_score`, and `has_entry_event`. The harness asserts every
+label and prints a confusion matrix for `has_entry_event` (the FP/FN we actually care about).
 
-Run on the mini-PC (needs pandas):  .venv/bin/python tests/validate_events.py
+Pass bar:
+  * every fixture matches its label exactly, and
+  * ZERO false positives on the `dist` (distribution / failed-breakout) class.
+
+Deterministic + offline (no network, no randomness).
+Run:  .venv/bin/python tests/validate_events.py
+
+Tier 2 (curated real historical windows) is added separately as committed CSV fixtures.
 """
 import sys
 from pathlib import Path
@@ -18,11 +23,13 @@ import pandas as pd
 import events
 
 
+# ── bar builders ──────────────────────────────────────────────────────────────
+
 def _bar(o, h, l, c, v):
     return {"open": o, "high": h, "low": l, "close": c, "volume": v}
 
 
-def _hover(rows, level, n, spread=0.6, vol=1_000_000):
+def _hover(rows, level, n, spread=0.5, vol=1_000_000):
     for _ in range(n):
         rows.append(_bar(level, level + spread, level - spread, level, vol))
 
@@ -30,92 +37,237 @@ def _hover(rows, level, n, spread=0.6, vol=1_000_000):
 def _ramp(rows, a, b, n, vol=1_000_000):
     for k in range(n):
         p = a + (b - a) * ((k + 1) / n)
-        rows.append(_bar(p, p + 0.5, p - 0.5, p, vol))
+        rows.append(_bar(p, p + 0.4, p - 0.4, p, vol))
 
 
-def _base_range(rows):
-    """Downtrend into a 3-wave trading range ~80–92 (distinct, time-separated band touches)."""
-    for i in range(30):
-        p = 100 - 18 * (i / 29)               # 100 → 82
-        rows.append(_bar(p, p + 0.4, p - 0.4, p, 1_000_000))
-    for lo, hi in [(80.5, 91.5), (80.7, 91.8), (80.6, 91.6)]:
-        _hover(rows, lo, 4)                   # support visit
-        _ramp(rows, lo, hi, 4)
-        _hover(rows, hi, 4)                   # resistance visit
-        _ramp(rows, hi, lo, 4)
+def _last(rows):
+    return rows[-1]["close"]
+
+
+def _lift(rows, target, n=3, vol=1_000_000):
+    _ramp(rows, _last(rows), target, n, vol)
 
 
 def _df(rows):
     return pd.DataFrame(rows, index=pd.date_range("2026-01-01", periods=len(rows), freq="D"))
 
 
-def acc_valid():
-    rows = []
-    _base_range(rows)
-    rows.append(_bar(81, 82, 79.0, 82.0, 1_400_000))     # Spring (pierce <support, recover)
-    rows.append(_bar(82, 84, 81.5, 83.5, 1_100_000))     # confirm
-    rows.append(_bar(83.5, 85, 83, 84.0, 1_000_000))     # confirm
-    rows.append(_bar(84, 89.5, 84, 88.8, 2_600_000))     # SOS (single bar, +5.7%, 2.6x vol)
-    rows.append(_bar(88.8, 89, 86.5, 87.2, 800_000))
-    rows.append(_bar(87.2, 88, 86.8, 87.6, 600_000))     # LPS (low vol, holds > mid, < SOS high)
-    return _df(rows)
+def _base_range(rows):
+    """Downtrend into a clean 3-wave range ~80–92 (support q10≈80, resistance q90≈92, mid≈86),
+    with 3 time-separated touches of each band and no Spring (lows never pierce support)."""
+    for i in range(30):
+        p = 100 - 18 * (i / 29)
+        rows.append(_bar(p, p + 0.4, p - 0.4, p, 1_000_000))
+    for lo, hi in [(80.5, 91.5), (80.7, 91.8), (80.6, 91.6)]:
+        _hover(rows, lo, 4)
+        _ramp(rows, lo, hi, 4)
+        _hover(rows, hi, 4)
+        _ramp(rows, hi, lo, 4)
 
 
-def out_of_order():
-    rows = []
-    _base_range(rows)
-    rows.append(_bar(84, 89.5, 84, 88.8, 2_600_000))     # SOS first (earlier)
-    _ramp(rows, 88.8, 81.0, 6)                           # falls back into the range
-    _hover(rows, 81.0, 3)
-    rows.append(_bar(81, 82, 79.0, 82.0, 1_400_000))     # Spring LATER (more recent than SOS)
-    rows.append(_bar(82, 84, 81.5, 83.5, 1_100_000))     # confirm
-    return _df(rows)
+# ── fixture builders (each returns a DataFrame) ────────────────────────────────
+
+# SOS single-bar gain threshold (SOS_GAIN=0.04), vol fixed at 1.6x
+def f_sos_gain_over():
+    r = []; _base_range(r); _lift(r, 84, 3)
+    r.append(_bar(84, 88, 84, 84 * 1.042, 1_600_000))      # +4.2% > 4%, vol 1.6x, close 87.5 ≥ mid
+    return _df(r)
 
 
-def multi_sos_lps():
-    rows = []
-    _base_range(rows)
-    rows.append(_bar(86, 88, 85, 87.5, 1_400_000))       # 3-bar push, no single +4% bar
-    rows.append(_bar(87.5, 90, 87, 89.5, 1_500_000))
-    rows.append(_bar(89.5, 93.5, 89, 93.0, 1_600_000))   # clears resistance ~92 (multi SOS)
-    rows.append(_bar(93, 93.2, 88.0, 89.5, 700_000))     # LPS: low 88 (well below SOS high 93.5), low vol
-    return _df(rows)
+def f_sos_gain_under():
+    r = []; _base_range(r); _lift(r, 84, 3)
+    r.append(_bar(84, 88, 84, 84 * 1.038, 1_600_000))      # +3.8% < 4% (and no multi: < resistance)
+    return _df(r)
 
 
-def uptrend():
-    rows = [_bar(p, p + 1, p - 1, p, 1_000_000) for p in (50 + 50 * (i / 119) for i in range(120))]
-    return _df(rows)
+# SOS single-bar volume threshold (SOS_VOL_X=1.5), gain fixed at +4.5%
+def f_sos_vol_over():
+    r = []; _base_range(r); _lift(r, 84, 3)
+    r.append(_bar(84, 88, 84, 84 * 1.045, 1_600_000))      # 1.6x > 1.5x
+    return _df(r)
+
+
+def f_sos_vol_under():
+    r = []; _base_range(r); _lift(r, 84, 3)
+    r.append(_bar(84, 88, 84, 84 * 1.045, 1_400_000))      # 1.4x < 1.5x
+    return _df(r)
+
+
+# SOS multi-bar (SOS_CUM_GAIN=0.06 / clears resistance / SOS_CUM_VOL_X=1.3), no single +4% bar
+def f_sos_cum_over():
+    r = []; _base_range(r); _lift(r, 86, 3)
+    r.append(_bar(86, 88.5, 86, 88.0, 1_400_000))          # +2.3%
+    r.append(_bar(88, 91.0, 88, 90.5, 1_400_000))          # +2.8%
+    r.append(_bar(90.5, 93.5, 90.5, 93.0, 1_400_000))      # +2.8%; 3-bar +8.1% clears resistance 92
+    return _df(r)
+
+
+def f_sos_cum_under():
+    r = []; _base_range(r); _lift(r, 86, 3)
+    r.append(_bar(86, 87.5, 86, 87.3, 1_400_000))          # 3-bar cum ≈ +5.7% (< 6%) and < resistance
+    r.append(_bar(87.3, 88.5, 87.3, 88.2, 1_400_000))
+    r.append(_bar(88.2, 91.5, 88.2, 90.9, 1_400_000))
+    return _df(r)
+
+
+# Touch clusters (MIN_TOUCH_CLUSTERS=2 / TOUCH_CLUSTER_GAP=5) — range present vs not
+def f_clusters_over():
+    r = []
+    _hover(r, 80.5, 4); _ramp(r, 80.5, 92, 4); _hover(r, 92, 4); _ramp(r, 92, 80.5, 4)
+    _hover(r, 80.5, 4); _ramp(r, 80.5, 92, 4); _hover(r, 92, 4)   # 2 visits each, ~8 bars apart
+    return _df(r)
+
+
+def f_clusters_under():
+    r = []
+    _hover(r, 92, 8); _ramp(r, 92, 80.5, 4); _hover(r, 80.5, 6); _ramp(r, 80.5, 92, 4); _hover(r, 92, 8)
+    return _df(r)   # support touched once (1 cluster) → range rejected
+
+
+# Range width (RANGE_MAX_WIDTH=0.20)
+def _two_wave(support, resistance):
+    r = []
+    _hover(r, support, 4); _ramp(r, support, resistance, 4); _hover(r, resistance, 4)
+    _ramp(r, resistance, support, 4); _hover(r, support, 4); _ramp(r, support, resistance, 4)
+    _hover(r, resistance, 4)
+    return r
+
+
+def f_width_over():
+    return _df(_two_wave(80.0, 80.0 * 1.18))   # 18% < 20% → range
+
+
+def f_width_under():
+    return _df(_two_wave(80.0, 80.0 * 1.22))   # 22% > 20% → no range
+
+
+# Spring pierce (SPRING_PIERCE=0.99) — support q10 ≈ 80, so support*0.99 ≈ 79.2
+def f_spring_over():
+    r = []; _base_range(r)
+    r.append(_bar(81, 82, 80.0 * 0.985, 82.0, 1_300_000))   # low 78.8 < 79.2, closes above support
+    r.append(_bar(82, 83.5, 81.5, 83.0, 1_100_000))
+    return _df(r)
+
+
+def f_spring_under():
+    r = []; _base_range(r)
+    r.append(_bar(81, 82, 80.0 * 0.995, 81.5, 1_300_000))   # low 79.6 > 79.2 → no spring
+    r.append(_bar(81.5, 82.5, 81.0, 82.0, 1_100_000))
+    return _df(r)
+
+
+# LPS volume (LPS_VOL_X=0.7) — needs a valid SOS first (sos_vol = 1.6M)
+def _range_then_sos(r):
+    _base_range(r); _lift(r, 84, 3)
+    r.append(_bar(84, 88.5, 84, 88.0, 1_600_000))          # single SOS, high 88.5, vol 1.6M
+
+
+def f_lps_over():
+    r = []; _range_then_sos(r)
+    r.append(_bar(88, 88.3, 86.5, 87.0, 1_040_000))        # 0.65x SOS vol → LPS (holds > mid, < SOS high)
+    return _df(r)
+
+
+def f_lps_under():
+    r = []; _range_then_sos(r)
+    r.append(_bar(88, 88.3, 86.5, 87.0, 1_200_000))        # 0.75x SOS vol → no LPS (SOS still present)
+    return _df(r)
+
+
+# Chronology (spring_i vs sos_i)
+def f_chrono_valid():
+    r = []; _base_range(r)
+    r.append(_bar(81, 82, 78.8, 82.0, 1_300_000))          # Spring
+    r.append(_bar(82, 84, 81.5, 83.5, 1_100_000)); r.append(_bar(83.5, 85, 83, 84.0, 1_000_000))
+    r.append(_bar(84, 88.5, 84, 88.0, 1_600_000))          # SOS after Spring → valid
+    return _df(r)
+
+
+def f_chrono_invalid():
+    r = []; _base_range(r); _lift(r, 84, 3)
+    r.append(_bar(84, 88.5, 84, 88.0, 1_600_000))          # SOS first
+    _ramp(r, 88, 81, 6); _hover(r, 81, 3)
+    r.append(_bar(81, 82, 78.8, 82.0, 1_300_000))          # Spring LATER → SOS must be dropped
+    r.append(_bar(82, 83.5, 81.5, 83.0, 1_100_000))
+    return _df(r)
+
+
+def f_uptrend():
+    return _df([_bar(p, p + 1, p - 1, p, 1_000_000) for p in (50 + 50 * (i / 119) for i in range(120))])
+
+
+# ── corpus: (name, builder, expected, class) ───────────────────────────────────
+# expected: range, spring, sos, lps (bools), score (int), has (bool)
+def _exp(rng, sp, so, lp, score, has):
+    return {"range": rng, "spring": sp, "sos": so, "lps": lp, "score": score, "has": has}
+
+
+CORPUS = [
+    ("sos_gain_over",  f_sos_gain_over,  _exp(True, False, True, False, 2, True),  "pos"),
+    ("sos_gain_under", f_sos_gain_under, _exp(True, False, False, False, 1, False), "neg"),
+    ("sos_vol_over",   f_sos_vol_over,   _exp(True, False, True, False, 2, True),  "pos"),
+    ("sos_vol_under",  f_sos_vol_under,  _exp(True, False, False, False, 1, False), "neg"),
+    ("sos_cum_over",   f_sos_cum_over,   _exp(True, False, True, False, 2, True),  "pos"),
+    ("sos_cum_under",  f_sos_cum_under,  _exp(True, False, False, False, 1, False), "neg"),
+    ("clusters_over",  f_clusters_over,  _exp(True, False, False, False, 1, False), "neg"),
+    ("clusters_under", f_clusters_under, _exp(False, False, False, False, 0, False), "neg"),
+    ("width_over",     f_width_over,     _exp(True, False, False, False, 1, False), "neg"),
+    ("width_under",    f_width_under,    _exp(False, False, False, False, 0, False), "neg"),
+    ("spring_over",    f_spring_over,    _exp(True, True, False, False, 2, False), "neg"),
+    ("spring_under",   f_spring_under,   _exp(True, False, False, False, 1, False), "neg"),
+    ("lps_over",       f_lps_over,       _exp(True, False, True, True, 3, True),  "pos"),
+    ("lps_under",      f_lps_under,      _exp(True, False, True, False, 2, True),  "pos"),
+    ("chrono_valid",   f_chrono_valid,   _exp(True, True, True, False, 3, True),  "pos"),
+    ("chrono_invalid", f_chrono_invalid, _exp(True, True, False, False, 2, False), "dist"),
+    ("uptrend",        f_uptrend,        _exp(False, False, False, False, 0, False), "neg"),
+]
 
 
 def main() -> int:
-    ok = True
+    rows_out, failures = [], []
+    cm = {"TP": 0, "FP": 0, "FN": 0, "TN": 0}
+    dist_fp = 0
 
-    a = events.detect_events(acc_valid())
-    c1 = all([a["range"], a["spring"], a["sos"], a["lps"], events.has_entry_event(a)])
-    print(f"1. valid accumulation  → {'PASS' if c1 else 'FAIL'}  {events.event_summary(a)[1]}")
-    if not c1:
-        print("   ", a); ok = False
+    for name, build, exp, cls in CORPUS:
+        ev = events.detect_events(build())
+        got = {
+            "range": ev["range"] is not None,
+            "spring": ev["spring"] is not None,
+            "sos": ev["sos"] is not None,
+            "lps": ev["lps"] is not None,
+            "score": events.event_summary(ev)[0],
+            "has": events.has_entry_event(ev),
+        }
+        ok = all(got[k] == exp[k] for k in exp)
+        if not ok:
+            diffs = {k: (exp[k], got[k]) for k in exp if got[k] != exp[k]}
+            failures.append((name, diffs))
 
-    b = events.detect_events(out_of_order())
-    c2 = b["range"] and b["spring"] and b["sos"] is None and not events.has_entry_event(b)
-    print(f"2. out-of-order (drop SOS) → {'PASS' if c2 else 'FAIL'}  sos={b['sos']} has_event={events.has_entry_event(b)}")
-    if not c2:
-        print("   ", b); ok = False
+        lt, lp = exp["has"], got["has"]   # confusion matrix on has_entry_event
+        cm["TP" if (lt and lp) else "FN" if lt else "FP" if lp else "TN"] += 1
+        if cls == "dist" and lp:
+            dist_fp += 1
+        rows_out.append((name, cls, "ok" if ok else "FAIL"))
 
-    m = events.detect_events(multi_sos_lps())
-    c3 = m["sos"] and m["sos"].get("kind") == "multi" and m["lps"] and events.has_entry_event(m)
-    print(f"3. multi-bar SOS + LPS → {'PASS' if c3 else 'FAIL'}  sos={m['sos']} lps={m['lps']}")
-    if not c3:
-        print("   ", m); ok = False
+    print("Tier 1 boundary-pair corpus:")
+    for name, cls, status in rows_out:
+        print(f"  [{status:4}] {name:16} ({cls})")
 
-    u = events.detect_events(uptrend())
-    c4 = u["range"] is None
-    print(f"4. uptrend (no range)  → {'PASS' if c4 else 'FAIL'}  range={u['range']}")
-    if not c4:
-        ok = False
+    print("\nhas_entry_event confusion matrix:")
+    print(f"  TP={cm['TP']}  FP={cm['FP']}  FN={cm['FN']}  TN={cm['TN']}")
+    tp, fp, fn = cm["TP"], cm["FP"], cm["FN"]
+    prec = tp / (tp + fp) if (tp + fp) else 1.0
+    rec = tp / (tp + fn) if (tp + fn) else 1.0
+    print(f"  precision={prec:.2f}  recall={rec:.2f}")
+    print(f"  distribution-class false positives: {dist_fp} (pass bar: 0)")
 
-    print("\nRESULT:", "ALL PASS ✅" if ok else "FAILURES — recalibrate ❌")
-    return 0 if ok else 1
+    passed = not failures and dist_fp == 0
+    if failures:
+        print("\nMislabeled fixtures:")
+        for name, diffs in failures:
+            print(f"  {name}: {diffs}   (expected, got)")
+    print("\nRESULT:", "ALL PASS ✅" if passed else "FAILURES — recalibrate ❌")
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
