@@ -14,11 +14,18 @@ class TickerData(NamedTuple):
     currency: str  # e.g. "USD" or "ILS"
 
 
-def fetch_ohlcv(ticker: str, days: int = 120) -> TickerData:
-    range_param = "1y" if days <= 252 else "2y"
+def fetch_ohlcv(ticker: str, days: int = 120, start: str | None = None, end: str | None = None) -> TickerData:
+    # Explicit ISO date range (start/end) → use period1/period2 for historical windows (fixtures);
+    # otherwise the trailing range. Date parsing is only reached when start/end are passed.
+    if start and end:
+        p1 = int(datetime.fromisoformat(start).replace(tzinfo=timezone.utc).timestamp())
+        p2 = int(datetime.fromisoformat(end).replace(tzinfo=timezone.utc).timestamp())
+        params = {"interval": "1d", "period1": p1, "period2": p2}
+    else:
+        params = {"interval": "1d", "range": "1y" if days <= 252 else "2y"}
     resp = requests.get(
         _BASE.format(ticker=ticker),
-        params={"interval": "1d", "range": range_param},
+        params=params,
         headers=_HEADERS,
         timeout=30,
     )
@@ -49,7 +56,7 @@ def fetch_ohlcv(ticker: str, days: int = 120) -> TickerData:
         "volume": q["volume"],
     }).set_index("Date").dropna()
 
-    df = df.tail(days).round(4)
+    df = (df if (start and end) else df.tail(days)).round(4)
     if df.empty:
         raise ValueError(f"No data returned for {ticker}")
     return TickerData(df=df, name=name, currency=display_currency)

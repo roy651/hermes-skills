@@ -96,11 +96,13 @@ def detect_range(df: pd.DataFrame) -> dict | None:
     }
 
 
-def detect_markup_pullback(df: pd.DataFrame) -> dict | None:
+def detect_markup_pullback(df: pd.DataFrame, enforce_effort: bool = True) -> dict | None:
     """Second detection mode (Option 2): a confirmed breakout above a prior ceiling, followed by
     a pullback that *holds above that breakout level* on contracting volume. Independent of
     detect_range — a name in an established markup is no longer in a horizontal base. Returns
-    None for: no breakout, still-extended (no pullback), or a failed breakout (fell back below)."""
+    None for: no breakout, still-extended (no pullback), a failed breakout (fell back below), or
+    a climactic rally (effort filter). Set enforce_effort=False to surface the geometry + effort
+    ratio even for climaxes (used by the historical FP screen, never in production)."""
     n = len(df)
     if n < 40:
         return None
@@ -136,7 +138,7 @@ def detect_markup_pullback(df: pd.DataFrame) -> dict | None:
     # distribution risk, not a healthy re-accumulation pullback. Key off the rally-leg AVERAGE vs
     # the prior base so one legitimate breakout-thrust bar isn't penalized.
     prior_vol = float(vol[lb_start:recent_start].mean())
-    if prior_vol > 0 and rally_vol > MP_EFFORT_X * prior_vol:
+    if enforce_effort and prior_vol > 0 and rally_vol > MP_EFFORT_X * prior_vol:
         return None
 
     bars_holding = sum(1 for i in range(peak_i + 1, n) if close[i] > breakout)
