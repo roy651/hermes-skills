@@ -70,7 +70,8 @@ for label, tk, entry in CASES:
         px_exit = float(fwd["close"].iloc[exit_k]) if exit_k is not None else None
         dd_exit = round((entry_px - px_exit) / entry_px * 100, 1) if px_exit is not None else None
         max_dd = round((entry_px - float(fwd["close"].min())) / entry_px * 100, 1)
-        print(f"{label:15} {str(edt):10}  {entry_px:8.2f}  {bl:8.2f}  "
+        bl_s = f"{bl:8.2f}" if bl is not None else "    None"
+        print(f"{label:15} {str(edt):10}  {entry_px:8.2f}  {bl_s}  "
               f"{str(det_stop):9}  {str(exit_k):11}  {str(dd_exit):7}  {max_dd}")
     except Exception as e:
         print(f"{label:15} ERR {e}")
