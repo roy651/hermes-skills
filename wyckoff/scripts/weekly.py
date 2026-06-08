@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Sunday Wyckoff weekly run: prescreen → LLM Wyckoff on candidates → news-validate the
-top cut → emit up to 5 tiered entry picks (STRONG / BORDERLINE) to Telegram.
+top cut → emit tiered entry picks (accumulation STRONG / MARKUP-PULLBACK / BORDERLINE) to Telegram.
 
 The weekly digest IS the entry signal. Portfolio exit-watch is the separate daily job.
 """
@@ -101,6 +101,8 @@ def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
         "event_score": event_score,
         "event_labels": event_labels,
         "has_event": has_event,
+        # entry came from the markup-pullback lane (not a range SOS/LPS) → confirm-before-acting tier
+        "is_markup": ev["markup_pullback"] is not None and not (ev["sos"] or ev["lps"]),
         "news_info": None,
     }
 
@@ -196,9 +198,23 @@ def _stats_line(b: dict) -> str:
     return "\n".join(out)
 
 
+def _pick_block(b: dict, with_size: bool = True) -> list[str]:
+    out = [digest.format_block(
+        b["result"], None, b["price"], name=b["name"],
+        currency=b["currency"], news_info=b.get("news_info"), gate_action=True,
+    )]
+    stats = _stats_line(b)
+    if stats:
+        out.append(stats)
+    if with_size:
+        out.append(f"  📐 Suggested size: {_position_size(_criteria(b['result']), b.get('event_score', 0))}")
+    return out
+
+
 def _build_weekly_digest(
     spy_ctx: dict,
     strong: list[dict],
+    markup: list[dict],
     borderline: list[dict],
     factor_tags: dict,
     date_str: str,
@@ -211,34 +227,32 @@ def _build_weekly_digest(
         f"📈 <b>Wyckoff Weekly — {date_str}</b>",
         f"<i>SPY {spy_off:.1f}% off 52w high · 6m {r6:+.1f}% · 12m {r12:+.1f}%</i>",
         "",
-        f"🟢 <b>STRONG ({len(strong)})</b>",
+        f"🟢 <b>STRONG — accumulation confirmed ({len(strong)})</b>",
     ]
     if strong:
         for b in strong:
-            lines.append(digest.format_block(
-                b["result"], None, b["price"], name=b["name"],
-                currency=b["currency"], news_info=b.get("news_info"), gate_action=True,
-            ))
-            stats = _stats_line(b)
-            if stats:
-                lines.append(stats)
-            lines.append(f"  📐 Suggested size: {_position_size(_criteria(b['result']), b.get('event_score', 0))}")
+            lines.extend(_pick_block(b))
             lines.append("")
     else:
-        lines.append("<i>No confirmed breakouts this week — bases still forming. "
-                     "The Watch list below shows the strongest setups (range + Spring) awaiting an SOS.</i>")
+        lines.append("<i>None this week — no base completed a Spring→SOS→LPS accumulation sequence.</i>")
+        lines.append("")
+
+    lines.append(f"🟣 <b>MARKUP-PULLBACK — confirm before acting ({len(markup)})</b>")
+    if markup:
+        lines.append("<i>Leaders pulling back to a recent breakout (these bypass the off-high floor). "
+                     "A quiet-rally distribution top can look identical at entry — confirm by eye / lean on "
+                     "the daily exit-watch, and keep half size.</i>")
+        for b in markup:
+            lines.extend(_pick_block(b))
+            lines.append("")
+    else:
+        lines.append("<i>None.</i>")
         lines.append("")
 
     lines.append(f"🟡 <b>BORDERLINE ({len(borderline)})</b>")
     if borderline:
         for b in borderline:
-            lines.append(digest.format_block(
-                b["result"], None, b["price"], name=b["name"],
-                currency=b["currency"], news_info=b.get("news_info"), gate_action=True,
-            ))
-            stats = _stats_line(b)
-            if stats:
-                lines.append(stats)
+            lines.extend(_pick_block(b, with_size=False))
             miss = _missing(b)
             if miss:
                 lines.append(f"  <i>Missing: {', '.join(miss)}</i>")
@@ -247,7 +261,7 @@ def _build_weekly_digest(
         lines.append("<i>None.</i>")
         lines.append("")
 
-    warnings = _factor_warnings(strong + borderline, factor_tags)
+    warnings = _factor_warnings(strong + markup + borderline, factor_tags)
     if warnings:
         lines.extend(warnings)
         lines.append("")
@@ -329,30 +343,33 @@ def run(dry_run: bool = False) -> None:
             except Exception as e:
                 print(f"[weekly] news validation failed for {b['ticker']}: {e}", file=sys.stderr)
 
-    # Stage 5: tier STRONG (all gates) vs BORDERLINE (top remaining by composite)
-    strong = sorted(
-        [b for b in bundles if all(_gates(b).values())], key=_composite, reverse=True
-    )[:MAX_PICKS]
-    strong_tickers = {b["ticker"] for b in strong}
+    # Stage 5: tier gated picks. Accumulation STRONG (range-lane SOS/LPS) gets the high-conviction
+    # label; markup-pullback entries get their OWN confirm-before-acting tier — the MP lane bypasses
+    # the off-high floor + rel-perf cap and carries an entry-irreducible quiet-top FP (review 4),
+    # so it must not share the autonomous-STRONG label. BORDERLINE fills the rest.
+    gated = [b for b in bundles if all(_gates(b).values())]
+    strong = sorted([b for b in gated if not b.get("is_markup")], key=_composite, reverse=True)[:MAX_PICKS]
+    markup = sorted([b for b in gated if b.get("is_markup")], key=_composite, reverse=True)[:MAX_PICKS]
+    picked = {b["ticker"] for b in strong + markup}
     borderline = sorted(
-        [b for b in bundles if b["ticker"] not in strong_tickers], key=_composite, reverse=True
-    )[: MAX_PICKS - len(strong)]
+        [b for b in bundles if b["ticker"] not in picked], key=_composite, reverse=True
+    )[: max(0, MAX_PICKS - len(strong) - len(markup))]
 
-    # Enrich the final picks with market cap (cheap — only ≤5 lookups)
-    for b in strong + borderline:
+    # Enrich the final picks with market cap (cheap — only a few lookups)
+    for b in strong + markup + borderline:
         try:
             b["market_cap"] = finnhub.market_cap(b["ticker"])
         except Exception as e:
             print(f"[weekly] market cap unavailable for {b['ticker']}: {e}", file=sys.stderr)
 
-    msg = _build_weekly_digest(spy_ctx, strong, borderline, factor_tags, date_str, errors)
+    msg = _build_weekly_digest(spy_ctx, strong, markup, borderline, factor_tags, date_str, errors)
     if dry_run:
         print(msg)
     else:
         notifier.send(msg)
     print(
         f"[weekly] {'(dry-run) ' if dry_run else ''}done — "
-        f"{len(strong)} STRONG, {len(borderline)} BORDERLINE",
+        f"{len(strong)} STRONG, {len(markup)} MARKUP-PULLBACK, {len(borderline)} BORDERLINE",
         file=sys.stderr,
     )
 
