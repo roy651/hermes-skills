@@ -43,6 +43,9 @@ MP_PULLBACK_MAX = 0.15    # but not MORE than this — a deep give-back near the
                           # near-failed markup, not a shallow LPS "near recent highs"
 MP_HOLD_TOL = 0.02        # LPS low may dip this far below the breakout level but must close above it
 MP_VOL_X = 0.8            # LPS volume must be below the breakout-rally avg * this (contracting)
+MP_EFFORT_X = 1.5         # reject if the rally-leg AVG volume exceeds this × the prior-base avg —
+                          # a climactic/blow-off advance is a buying-climax/distribution risk, not a
+                          # healthy re-accumulation pullback (review 3, empirically proven FP)
 
 
 def _cluster_count(positions: list[int], gap: int) -> int:
@@ -128,12 +131,23 @@ def detect_markup_pullback(df: pd.DataFrame) -> dict | None:
         return None                                          # fell back below breakout → failed breakout
 
     rally_vol = float(vol[recent_start:peak_i + 1].mean()) if peak_i >= recent_start else 0.0
+
+    # Effort filter: a climactic (expanding-volume) advance into the peak is a buying-climax /
+    # distribution risk, not a healthy re-accumulation pullback. Key off the rally-leg AVERAGE vs
+    # the prior base so one legitimate breakout-thrust bar isn't penalized.
+    prior_vol = float(vol[lb_start:recent_start].mean())
+    if prior_vol > 0 and rally_vol > MP_EFFORT_X * prior_vol:
+        return None
+
+    bars_holding = sum(1 for i in range(peak_i + 1, n) if close[i] > breakout)
     for i in range(peak_i + 1, n):
         if (low[i] >= breakout * (1 - MP_HOLD_TOL) and close[i] > breakout
                 and rally_vol > 0 and vol[i] < MP_VOL_X * rally_vol):
             return {
                 "breakout_level": round(breakout, 2),
                 "peak": round(peak, 2),
+                "effort_ratio": round(rally_vol / prior_vol, 2) if prior_vol > 0 else None,
+                "bars_holding": int(bars_holding),
                 "lps": {"date": str(idx[i]), "close": round(float(close[i]), 2),
                         "vol_x_rally": round(float(vol[i] / rally_vol), 2)},
             }

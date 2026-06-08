@@ -271,6 +271,8 @@ def _fetch_and_score(
             "breakdown": breakdown,
             "lane": "markup_pullback" if mp else "accumulation",
             "mp_depth_pct": round((mp["peak"] - price) / mp["peak"] * 100, 1) if mp else None,
+            "mp_effort_ratio": mp["effort_ratio"] if mp else None,
+            "mp_bars_holding": mp["bars_holding"] if mp else None,
         }
     except Exception as e:
         print(f"[prescreener] skip {ticker}: {e}", file=sys.stderr)
@@ -320,11 +322,15 @@ def screen_universe() -> tuple[list[dict], dict]:
                 print(f"[prescreener] {i}/{len(universe)} fetched", file=sys.stderr)
 
     results.sort(key=lambda x: (-x["score"], x["pct_off_52w_high"]))
-    # Markup-pullback candidates bypass the MIN_SCORE accumulation-shape gate, but are capped
-    # (and ranked shallowest-pullback first, i.e. nearest the highs) so they don't crowd out
-    # the accumulation lane; accumulation candidates fill the remaining slots.
+    # Markup-pullback candidates bypass the MIN_SCORE accumulation-shape gate, but are capped and
+    # ranked by QUALITY — quietest rally first (largest effort-filter margin), then most bars
+    # holding above the breakout — NOT by raw shallowness, which biased toward post-climax
+    # first-pullbacks (review 3). Accumulation candidates fill the remaining slots.
     mp_cands = [r for r in results if r.get("lane") == "markup_pullback"]
-    mp_cands.sort(key=lambda x: x.get("mp_depth_pct") if x.get("mp_depth_pct") is not None else 99)
+    mp_cands.sort(key=lambda x: (
+        x.get("mp_effort_ratio") if x.get("mp_effort_ratio") is not None else 9.9,
+        -(x.get("mp_bars_holding") or 0),
+    ))
     mp_total = len(mp_cands)
     mp_cands = mp_cands[:MP_PRESCREEN_CAP]
     acc_cands = [r for r in results if r.get("lane") != "markup_pullback" and r["score"] >= MIN_SCORE]

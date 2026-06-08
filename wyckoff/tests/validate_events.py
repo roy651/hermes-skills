@@ -238,6 +238,41 @@ def f_mp_deep():
     return _df(r)
 
 
+def _mp_pattern(climax: bool, fail: bool = False):
+    """Review-3 pattern: breakout above a ~100 ceiling to a ~115 peak, then a pullback. Same
+    geometry for all variants; they differ only in rally-leg VOLUME (climax vs quiet) and whether
+    the pullback holds above the breakout. The effort filter must separate climax from quiet."""
+    rows = []
+    for i in range(60):
+        p = 80 + 20 * (i / 59)
+        rows.append(_bar(p, p + 0.5, p - 0.5, p, 1_000_000))    # run up to 100 (establishes ceiling)
+    for i in range(60):
+        p = 100 - 5 * (i / 59)
+        rows.append(_bar(p, p + 0.5, p - 0.5, p, 900_000))      # ease back to ~95 (prior base)
+    rv = 2_600_000 if climax else 850_000
+    for k in range(30):
+        p = 95 + (115 - 95) * ((k + 1) / 30)
+        v = int(rv * (1 + 0.05 * k)) if climax else rv
+        rows.append(_bar(p, p + 0.6, p - 0.4, p, v))            # breakout rally into the peak ~115
+    end = 96 if fail else 108
+    for k in range(12):
+        p = 115 + (end - 115) * ((k + 1) / 12)
+        rows.append(_bar(p, p + 0.4, p - 0.4, p, 600_000))      # pullback
+    return _df(rows)
+
+
+def f_mp_quiet():
+    return _mp_pattern(climax=False)              # quiet rally (~0.9x base) → healthy → fires
+
+
+def f_mp_climax():
+    return _mp_pattern(climax=True)               # climactic rally (>>1.5x base) → must be rejected
+
+
+def f_mp_failed_below():
+    return _mp_pattern(climax=True, fail=True)    # climax + pulls back below breakout → rejected
+
+
 # ── corpus: (name, builder, expected, class) ───────────────────────────────────
 # expected may be partial — only the keys present are asserted.
 def _exp(rng, sp, so, lp, score, has, mp=False):
@@ -268,6 +303,10 @@ CORPUS = [
     ("mp_failed",      f_mp_failed,      {"range": False, "mp": False, "has": False}, "dist"),
     ("mp_vol_under",   f_mp_vol_under,   {"range": False, "mp": False, "has": False}, "neg"),
     ("mp_deep",        f_mp_deep,        {"range": False, "mp": False, "has": False}, "neg"),
+    # Review-3 effort-filter controls (climax = buying-climax distribution trap)
+    ("mp_quiet",       f_mp_quiet,       {"mp": True,  "has": True},  "pos"),
+    ("mp_climax",      f_mp_climax,      {"mp": False, "has": False}, "dist"),
+    ("mp_failed_below", f_mp_failed_below, {"mp": False, "has": False}, "dist"),
 ]
 
 
