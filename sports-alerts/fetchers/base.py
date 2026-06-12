@@ -15,6 +15,7 @@ SPORT_EMOJI = {
     "hapoel_soccer": "⚽",
     "hapoel_basketball": "🏀",
     "nba_avdia": "🏀",
+    "world_cup": "🌍",
 }
 
 

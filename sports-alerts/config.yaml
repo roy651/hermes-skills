@@ -76,3 +76,7 @@ sports:
     enabled: true            # tracks Portland Trail Blazers (Deni Avdia)
     max_local_hour: 24
     reminder: true
+
+  world_cup:
+    enabled: true            # FIFA World Cup 2026 (Jun–Jul 2026)
+    reminder: true

@@ -32,6 +32,8 @@ class ESPNFetcher(Fetcher):
             events += self._nba(start, end)
         if self.cfg.get("hapoel_soccer", {}).get("enabled"):
             events += self._soccer(start, end)
+        if self.cfg.get("world_cup", {}).get("enabled"):
+            events += self._world_cup(start, end)
         return events
 
     # ── F1 ──────────────────────────────────────────────────────────────────
@@ -125,6 +127,40 @@ class ESPNFetcher(Fetcher):
                                         title=title, time_utc=dt))
             except Exception as e:
                 print(f"[espn:nba] {day} error: {e}")
+            day += timedelta(days=1)
+        return events
+
+    # ── FIFA World Cup ────────────────────────────────────────────────────────
+
+    def _world_cup(self, start: datetime, end: datetime) -> list[Event]:
+        events: list[Event] = []
+        seen: set[str] = set()
+        day = start.date()
+        while day < end.date():
+            try:
+                data = _get(f"{ESPN}/soccer/fifa.world/scoreboard",
+                            {"dates": day.strftime("%Y%m%d")})
+                for ev in data.get("events", []):
+                    eid_raw = str(ev.get("id", ""))
+                    if eid_raw in seen:
+                        continue
+                    dt = _parse_dt(ev.get("date", ""))
+                    if not (start <= dt < end):
+                        continue
+                    seen.add(eid_raw)
+                    comps = ev.get("competitions", [{}])
+                    teams = comps[0].get("competitors", []) if comps else []
+                    names = [
+                        t.get("team", {}).get("shortDisplayName", "")
+                        or t.get("team", {}).get("displayName", "")
+                        or t.get("team", {}).get("abbreviation", "?")
+                        for t in teams
+                    ]
+                    title = f"מונדיאל: {' נגד '.join(names)}"
+                    events.append(Event(id=f"wc-{eid_raw}", sport="world_cup",
+                                        title=title, time_utc=dt))
+            except Exception as e:
+                print(f"[espn:world_cup] {day} error: {e}")
             day += timedelta(days=1)
         return events
 
