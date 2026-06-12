@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import os
+import time
 import requests
 import pandas as pd
 from pathlib import Path
@@ -57,31 +58,121 @@ Return ONLY valid JSON:
 }"""
 
 
-def analyze(ticker: str, df: pd.DataFrame, held: bool = False, name: str = "") -> dict:
+_SYSTEM_EXIT = """You are a Wyckoff method analyst reviewing a CURRENTLY HELD position for EXIT risk. Analyze the OHLCV data and return a JSON object — no markdown, no explanation.
+
+Your job is defensive: detect distribution and weakness early, but do not cry wolf. "hold" is the default for a healthy position; only escalate when distribution evidence is concrete.
+
+Four Wyckoff phases:
+- accumulation: consolidation below resistance, volume contracting, institutional buying
+- markup: sustained uptrend, expanding volume on advances, contracting on pullbacks
+- distribution: consolidation near highs, erratic volume, institutional selling
+- markdown: sustained downtrend, volume expands on declines
+
+Distribution / weakness signals to prioritize (identify by date when visible):
+- UT: Upthrust — pierce above resistance that closes weak
+- UTAD: Upthrust After Distribution — final UT confirming distribution (strong exit signal)
+- SOW: Sign of Weakness — volume-heavy decline breaking support
+- LPSY: Last Point of Supply — weak low-volume rally failing below prior highs
+- Break below a prior LPS / loss of an established support level on rising volume
+- Climactic or churning volume at highs with no further price progress
+- Markup exhaustion: SOS attempts failing, narrowing upward thrusts
+
+Recommendation guidance for a held position:
+- hold: trend intact, no distribution evidence (DEFAULT)
+- reduce: early distribution signs (UT, SOW, support tested on volume) — trim risk
+- sell: distribution confirmed (UTAD, major support broken on volume, markdown underway)
+- buy/add: only for a clean, confirmed markup pullback (rare in exit review)
+
+The nine entry criteria still apply for context (count 0–9, same as long setups).
+
+Return ONLY valid JSON:
+{
+  "phase": "accumulation|markup|distribution|markdown|unclear",
+  "phase_confidence": "high|medium|low",
+  "key_events": ["UT on 2026-03-15", "SOW on 2026-03-22"],
+  "active_signals": ["distribution forming"],
+  "criteria_met": 4,
+  "recommendation": "buy|add|hold|reduce|sell|watch|pass",
+  "entry_zone": "225–228" or null,
+  "stop": "219.00" or null,
+  "note": "One concise sentence summary."
+}"""
+
+
+def _market_context_block(market_ctx: dict) -> str:
+    """Render SPY regime + this instrument's relative strength so the LLM can ground
+    criteria 1 (broad market trend) and 2 (relative strength vs market)."""
+    off = market_ctx.get("spy_pct_off_high")
+    r6 = market_ctx.get("spy_ret_6m")
+    r12 = market_ctx.get("spy_ret_12m")
+    lines = ["Market context (S&P 500 / SPY):"]
+    if off is not None and r6 is not None and r12 is not None:
+        lines.append(
+            f"- SPY is {off*100:.1f}% off its 52-week high; 6-month return {r6*100:+.1f}%, "
+            f"12-month {r12*100:+.1f}%."
+        )
+    rel6 = market_ctx.get("rel_6m")
+    rel12 = market_ctx.get("rel_12m")
+    if rel6 is not None and rel12 is not None:
+        lines.append(
+            f"- This instrument vs SPY: 6m {rel6:+.1f}pp, 12m {rel12:+.1f}pp "
+            f"(positive = outperforming the market)."
+        )
+    return "\n".join(lines)
+
+
+def analyze(
+    ticker: str,
+    df: pd.DataFrame,
+    held: bool = False,
+    name: str = "",
+    mode: str = "entry",
+    market_ctx: dict | None = None,
+    detected_events: list[str] | None = None,
+) -> dict:
     context = "Currently HELD in portfolio." if held else "On watchlist (not held)."
     label = f"{ticker} ({name})" if name and name != ticker else ticker
+    system = _SYSTEM_EXIT if mode == "exit" else _SYSTEM
     csv = df.to_csv()
+    user_parts = [f"Ticker: {label}", context]
+    if market_ctx:
+        user_parts.append("\n" + _market_context_block(market_ctx))
+    if detected_events:
+        user_parts.append(
+            "\nProgrammatically detected Wyckoff events (ground truth from price/volume — "
+            "trust these over your own visual reading of the numbers): "
+            + ", ".join(detected_events) + "."
+        )
+    user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{csv}")
     messages = [
-        {"role": "system", "content": _SYSTEM},
-        {"role": "user", "content": f"Ticker: {label}\n{context}\n\nOHLCV (last {len(df)} trading days):\n{csv}"},
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n".join(user_parts)},
     ]
     model = os.environ.get("WYCKOFF_LLM_MODEL", "claude-opus-4-6")
-    resp = requests.post(
-        API_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'local')}",
-            "Content-Type": "application/json",
-        },
-        json={"model": model, "messages": messages, "temperature": 0, "max_tokens": 512},
-        timeout=90,
-    )
-    resp.raise_for_status()
-    text = resp.json()["choices"][0]["message"]["content"].strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    result = json.loads(text)
-    result["ticker"] = ticker
-    return result
+    payload = {"model": model, "messages": messages, "temperature": 0, "max_tokens": 512}
+    headers = {
+        "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'local')}",
+        "Content-Type": "application/json",
+    }
+
+    # Retry: the local proxy can return an empty body or time out under concurrent load.
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
+            resp.raise_for_status()
+            text = resp.json()["choices"][0]["message"]["content"].strip()
+            if not text:
+                raise ValueError("empty LLM response")
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+            result = json.loads(text)
+            result["ticker"] = ticker
+            return result
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+    raise last_err
