@@ -1,6 +1,8 @@
 ---
 name: weather-lookup
-description: Efficient weather lookup using direct APIs. Avoids slow web scraping for weather data.
+category: leisure
+tags: [weather, forecast, location, lookup, israel, precipitation, ecmwf]
+description: Efficient weather lookup using direct APIs for any location. Includes Israel-specific sources (weather2day.co.il, ECMWF charts). Avoids slow web scraping.
 ---
 
 # Efficient Weather Lookup
