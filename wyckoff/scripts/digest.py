@@ -110,17 +110,14 @@ def format_block(
     return "\n".join(lines)
 
 
-def format_managed_block(result: dict, holding: dict, price: float, engine: dict,
+def format_managed_block(holding: dict, price: float, engine: dict, validation: dict | None = None,
                          name: str = "", currency: str = "USD") -> str:
-    """Exit-watch block where the deterministic engine (risk + deterioration + ladder) DECIDES the
-    action and the LLM read only supplies the phase label + a one-line narrative.
-    `engine` = {"risk": <risk.assess>, "det": <deterioration_score>, "ladder": <ladder.recommend>}.
+    """Exit-watch block: the deterministic engine DECIDES and DESCRIBES; the LLM only VALIDATES.
+    `engine` = {"risk","det","ladder"}; `validation` = {"valid": bool|None, "note": str} or None
+    (valid=None → LLM unavailable, no validation line shown).
     """
     rk, det_a, lad = engine["risk"], engine["det"], engine["ladder"]
-    ticker = result["ticker"]
-    phase = result.get("phase", "unclear")
-    confidence = result.get("phase_confidence", "")
-    note = result.get("note", "")
+    ticker = rk["ticker"]
     sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
     qty = holding["qty"]
     cost = holding["avg_cost"] / 100 if currency == "ILS" else holding["avg_cost"]   # ILS cost is in agorot
@@ -132,19 +129,29 @@ def format_managed_block(result: dict, holding: dict, price: float, engine: dict
         title += f" <i>({html.escape(name)})</i>"
     header = f"{title} · {qty} @ {sym}{cost:.2f} · {sym}{price:.2f} ({psign}{pnl_pct:.1f}%)"
 
+    score = det_a["score"]
+    if rk["stop_hit"] or score >= 7:
+        struct = "🔴 Breaking down"
+    elif score >= 5:
+        struct = "⚠️ Distribution"
+    elif score >= 3:
+        struct = "🟠 Weakening"
+    else:
+        struct = "✅ Structure intact"
+
     action = lad["action"]
     a_emoji = ("🟢" if action.startswith("ADD") else "🔴" if action.startswith("EXIT")
                else "🟠" if action.startswith("TRIM") else "✅")
     delta = lad["delta_qty"]
     delta_str = f" ({'buy' if delta > 0 else 'sell'} {abs(round(delta))})" if delta else ""
 
-    lines = [header]
-    lines.append(f"  {PHASE_EMOJI.get(phase, '⬜')} {html.escape(phase.title())} "
-                 f"({html.escape(str(confidence))}) · exit {det_a['score']}/9")
+    lines = [header, f"  {struct} · exit {score}/9"]
     if det_a["signals"]:
-        lines.append(f"  Signals: {html.escape(', '.join(det_a['signals']))}")
+        lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in det_a['signals']))}")
     lines.append(f"  {a_emoji} <b>{html.escape(action)}</b>{delta_str} · "
                  f"Stop {sym}{rk['stop']} ({rk['distance_pct']}% away) · {lad['pos_pct']}% of port")
-    if note:
-        lines.append(f"  <i>{html.escape(str(note))}</i>")
+    if validation and validation.get("valid") is not None:
+        icon, label = ("✅", "confirmed") if validation["valid"] else ("⚠️", "FLAG")
+        note = validation.get("note", "")
+        lines.append(f"  {icon} {label}" + (f": <i>{html.escape(str(note))}</i>" if note else ""))
     return "\n".join(lines)

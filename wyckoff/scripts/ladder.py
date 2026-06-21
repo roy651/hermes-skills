@@ -26,7 +26,8 @@ def _res(action, target_qty, qty, reason, *, stage, pos_pct):
 
 def recommend(*, qty: float, price: float, portfolio_value: float, is_core: bool,
               det_score: int, stop_hit: bool, max_stage: int, baseline_qty: float,
-              has_entry_event: bool, cap: float = DEFAULT_CAP) -> dict:
+              has_entry_event: bool, has_structural: bool = True,
+              established_markdown: bool = False, cap: float = DEFAULT_CAP) -> dict:
     pos_pct = (qty * price) / portfolio_value if portfolio_value else 0.0
     cap_qty = (cap * portfolio_value / price) if price else qty
 
@@ -34,9 +35,14 @@ def recommend(*, qty: float, price: float, portfolio_value: float, is_core: bool
         return _res("HOLD", qty, qty, "core hold — exempt from scale-out & cap", stage=0, pos_pct=pos_pct)
 
     stage, _ = score_to_stage(det_score, stop_hit)
-    stage = max(stage, max_stage)                        # ratchet down only
+    if not stop_hit:
+        if not has_structural:
+            stage = min(stage, 1)        # no distribution top -> a bleed: trim 25% max, the stop does the rest
+        if established_markdown:
+            stage = max(stage, 1)        # confirmed downtrend at a loss -> at least a 25% trim
+    stage = max(stage, max_stage)        # ratchet down only
     det_ceiling = baseline_qty * STAGE_TARGET[stage] / 100.0
-    ceiling = min(det_ceiling, cap_qty)                  # binding upper limit
+    ceiling = min(det_ceiling, cap_qty)  # binding upper limit
 
     if stage >= 3:
         return _res("EXIT", 0, qty, "stop hit / exit score ≥7 — exit fully", stage=stage, pos_pct=pos_pct)
@@ -89,5 +95,21 @@ if __name__ == "__main__":  # self-test
     r = recommend(qty=20, price=50, portfolio_value=PV, is_core=False, det_score=0, stop_hit=False,
                   max_stage=0, baseline_qty=20, has_entry_event=True)
     assert r["action"].startswith("ADD") and r["delta_qty"] > 0
+
+    # 7) non-structural bleed at a loss -> FLOORED to a 25% trim (not HOLD)
+    r = recommend(qty=100, price=50, portfolio_value=PV, is_core=False, det_score=2, stop_hit=False,
+                  max_stage=0, baseline_qty=100, has_entry_event=False,
+                  has_structural=False, established_markdown=True)
+    assert r["action"] == "TRIM to 75" and r["stage"] == 1, r
+
+    # 8) non-structural high score -> CAPPED at a 25% trim (no real distribution top)
+    r = recommend(qty=100, price=50, portfolio_value=PV, is_core=False, det_score=6, stop_hit=False,
+                  max_stage=0, baseline_qty=100, has_entry_event=False, has_structural=False)
+    assert r["action"] == "TRIM to 75" and r["stage"] == 1, r
+
+    # 9) structural high score -> uncapped, trim to 50%
+    r = recommend(qty=100, price=50, portfolio_value=PV, is_core=False, det_score=6, stop_hit=False,
+                  max_stage=0, baseline_qty=100, has_entry_event=False, has_structural=True)
+    assert r["action"] == "TRIM to 50" and r["stage"] == 2, r
 
     print("[self-test OK]")

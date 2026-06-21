@@ -129,7 +129,22 @@ def _off_highs(df: pd.DataFrame) -> bool:
     return bool(hh > 0 and float(df["close"].iloc[-1]) < hh * (1 - OFF_HIGH_GIVEBACK))
 
 
-def deterioration_score(df: pd.DataFrame, market_ctx: dict | None = None) -> dict:
+def _established_markdown(df: pd.DataFrame, at_loss: bool) -> bool:
+    """A confirmed, *active* downtrend you're underwater on: below the medium MA AND still making
+    fresh lows (near the window low — not basing off it). Position-aware (only when at a loss) so a
+    long-term winner in a normal pullback isn't flagged. Used as a scale-out FLOOR, not a score bump."""
+    if not at_loss:
+        return False
+    c = df["close"]
+    if len(c) < MA_LEN + 5:
+        return False
+    below_ma = float(c.iloc[-1]) < float(c.rolling(MA_LEN).mean().iloc[-1])
+    window_low = float(df["low"].min())
+    fresh_low = window_low > 0 and float(c.iloc[-1]) <= window_low * 1.03
+    return bool(below_ma and fresh_low)
+
+
+def deterioration_score(df: pd.DataFrame, market_ctx: dict | None = None, at_loss: bool = False) -> dict:
     rng = detect_range(df)
     ut = detect_upthrust(df, rng)
     sow = detect_sow(df, rng)
@@ -146,10 +161,16 @@ def deterioration_score(df: pd.DataFrame, market_ctx: dict | None = None) -> dic
         "distribution_volume": _distribution_volume(df),
         "off_highs": _off_highs(df),
     }
+    signals = [k for k, v in crit.items() if v]
+    established = _established_markdown(df, at_loss)
+    if established:
+        signals.append("established_markdown")
     return {
         "score": sum(1 for v in crit.values() if v),
         "criteria": crit,
-        "signals": [k for k, v in crit.items() if v],
+        "signals": signals,
+        "established_markdown": established,                 # scale-out FLOOR (not counted in score)
+        "has_structural": bool(ut or sow or lpsy or brk),   # a real distribution top -> uncaps the ladder
         "events": {"upthrust": ut, "sow": sow, "lpsy": lpsy, "support_break": brk, "range": rng},
     }
 
@@ -185,6 +206,10 @@ if __name__ == "__main__":  # self-test: synthetic data
     assert r_dn["score"] >= 3, f"rollover should score >=3, got {r_dn['score']} ({r_dn['signals']})"
     stage, target = score_to_stage(r_dn["score"])
     assert stage >= 1 and target <= 75
+
+    # 2b) held at a loss in that active downtrend -> established-markdown floor; an uptrend never is
+    assert deterioration_score(df_dn, at_loss=True)["established_markdown"], "active downtrend at a loss = markdown"
+    assert not deterioration_score(df_up, at_loss=True)["established_markdown"], "uptrend is not a markdown"
 
     # 3) stage mapping + hard-stop override
     assert score_to_stage(2) == (0, 100) and score_to_stage(4) == (1, 75)

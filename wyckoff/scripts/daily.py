@@ -109,29 +109,17 @@ def run():
         except Exception as e:
             print(f"[daily] SPY context fetch failed: {e}", file=sys.stderr)
 
-    def _analyze(ticker: str):
-        td = market_data.fetch_ohlcv(ticker, days=lookback)
-        held = ticker in holdings
-        mode = "exit" if held else "entry"
-        try:
-            result = wyckoff.analyze(ticker, td.df, held=held, name=td.name, mode=mode, market_ctx=market_ctx)
-        except Exception as e:                       # LLM/proxy flakiness must NOT drop a holding
-            print(f"[daily] analyze failed for {ticker}: {e}", file=sys.stderr)
-            result = {"ticker": ticker, "phase": "unclear",
-                      "note": "(Wyckoff read unavailable — engine only)"}
-        return held, ticker, td, result
-
-    # Parallel (4 workers) — keep low so the local LLM proxy doesn't choke; preserve order
-    ordered: dict[int, tuple] = {}
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futs = {pool.submit(_analyze, t): i for i, t in enumerate(all_tickers)}
+    # 1. Fetch OHLCV for everything in parallel (network-bound)
+    data: dict = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = {pool.submit(market_data.fetch_ohlcv, t, lookback): t for t in all_tickers}
         for fut in as_completed(futs):
-            i = futs[fut]
+            t = futs[fut]
             try:
-                ordered[i] = fut.result()
+                data[t] = fut.result()
             except Exception as e:
-                errors.append(f"{all_tickers[i]}: {e}")
-                print(f"[daily] error on {all_tickers[i]}: {e}", file=sys.stderr)
+                errors.append(f"{t}: {e}")
+                print(f"[daily] fetch failed for {t}: {e}", file=sys.stderr)
 
     # USD/ILS rate to normalise ILS holdings for the portfolio-value + concentration math
     usdils = 3.7
@@ -143,39 +131,78 @@ def run():
     def _to_usd(cur: str) -> float:
         return (1.0 / usdils) if cur == "ILS" else 1.0
 
+    held_tickers = [t for t in all_tickers if t in holdings and t in data]
+    watch_tickers = [t for t in all_tickers if t not in holdings and t in data]
+
     total_value_usd = sum(
-        holdings[t]["qty"] * float(td.df["close"].iloc[-1]) * _to_usd(td.currency)
-        for (h, t, td, _r) in ordered.values() if h
+        holdings[t]["qty"] * float(data[t].df["close"].iloc[-1]) * _to_usd(data[t].currency)
+        for t in held_tickers
     )
 
-    # Deterministic position-management engine (sequential — fast, no LLM, owns the shared state)
+    # 2. Deterministic engine for held positions (sequential — fast, owns the shared state)
     state = risk.load_state()
-    for i in range(len(all_tickers)):
-        if i not in ordered:
-            continue
-        held, ticker, td, result = ordered[i]
+    engines: dict = {}
+    for t in held_tickers:
+        td = data[t]
         price = float(td.df["close"].iloc[-1])
-        if not held:
-            watchlist_lines.append(
-                digest.format_block(result, None, price, name=td.name, currency=td.currency, gate_action=False))
-            continue
-        h = holdings[ticker]
-        rk = risk.assess(ticker, td.df, h["qty"], state=state)
-        ds = deterioration.deterioration_score(td.df, market_ctx)
+        h = holdings[t]
+        cost_local = h["avg_cost"] / 100 if td.currency == "ILS" else h["avg_cost"]
+        at_loss = price < cost_local
+        rk = risk.assess(t, td.df, h["qty"], state=state)
+        ds = deterioration.deterioration_score(td.df, market_ctx, at_loss=at_loss)
         evs = events.detect_events(td.df)
         rec = ladder.recommend(
             qty=h["qty"], price=price * _to_usd(td.currency), portfolio_value=total_value_usd,
-            is_core=(ticker == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
-            max_stage=state[ticker].get("max_stage", 0), baseline_qty=rk["baseline_qty"],
-            has_entry_event=events.has_entry_event(evs),
+            is_core=(t == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
+            max_stage=state[t].get("max_stage", 0), baseline_qty=rk["baseline_qty"],
+            has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
+            established_markdown=ds["established_markdown"],
         )
-        state[ticker]["max_stage"] = rec["stage"]       # ratchet down only
-        engine = {"risk": rk, "det": ds, "ladder": rec}
-        portfolio_lines.append(
-            digest.format_managed_block(result, h, price, engine, name=td.name, currency=td.currency))
-
+        state[t]["max_stage"] = rec["stage"]            # ratchet down only
+        engines[t] = {"risk": rk, "det": ds, "ladder": rec}
     if not args.dry_run:
         risk.save_state(state)
+
+    # 3. LLM in parallel: VALIDATE each held verdict; ENTRY-analyse each watchlist name
+    def _llm(t: str):
+        td = data[t]
+        if t in engines:
+            e = engines[t]
+            verdict = {"action": e["ladder"]["action"], "score": e["det"]["score"],
+                       "signals": e["det"]["signals"], "stop": e["risk"]["stop"]}
+            return t, wyckoff.validate(t, td.df, td.name, verdict, market_ctx)
+        try:
+            return t, wyckoff.analyze(t, td.df, held=False, name=td.name, mode="entry", market_ctx=market_ctx)
+        except Exception as e:
+            print(f"[daily] entry analyze failed for {t}: {e}", file=sys.stderr)
+            return t, {"ticker": t, "phase": "unclear", "note": "(read unavailable)"}
+
+    llm_out: dict = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs = {pool.submit(_llm, t): t for t in held_tickers + watch_tickers}
+        for fut in as_completed(futs):
+            t = futs[fut]
+            try:
+                tt, out = fut.result()
+                llm_out[tt] = out
+            except Exception as e:
+                errors.append(f"{t}: {e}")
+                print(f"[daily] llm error on {t}: {e}", file=sys.stderr)
+
+    # 4. Assemble in the original ticker order
+    for t in all_tickers:
+        if t not in data:
+            continue
+        td = data[t]
+        price = float(td.df["close"].iloc[-1])
+        if t in engines:
+            portfolio_lines.append(digest.format_managed_block(
+                holdings[t], price, engines[t], validation=llm_out.get(t),
+                name=td.name, currency=td.currency))
+        else:
+            result = llm_out.get(t) or {"ticker": t, "phase": "unclear"}
+            watchlist_lines.append(digest.format_block(
+                result, None, price, name=td.name, currency=td.currency, gate_action=False))
 
     section_label = {
         "portfolio": "Portfolio — Exit Watch",

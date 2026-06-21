@@ -99,6 +99,24 @@ Return ONLY valid JSON:
 }"""
 
 
+_SYSTEM_VALIDATE = """You VALIDATE a mechanical Wyckoff exit decision. You do NOT make your own call and you do NOT merely restate it.
+
+A deterministic engine has decided an action for a CURRENTLY HELD position from price/volume rules
+(trailing stops, distribution detectors, a 0-9 deterioration score, a scale-out ladder). Stress-test that
+decision against the data and against anything price-only mechanics cannot see.
+
+Return valid=true only if the mechanical read is clearly sound. Return valid=false (a FLAG) if you see a
+SPECIFIC reason it may be wrong, e.g.:
+- a "support break" / volume spike that is really an ex-dividend gap, a stock split, or an index rebalance
+- a one-off bad tick or thin-volume artifact (common in small ILS names)
+- a known catalyst the price cannot show (an earnings/guidance date, M&A, a binary event)
+- the structure is misread (e.g., a base forming, not distribution)
+
+Return ONLY valid JSON — no markdown:
+{"valid": true, "note": "<one short concrete line: the key fact confirming the call, OR the specific concern>"}
+Keep the note under ~140 characters. No hedging, no boilerplate."""
+
+
 def _market_context_block(market_ctx: dict) -> str:
     """Render SPY regime + this instrument's relative strength so the LLM can ground
     criteria 1 (broad market trend) and 2 (relative strength vs market)."""
@@ -144,6 +162,12 @@ def analyze(
             + ", ".join(detected_events) + "."
         )
     user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{csv}")
+    result = _call_llm(system, user_parts)
+    result["ticker"] = ticker
+    return result
+
+
+def _call_llm(system: str, user_parts: list[str]) -> dict:
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": "\n".join(user_parts)},
@@ -154,7 +178,6 @@ def analyze(
         "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'local')}",
         "Content-Type": "application/json",
     }
-
     # Retry: the local proxy can return an empty body or time out under concurrent load.
     last_err: Exception | None = None
     for attempt in range(3):
@@ -169,10 +192,30 @@ def analyze(
                 if text.startswith("json"):
                     text = text[4:]
                 text = text.strip()
-            result = json.loads(text)
-            result["ticker"] = ticker
-            return result
+            return json.loads(text)
         except Exception as e:
             last_err = e
             time.sleep(1.5 * (attempt + 1))
     raise last_err
+
+
+def validate(ticker: str, df: pd.DataFrame, name: str, verdict: dict,
+             market_ctx: dict | None = None) -> dict:
+    """Validator role: the LLM stress-tests the engine's decision (it does NOT decide or narrate).
+    `verdict` = {action, score, signals, stop}. Returns {valid: bool|None, note}; valid=None means the
+    LLM was unavailable (caller shows no validation line)."""
+    label = f"{ticker} ({name})" if name and name != ticker else ticker
+    sig = ", ".join(verdict.get("signals") or []) or "none"
+    user_parts = [
+        f"Ticker: {label} — CURRENTLY HELD.",
+        f"Mechanical decision to validate: {verdict['action']}.",
+        f"Deterioration score: {verdict['score']}/9. Signals: {sig}. Trailing stop: {verdict['stop']}.",
+    ]
+    if market_ctx:
+        user_parts.append("\n" + _market_context_block(market_ctx))
+    user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{df.to_csv()}")
+    try:
+        out = _call_llm(_SYSTEM_VALIDATE, user_parts)
+        return {"valid": bool(out.get("valid", True)), "note": str(out.get("note", ""))[:160]}
+    except Exception:
+        return {"valid": None, "note": ""}
