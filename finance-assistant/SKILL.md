@@ -1,7 +1,5 @@
 # finance-assistant
 
-> **Status: Work in progress — infrastructure deployed, not yet fully tested. See `.claude/handoff.md` in hermes-skills for next steps.**
-
 Personal finance assistant for Roy & family, powered by ActualBudget.
 
 ## Architecture
