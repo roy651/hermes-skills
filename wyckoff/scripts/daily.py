@@ -24,6 +24,10 @@ import analysis as wyckoff
 import holdings as portfolio
 import notifier
 import digest
+import risk
+import deterioration
+import ladder
+import events
 from prescreener import _get_spy_context
 
 TZ = ZoneInfo("Asia/Jerusalem")
@@ -107,15 +111,13 @@ def run():
 
     def _analyze(ticker: str):
         td = market_data.fetch_ohlcv(ticker, days=lookback)
-        price = float(td.df["close"].iloc[-1])
         held = ticker in holdings
         mode = "exit" if held else "entry"
         result = wyckoff.analyze(ticker, td.df, held=held, name=td.name, mode=mode, market_ctx=market_ctx)
-        block = digest.format_block(result, holdings.get(ticker), price, name=td.name, currency=td.currency, gate_action=False)
-        return held, block
+        return held, ticker, td, result
 
     # Parallel (4 workers) — keep low so the local LLM proxy doesn't choke; preserve order
-    ordered: dict[int, tuple[bool, str]] = {}
+    ordered: dict[int, tuple] = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futs = {pool.submit(_analyze, t): i for i, t in enumerate(all_tickers)}
         for fut in as_completed(futs):
@@ -125,10 +127,50 @@ def run():
             except Exception as e:
                 errors.append(f"{all_tickers[i]}: {e}")
                 print(f"[daily] error on {all_tickers[i]}: {e}", file=sys.stderr)
+
+    # USD/ILS rate to normalise ILS holdings for the portfolio-value + concentration math
+    usdils = 3.7
+    try:
+        usdils = float(market_data.fetch_ohlcv("USDILS=X", days=5).df["close"].iloc[-1])
+    except Exception as e:
+        print(f"[daily] USDILS fetch failed, using {usdils}: {e}", file=sys.stderr)
+
+    def _to_usd(cur: str) -> float:
+        return (1.0 / usdils) if cur == "ILS" else 1.0
+
+    total_value_usd = sum(
+        holdings[t]["qty"] * float(td.df["close"].iloc[-1]) * _to_usd(td.currency)
+        for (h, t, td, _r) in ordered.values() if h
+    )
+
+    # Deterministic position-management engine (sequential — fast, no LLM, owns the shared state)
+    state = risk.load_state()
     for i in range(len(all_tickers)):
-        if i in ordered:
-            held, block = ordered[i]
-            (portfolio_lines if held else watchlist_lines).append(block)
+        if i not in ordered:
+            continue
+        held, ticker, td, result = ordered[i]
+        price = float(td.df["close"].iloc[-1])
+        if not held:
+            watchlist_lines.append(
+                digest.format_block(result, None, price, name=td.name, currency=td.currency, gate_action=False))
+            continue
+        h = holdings[ticker]
+        rk = risk.assess(ticker, td.df, h["qty"], state=state)
+        ds = deterioration.deterioration_score(td.df, market_ctx)
+        evs = events.detect_events(td.df)
+        rec = ladder.recommend(
+            qty=h["qty"], price=price * _to_usd(td.currency), portfolio_value=total_value_usd,
+            is_core=(ticker == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
+            max_stage=state[ticker].get("max_stage", 0), baseline_qty=rk["baseline_qty"],
+            has_entry_event=events.has_entry_event(evs),
+        )
+        state[ticker]["max_stage"] = rec["stage"]       # ratchet down only
+        engine = {"risk": rk, "det": ds, "ladder": rec}
+        portfolio_lines.append(
+            digest.format_managed_block(result, h, price, engine, name=td.name, currency=td.currency))
+
+    if not args.dry_run:
+        risk.save_state(state)
 
     section_label = {
         "portfolio": "Portfolio — Exit Watch",

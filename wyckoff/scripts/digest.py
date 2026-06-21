@@ -108,3 +108,42 @@ def format_block(
             lines.append(f"  <i>📰 {html.escape(summary)}</i>")
 
     return "\n".join(lines)
+
+
+def format_managed_block(result: dict, holding: dict, price: float, engine: dict,
+                         name: str = "", currency: str = "USD") -> str:
+    """Exit-watch block where the deterministic engine (risk + deterioration + ladder) DECIDES the
+    action and the LLM read only supplies the phase label + a one-line narrative.
+    `engine` = {"risk": <risk.assess>, "det": <deterioration_score>, "ladder": <ladder.recommend>}.
+    """
+    rk, det_a, lad = engine["risk"], engine["det"], engine["ladder"]
+    ticker = result["ticker"]
+    phase = result.get("phase", "unclear")
+    confidence = result.get("phase_confidence", "")
+    note = result.get("note", "")
+    sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
+    qty, cost = holding["qty"], holding["avg_cost"]
+    pnl_pct = (price - cost) / cost * 100 if cost else 0.0
+    psign = "+" if pnl_pct >= 0 else ""
+
+    title = f"<b>{ticker}</b>"
+    if name and name != ticker:
+        title += f" <i>({html.escape(name)})</i>"
+    header = f"{title} · {qty} @ {sym}{cost:.2f} · {sym}{price:.2f} ({psign}{pnl_pct:.1f}%)"
+
+    action = lad["action"]
+    a_emoji = ("🟢" if action.startswith("ADD") else "🔴" if action.startswith("EXIT")
+               else "🟠" if action.startswith("TRIM") else "✅")
+    delta = lad["delta_qty"]
+    delta_str = f" ({'buy' if delta > 0 else 'sell'} {abs(round(delta))})" if delta else ""
+
+    lines = [header]
+    lines.append(f"  {PHASE_EMOJI.get(phase, '⬜')} {html.escape(phase.title())} "
+                 f"({html.escape(str(confidence))}) · exit {det_a['score']}/9")
+    if det_a["signals"]:
+        lines.append(f"  Signals: {html.escape(', '.join(det_a['signals']))}")
+    lines.append(f"  {a_emoji} <b>{html.escape(action)}</b>{delta_str} · "
+                 f"Stop {sym}{rk['stop']} ({rk['distance_pct']}% away) · {lad['pos_pct']}% of port")
+    if note:
+        lines.append(f"  <i>{html.escape(str(note))}</i>")
+    return "\n".join(lines)
