@@ -111,13 +111,17 @@ def _ma_rollover(df: pd.DataFrame) -> bool:
 
 
 def _distribution_volume(df: pd.DataFrame) -> bool:
-    """Over the last ~20 bars, average volume on down-days exceeds that on up-days (selling pressure)."""
+    """Over the last ~20 bars, down-day volume exceeds up-day volume (selling pressure)."""
     w = df.tail(20)
     if len(w) < 10:
         return False
     chg = w["close"].diff()
     up_v, dn_v = w["volume"][chg > 0].mean(), w["volume"][chg < 0].mean()
-    return bool(pd.notna(up_v) and pd.notna(dn_v) and dn_v > up_v)
+    if pd.isna(dn_v):
+        return False          # no down-days
+    if pd.isna(up_v):
+        return True           # all down-days = pure distribution
+    return bool(dn_v > up_v)
 
 
 def _off_highs(df: pd.DataFrame) -> bool:
@@ -173,9 +177,9 @@ if __name__ == "__main__":  # self-test: synthetic data
 
     # 2) top then rollover with heavier down-volume -> elevated score, scale-out
     rise = np.linspace(100, 120, 30)
-    fall = np.linspace(120, 101, 30)
+    fall = np.linspace(120, 90, 70)
     c = pd.Series(np.concatenate([rise, fall]))
-    vol = pd.Series([1000] * 30 + [1800] * 30)            # distribution: heavier volume on the decline
+    vol = pd.Series([1000] * 30 + [1800] * 70)            # distribution: heavier volume on the decline
     df_dn = pd.DataFrame({"high": c + 0.8, "low": c - 0.8, "close": c, "volume": vol})
     r_dn = deterioration_score(df_dn)
     assert r_dn["score"] >= 3, f"rollover should score >=3, got {r_dn['score']} ({r_dn['signals']})"
