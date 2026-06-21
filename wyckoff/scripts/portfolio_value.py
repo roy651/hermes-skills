@@ -144,16 +144,21 @@ def run():
         "",
     ]
 
-    for r in rows:
-        ticker = r["ticker"]
-        sym = {"USD": "$", "ILS": "₪"}.get(r["currency"], r["currency"] + " ")
-        emoji = "🟢" if r["pnl_start_usd"] >= 0 else "🔴"
-        name_part = f" {r['name']}" if r["name"] != ticker else ""
-        lines.append(
-            f"{emoji} <b>{ticker}</b>{name_part} · {sym}{r['price']:.2f} · ${r['value_usd']:,.0f}\n"
-            f"   start {_fmt(r['pnl_start_usd'])} {_pct(r['pnl_start_pct'])}"
-            f"  d {_fmt(r['pnl_day_usd'])}  w {_fmt(r['pnl_week_usd'])}  m {_fmt(r['pnl_month_usd'])}"
-        )
+    # Compact digest: totals header (above) + the day's key movers only (≤3 up / ≤3 down).
+    def _mover(r) -> str:
+        prior = r["value_usd"] - r["pnl_day_usd"]
+        pct = (r["pnl_day_usd"] / prior * 100) if prior else 0.0
+        return f"{r['ticker']} {_fmt(r['pnl_day_usd'])} ({'+' if pct >= 0 else ''}{pct:.1f}%)"
+
+    movers = [r for r in rows if abs(r["pnl_day_usd"]) >= 1]
+    ups = sorted((r for r in movers if r["pnl_day_usd"] > 0), key=lambda r: r["pnl_day_usd"], reverse=True)[:3]
+    downs = sorted((r for r in movers if r["pnl_day_usd"] < 0), key=lambda r: r["pnl_day_usd"])[:3]
+    if ups:
+        lines.append("📈 " + "  ·  ".join(_mover(r) for r in ups))
+    if downs:
+        lines.append("📉 " + "  ·  ".join(_mover(r) for r in downs))
+    if not ups and not downs:
+        lines.append("<i>No notable movers today.</i>")
 
     notifier.send("\n".join(lines))
     print(f"[portfolio_value] sent report for {len(rows)} holdings", file=sys.stderr)
