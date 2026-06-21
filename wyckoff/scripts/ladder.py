@@ -47,9 +47,11 @@ def recommend(*, qty: float, price: float, portfolio_value: float, is_core: bool
                     f"{why}: reduce to {round(ceiling)} sh (stage {stage}, {cap*100:.0f}% cap)",
                     stage=stage, pos_pct=pos_pct)
 
-    if stage == 0 and has_entry_event and qty < cap_qty * 0.9:
-        return _res(f"ADD toward {round(cap_qty)}", cap_qty, qty,
-                    "fresh entry setup, healthy, below cap — add toward target", stage=0, pos_pct=pos_pct)
+    half_cap = cap_qty * 0.5   # build toward a HALF (~10%) position on a single setup, not the full cap
+    if det_score == 0 and has_entry_event and qty < half_cap * 0.9:
+        return _res(f"ADD toward {round(half_cap)}", half_cap, qty,
+                    "clean (0/9) + fresh entry setup, below half-cap — add toward a half position",
+                    stage=0, pos_pct=pos_pct)
 
     return _res("HOLD", qty, qty, "at/below target, no deterioration", stage=stage, pos_pct=pos_pct)
 

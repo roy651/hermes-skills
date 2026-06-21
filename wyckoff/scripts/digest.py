@@ -122,7 +122,8 @@ def format_managed_block(result: dict, holding: dict, price: float, engine: dict
     confidence = result.get("phase_confidence", "")
     note = result.get("note", "")
     sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
-    qty, cost = holding["qty"], holding["avg_cost"]
+    qty = holding["qty"]
+    cost = holding["avg_cost"] / 100 if currency == "ILS" else holding["avg_cost"]   # ILS cost is in agorot
     pnl_pct = (price - cost) / cost * 100 if cost else 0.0
     psign = "+" if pnl_pct >= 0 else ""
 

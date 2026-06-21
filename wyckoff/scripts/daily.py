@@ -113,7 +113,12 @@ def run():
         td = market_data.fetch_ohlcv(ticker, days=lookback)
         held = ticker in holdings
         mode = "exit" if held else "entry"
-        result = wyckoff.analyze(ticker, td.df, held=held, name=td.name, mode=mode, market_ctx=market_ctx)
+        try:
+            result = wyckoff.analyze(ticker, td.df, held=held, name=td.name, mode=mode, market_ctx=market_ctx)
+        except Exception as e:                       # LLM/proxy flakiness must NOT drop a holding
+            print(f"[daily] analyze failed for {ticker}: {e}", file=sys.stderr)
+            result = {"ticker": ticker, "phase": "unclear",
+                      "note": "(Wyckoff read unavailable — engine only)"}
         return held, ticker, td, result
 
     # Parallel (4 workers) — keep low so the local LLM proxy doesn't choke; preserve order
