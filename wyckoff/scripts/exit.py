@@ -35,7 +35,7 @@ TZ = ZoneInfo("Asia/Jerusalem")
 
 _LOCK_PATH = "/tmp/wyckoff_daily.lock"
 _lock_fh = None              # kept alive for the process lifetime; flock releases when the fd closes
-MAX_RUNTIME_SEC = 900        # 15 min hard ceiling — bounds a hang so the lock can't be held forever
+MAX_RUNTIME_SEC = 1500       # 25 min hard ceiling — bounds a hang so the lock can't be held forever
 
 
 def _acquire_singleton_lock() -> bool:
@@ -187,6 +187,8 @@ def run():
         td = data[t]
         if t in engines:
             e = engines[t]
+            if e["ladder"]["action"] == "HOLD":      # skip LLM validation on holds — keeps the run well under the watchdog
+                return t, {"valid": None, "note": ""}
             verdict = {"action": e["ladder"]["action"], "score": e["det"]["score"],
                        "signals": e["det"]["signals"], "stop": e["risk"]["stop"],
                        "qty": holdings[t]["qty"], "price": round(float(td.df["close"].iloc[-1]), 2)}
