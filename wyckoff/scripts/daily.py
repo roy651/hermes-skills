@@ -98,7 +98,6 @@ def run():
         all_tickers = list(dict.fromkeys(list(holdings.keys()) + watchlist))
 
     date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
-    portfolio_lines = []
     watchlist_lines = []
     errors = []
 
@@ -204,16 +203,21 @@ def run():
                 errors.append(f"{t}: {e}")
                 print(f"[daily] llm error on {t}: {e}", file=sys.stderr)
 
-    # 4. Assemble in the original ticker order
+    # 4. Assemble: group held positions by ACTION (Exit -> Trim -> Add -> Hold), each sorted by exit score
+    buckets: dict = {"EXIT": [], "TRIM": [], "ADD": [], "HOLD": []}
     for t in all_tickers:
         if t not in data:
             continue
         td = data[t]
         price = float(td.df["close"].iloc[-1])
         if t in engines:
-            portfolio_lines.append(digest.format_managed_block(
+            action = engines[t]["ladder"]["action"]
+            cat = ("EXIT" if action.startswith("EXIT") else "TRIM" if action.startswith("TRIM")
+                   else "ADD" if action.startswith("ADD") else "HOLD")
+            block = digest.format_managed_block(
                 holdings[t], price, engines[t], validation=llm_out.get(t),
-                name=td.name, currency=td.currency))
+                name=td.name, currency=td.currency)
+            buckets[cat].append((engines[t]["det"]["score"], block))
         else:
             result = llm_out.get(t) or {"ticker": t, "phase": "unclear"}
             watchlist_lines.append(digest.format_block(
@@ -226,9 +230,13 @@ def run():
     }[args.section]
     parts = [f"📊 <b>Wyckoff {section_label} — {date_str}</b>"]
 
-    if portfolio_lines:
+    if any(buckets.values()):
         parts.append("\n<b>Portfolio</b>")
-        parts.extend(portfolio_lines)
+        for cat, label in (("EXIT", "🔴 Exit"), ("TRIM", "🟠 Trim"), ("ADD", "🟢 Add"), ("HOLD", "✅ Hold")):
+            blocks = buckets[cat]
+            if blocks:
+                parts.append(f"\n<b>— {label} ({len(blocks)}) —</b>")
+                parts.extend(block for _score, block in sorted(blocks, key=lambda x: x[0], reverse=True))
 
     if watchlist_lines:
         parts.append("\n<b>Watchlist</b>")

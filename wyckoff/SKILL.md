@@ -146,19 +146,20 @@ Examples of what the user might say → what to run:
 
 ## Hermes Tool: Deep-Dive Explanation for a Specific Ticker
 
-When the user asks for more detail about a specific ticker — what it is, what the analysis means, what to watch for — run:
+When the user asks about a specific ticker after a report — "why is X a trim?", "should I really add Y?", "explain Z", "what's going on with TLT?" — run:
 
 ```bash
 cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/explain.py <TICKER>
 ```
 
-Examples of what the user might say → what to run:
-- "תסביר לי את ה-SPY" → `explain.py SPY`
-- "מה זה QQQ?" → `explain.py QQQ`
-- "תרחיב על הניתוח של GLD" → `explain.py GLD`
-- "למה ה-TLT מקבל המלצת מכירה?" → `explain.py TLT`
+This prints the deterministic engine **breakdown as data** — the 0–9 exit score with every criterion, the trailing-stop math, the scale-out ladder decision and its reasoning, the Wyckoff structure, and real catalysts (earnings + recent headlines). It does NOT call an LLM and does NOT post to Telegram.
 
-The script fetches the latest data, runs a plain-language LLM analysis in Hebrew, and sends a detailed explanation to Telegram.
+**Your job:** read that data and explain it to the user **conversationally, in their language**, reasoning like an analyst — do not just dump the raw output. For the mechanism's logic and the analytical lens (is the score legit or an artifact? a structural top vs a bleed? a sector cluster? let the stop arbitrate when ambiguous?), load `README.md` and `DESIGN.md` in this skill directory first. Be honest and specific, cite the actual numbers, and flag where the mechanical read may be wrong (ex-dividend, index rebalance, thin volume, a catalyst).
+
+Examples → what to run:
+- "למה ה-HAL מקבל המלצת trim?" → `explain.py HAL`, then explain the distribution signals and why
+- "should I add IEMG?" → `explain.py IEMG`, then weigh the setup against the validator's caution
+- "מה המצב של MBLY?" → `explain.py MBLY`
 
 ## Hermes Tool: Wyckoff Method Explanation
 
