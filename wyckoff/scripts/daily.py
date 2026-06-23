@@ -157,14 +157,19 @@ def run():
         rk = risk.assess(t, td.df, h["qty"], state=state)
         ds = deterioration.deterioration_score(td.df, market_ctx, loss_pct=loss_pct)
         evs = events.detect_events(td.df)
+        # Ratchet follows EXECUTION, not past advice: derive the scale-out stage from the actual holding
+        # vs baseline (qty/baseline), so a recomputed (or once-buggy) recommendation can't stick.
+        baseline = rk["baseline_qty"] or h["qty"]
+        ratio = h["qty"] / baseline if baseline else 1.0
+        executed_stage = 2 if ratio <= 0.625 else 1 if ratio <= 0.875 else 0
         rec = ladder.recommend(
             qty=h["qty"], price=price * _to_usd(td.currency), portfolio_value=total_value_usd,
             is_core=(t == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
-            max_stage=state[t].get("max_stage", 0), baseline_qty=rk["baseline_qty"],
+            max_stage=executed_stage, baseline_qty=baseline,
             has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
             established_markdown=ds["established_markdown"],
         )
-        state[t]["max_stage"] = rec["stage"]            # ratchet down only
+        state[t]["max_stage"] = executed_stage          # reflects executed scale-out, not the recommendation
         engines[t] = {"risk": rk, "det": ds, "ladder": rec}
     if not args.dry_run:
         risk.save_state(state)

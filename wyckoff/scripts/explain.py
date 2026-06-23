@@ -93,10 +93,13 @@ def explain(ticker: str) -> None:
         out.append(f"  ATR(14) {rk['atr']} · highest-high(since first-seen) {rk['highest_high']} · "
                    f"baseline {rk['baseline_qty']} sh · max_stage {rk['max_stage']}")
         evs = events.detect_events(df)
+        baseline = rk["baseline_qty"] or held[ticker]["qty"]
+        ratio = held[ticker]["qty"] / baseline if baseline else 1.0
+        executed_stage = 2 if ratio <= 0.625 else 1 if ratio <= 0.875 else 0
         rec = ladder.recommend(
             qty=held[ticker]["qty"], price=price, portfolio_value=_BIG_PV,
             is_core=(ticker == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
-            max_stage=rk["max_stage"], baseline_qty=rk["baseline_qty"],
+            max_stage=executed_stage, baseline_qty=baseline,
             has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
             established_markdown=ds["established_markdown"],
         )
