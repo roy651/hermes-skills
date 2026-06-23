@@ -169,7 +169,8 @@ def run():
         if t in engines:
             e = engines[t]
             verdict = {"action": e["ladder"]["action"], "score": e["det"]["score"],
-                       "signals": e["det"]["signals"], "stop": e["risk"]["stop"]}
+                       "signals": e["det"]["signals"], "stop": e["risk"]["stop"],
+                       "qty": holdings[t]["qty"], "price": round(float(td.df["close"].iloc[-1]), 2)}
             return t, wyckoff.validate(t, td.df, td.name, verdict, market_ctx)
         try:
             return t, wyckoff.analyze(t, td.df, held=False, name=td.name, mode="entry", market_ctx=market_ctx)

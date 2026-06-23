@@ -206,10 +206,12 @@ def validate(ticker: str, df: pd.DataFrame, name: str, verdict: dict,
     LLM was unavailable (caller shows no validation line)."""
     label = f"{ticker} ({name})" if name and name != ticker else ticker
     sig = ", ".join(verdict.get("signals") or []) or "none"
+    qty, last = verdict.get("qty"), verdict.get("price")
+    pos = f" Position: {qty} shares" + (f", last price {last}" if last is not None else "") + "."
     user_parts = [
-        f"Ticker: {label} — CURRENTLY HELD.",
-        f"Mechanical decision to validate: {verdict['action']}.",
-        f"Deterioration score: {verdict['score']}/9. Signals: {sig}. Trailing stop: {verdict['stop']}.",
+        f"Ticker: {label} — CURRENTLY HELD.{pos}",
+        f"Mechanical decision to validate: {verdict['action']} — any number in the action is a SHARE COUNT, not a price.",
+        f"Deterioration score: {verdict['score']}/9. Signals: {sig}. Trailing stop (a price level): {verdict['stop']}.",
     ]
     if market_ctx:
         user_parts.append("\n" + _market_context_block(market_ctx))
