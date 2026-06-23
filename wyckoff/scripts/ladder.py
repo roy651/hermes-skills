@@ -27,7 +27,7 @@ def _res(action, target_qty, qty, reason, *, stage, pos_pct):
 def recommend(*, qty: float, price: float, portfolio_value: float, is_core: bool,
               det_score: int, stop_hit: bool, max_stage: int, baseline_qty: float,
               has_entry_event: bool, has_structural: bool = True,
-              established_markdown: bool = False, rel_weak: bool = False, cap: float = DEFAULT_CAP) -> dict:
+              established_markdown: bool = False, cap: float = DEFAULT_CAP) -> dict:
     pos_pct = (qty * price) / portfolio_value if portfolio_value else 0.0
     cap_qty = (cap * portfolio_value / price) if price else qty
 
@@ -35,9 +35,10 @@ def recommend(*, qty: float, price: float, portfolio_value: float, is_core: bool
         return _res("HOLD", qty, qty, "core hold — exempt from scale-out & cap", stage=0, pos_pct=pos_pct)
 
     stage, _ = score_to_stage(det_score, stop_hit)
-    # A trim needs a DECISIVE weakness signal — a distribution top, relative weakness, or a confirmed
-    # markdown — not just the correlated "price is down" cluster (ma_rollover + off_highs + dist-volume).
-    decisive = has_structural or established_markdown or rel_weak
+    # A trim needs a DECISIVE signal — a distribution top OR a confirmed markdown — not just the
+    # correlated "price is down" cluster (ma_rollover + off_highs + dist-volume), which fires on any
+    # decline. (Relative weakness vs SPY is too broad in an up market, so it informs the score, not this.)
+    decisive = has_structural or established_markdown
     if not stop_hit:
         if not decisive:
             stage = 0                    # only the down-cluster -> HOLD; the trailing stop is the control
@@ -111,11 +112,6 @@ if __name__ == "__main__":  # self-test
     r = recommend(qty=100, price=50, portfolio_value=PV, is_core=False, det_score=6, stop_hit=False,
                   max_stage=0, baseline_qty=100, has_entry_event=False, has_structural=False)
     assert r["action"] == "HOLD" and r["stage"] == 0, r
-
-    # 8b) relative weakness IS decisive -> trim 25% even without a structural top
-    r = recommend(qty=100, price=50, portfolio_value=PV, is_core=False, det_score=4, stop_hit=False,
-                  max_stage=0, baseline_qty=100, has_entry_event=False, has_structural=False, rel_weak=True)
-    assert r["action"] == "TRIM to 75" and r["stage"] == 1, r
 
     # 9) structural high score -> uncapped, trim to 50%
     r = recommend(qty=100, price=50, portfolio_value=PV, is_core=False, det_score=6, stop_hit=False,

@@ -162,7 +162,7 @@ def run():
             is_core=(t == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
             max_stage=state[t].get("max_stage", 0), baseline_qty=rk["baseline_qty"],
             has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
-            established_markdown=ds["established_markdown"], rel_weak=ds["criteria"]["rel_weak"],
+            established_markdown=ds["established_markdown"],
         )
         state[t]["max_stage"] = rec["stage"]            # ratchet down only
         engines[t] = {"risk": rk, "det": ds, "ladder": rec}

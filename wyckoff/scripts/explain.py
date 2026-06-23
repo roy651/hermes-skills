@@ -98,7 +98,7 @@ def explain(ticker: str) -> None:
             is_core=(ticker == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
             max_stage=rk["max_stage"], baseline_qty=rk["baseline_qty"],
             has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
-            established_markdown=ds["established_markdown"], rel_weak=ds["criteria"]["rel_weak"],
+            established_markdown=ds["established_markdown"],
         )
         out.append(f"\nLADDER: {rec['action']}  (Δ {rec['delta_qty']:+g} sh) · stage {rec['stage']}")
         out.append(f"  reason: {rec['reason']}")
