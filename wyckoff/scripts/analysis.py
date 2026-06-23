@@ -200,10 +200,10 @@ def _call_llm(system: str, user_parts: list[str]) -> dict:
 
 
 def validate(ticker: str, df: pd.DataFrame, name: str, verdict: dict,
-             market_ctx: dict | None = None) -> dict:
+             market_ctx: dict | None = None, catalyst: dict | None = None) -> dict:
     """Validator role: the LLM stress-tests the engine's decision (it does NOT decide or narrate).
-    `verdict` = {action, score, signals, stop}. Returns {valid: bool|None, note}; valid=None means the
-    LLM was unavailable (caller shows no validation line)."""
+    `verdict` = {action, score, signals, stop}; `catalyst` = {earnings_soon: bool, headlines: [str]}
+    (real Finnhub context). Returns {valid: bool|None, note}; valid=None = LLM unavailable."""
     label = f"{ticker} ({name})" if name and name != ticker else ticker
     sig = ", ".join(verdict.get("signals") or []) or "none"
     qty, last = verdict.get("qty"), verdict.get("price")
@@ -215,6 +215,16 @@ def validate(ticker: str, df: pd.DataFrame, name: str, verdict: dict,
     ]
     if market_ctx:
         user_parts.append("\n" + _market_context_block(market_ctx))
+    if catalyst:
+        ctx = []
+        if catalyst.get("earnings_soon"):
+            ctx.append("Earnings within ~14 days — price/volume is noisy around earnings.")
+        heads = catalyst.get("headlines") or []
+        if heads:
+            ctx.append("Recent headlines (use to spot an ex-dividend, split, M&A, or catalyst the price can't show):")
+            ctx += [f"- {h}" for h in heads[:5]]
+        if ctx:
+            user_parts.append("\n" + "\n".join(ctx))
     user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{df.to_csv()}")
     try:
         out = _call_llm(_SYSTEM_VALIDATE, user_parts)

@@ -24,6 +24,8 @@ LPSY_VOL_X = 0.7          # weak (contracting-volume) rally that fails to reclai
 MA_LEN = 50
 OFF_HIGH_GIVEBACK = 0.07  # given back >7% from the recent highest-high
 SCAN = 60
+MIN_MARKDOWN_LOSS = 0.08  # established-markdown floor only fires when down more than this (skip shallow basers)
+THIN_VOL_FRAC = 0.30      # >=30% of recent bars near-zero volume -> the volume criteria are unreliable
 
 
 def detect_upthrust(df: pd.DataFrame, rng: dict | None) -> dict | None:
@@ -81,10 +83,20 @@ def detect_lpsy(df: pd.DataFrame, rng: dict | None, sow: dict | None) -> dict | 
 
 
 def detect_support_break(df: pd.DataFrame, rng: dict | None) -> dict | None:
-    if not rng:
+    """Close below support. With a range, that's the range floor; without one (a name already in a
+    markdown, so no horizontal base) it's a fresh close below the prior 20-bar swing low on elevated
+    volume — a range-less SOW the range-dependent detectors would otherwise miss."""
+    cur = float(df["close"].iloc[-1])
+    if rng:
+        if cur < rng["support"]:
+            return {"date": str(df.index[-1]), "close": round(cur, 2), "support": rng["support"], "kind": "range"}
         return None
-    if float(df["close"].iloc[-1]) < rng["support"]:
-        return {"date": str(df.index[-1]), "close": round(float(df["close"].iloc[-1]), 2), "support": rng["support"]}
+    if len(df) < 25:
+        return None
+    v20 = df["volume"].rolling(20).mean().iloc[-1]
+    prior_low = float(df["low"].values[-21:-1].min())
+    if cur < prior_low and pd.notna(v20) and v20 > 0 and df["volume"].values[-1] > SOW_VOL_X * v20:
+        return {"date": str(df.index[-1]), "close": round(cur, 2), "support": round(prior_low, 2), "kind": "swing-low"}
     return None
 
 
@@ -124,16 +136,42 @@ def _distribution_volume(df: pd.DataFrame) -> bool:
     return bool(dn_v > up_v)
 
 
+def _thin_volume(df: pd.DataFrame) -> bool:
+    """Volume data is degenerate (many ~0-volume bars) -> the volume-based criteria can't be trusted.
+    Common in thinly-traded ILS names."""
+    v = df["volume"].tail(20)
+    if len(v) < 10:
+        return False
+    med = float(v.median())
+    if med <= 0:
+        return True
+    return int((v <= 0.1 * med).sum()) >= THIN_VOL_FRAC * len(v)
+
+
+def _price_distribution(df: pd.DataFrame) -> bool:
+    """Volume-independent distribution: recent lower highs AND lower lows (markdown structure)."""
+    if len(df) < 20:
+        return False
+    recent, prior = df.tail(10), df.iloc[-20:-10]
+    return bool(recent["high"].max() < prior["high"].max() and recent["low"].min() < prior["low"].min())
+
+
+def _selling_pressure(df: pd.DataFrame) -> bool:
+    """Distribution-volume normally; falls back to price structure when volume is too thin to trust."""
+    return _price_distribution(df) if _thin_volume(df) else _distribution_volume(df)
+
+
 def _off_highs(df: pd.DataFrame) -> bool:
     hh = float(df["high"].tail(SCAN).max())
     return bool(hh > 0 and float(df["close"].iloc[-1]) < hh * (1 - OFF_HIGH_GIVEBACK))
 
 
-def _established_markdown(df: pd.DataFrame, at_loss: bool) -> bool:
-    """A confirmed, *active* downtrend you're underwater on: below the medium MA AND still making
-    fresh lows (near the window low — not basing off it). Position-aware (only when at a loss) so a
-    long-term winner in a normal pullback isn't flagged. Used as a scale-out FLOOR, not a score bump."""
-    if not at_loss:
+def _established_markdown(df: pd.DataFrame, loss_pct: float | None) -> bool:
+    """A confirmed, *active* downtrend you're MATERIALLY underwater on: below the medium MA AND still
+    making fresh lows (near the window low, not basing off it) AND down more than MIN_MARKDOWN_LOSS.
+    Position-aware so a long-term winner in a normal pullback — or a shallow dip — isn't flagged.
+    Used as a scale-out FLOOR, not a score bump."""
+    if loss_pct is None or loss_pct > -MIN_MARKDOWN_LOSS:
         return False
     c = df["close"]
     if len(c) < MA_LEN + 5:
@@ -144,12 +182,13 @@ def _established_markdown(df: pd.DataFrame, at_loss: bool) -> bool:
     return bool(below_ma and fresh_low)
 
 
-def deterioration_score(df: pd.DataFrame, market_ctx: dict | None = None, at_loss: bool = False) -> dict:
+def deterioration_score(df: pd.DataFrame, market_ctx: dict | None = None, loss_pct: float | None = None) -> dict:
     rng = detect_range(df)
     ut = detect_upthrust(df, rng)
     sow = detect_sow(df, rng)
     lpsy = detect_lpsy(df, rng, sow)
     brk = detect_support_break(df, rng)
+    thin = _thin_volume(df)
     crit = {
         "upthrust": bool(ut),
         "utad": bool(ut and ut.get("confirmed") and rng and rng.get("resistance_clusters", 0) >= 2),
@@ -158,19 +197,22 @@ def deterioration_score(df: pd.DataFrame, market_ctx: dict | None = None, at_los
         "support_break": bool(brk),
         "rel_weak": _rel_weak(df, market_ctx),
         "ma_rollover": _ma_rollover(df),
-        "distribution_volume": _distribution_volume(df),
+        "distribution_volume": _selling_pressure(df),       # price-structure fallback when volume is thin
         "off_highs": _off_highs(df),
     }
     signals = [k for k, v in crit.items() if v]
-    established = _established_markdown(df, at_loss)
+    established = _established_markdown(df, loss_pct)
     if established:
         signals.append("established_markdown")
+    if thin:
+        signals.append("thin_volume")
     return {
         "score": sum(1 for v in crit.values() if v),
         "criteria": crit,
         "signals": signals,
         "established_markdown": established,                 # scale-out FLOOR (not counted in score)
         "has_structural": bool(ut or sow or lpsy or brk),   # a real distribution top -> uncaps the ladder
+        "thin_volume": thin,
         "events": {"upthrust": ut, "sow": sow, "lpsy": lpsy, "support_break": brk, "range": rng},
     }
 
@@ -207,9 +249,22 @@ if __name__ == "__main__":  # self-test: synthetic data
     stage, target = score_to_stage(r_dn["score"])
     assert stage >= 1 and target <= 75
 
-    # 2b) held at a loss in that active downtrend -> established-markdown floor; an uptrend never is
-    assert deterioration_score(df_dn, at_loss=True)["established_markdown"], "active downtrend at a loss = markdown"
-    assert not deterioration_score(df_up, at_loss=True)["established_markdown"], "uptrend is not a markdown"
+    # 2b) materially underwater in that active downtrend -> established-markdown floor
+    assert deterioration_score(df_dn, loss_pct=-0.20)["established_markdown"], "deep downtrend at a loss = markdown"
+    assert not deterioration_score(df_dn, loss_pct=-0.03)["established_markdown"], "shallow loss must NOT trip the floor"
+    assert not deterioration_score(df_up, loss_pct=-0.20)["established_markdown"], "uptrend is not a markdown"
+
+    # 2c) thin volume -> flagged, and the volume criterion falls back to price-structure (no crash)
+    thin_df = df_dn.copy()
+    thin_df.iloc[-12:, thin_df.columns.get_loc("volume")] = 0
+    assert deterioration_score(thin_df, loss_pct=-0.20)["thin_volume"], "many 0-volume bars -> thin_volume"
+
+    # 2d) range-less high-volume breakdown -> support_break fires WITHOUT a range (the MBLY gap)
+    bd_c = np.concatenate([np.linspace(100, 105, 45), [99.0]])
+    bd = pd.DataFrame({"high": bd_c + 0.5, "low": bd_c - 0.5, "close": bd_c,
+                       "volume": np.array([1000.0] * 45 + [3000.0])})
+    sb = detect_support_break(bd, None)
+    assert sb is not None and sb["kind"] == "swing-low", f"range-less breakdown should fire, got {sb}"
 
     # 3) stage mapping + hard-stop override
     assert score_to_stage(2) == (0, 100) and score_to_stage(4) == (1, 75)

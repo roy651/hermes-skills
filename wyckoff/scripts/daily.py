@@ -28,6 +28,7 @@ import risk
 import deterioration
 import ladder
 import events
+import finnhub
 from prescreener import _get_spy_context
 
 TZ = ZoneInfo("Asia/Jerusalem")
@@ -147,9 +148,9 @@ def run():
         price = float(td.df["close"].iloc[-1])
         h = holdings[t]
         cost_local = h["avg_cost"] / 100 if td.currency == "ILS" else h["avg_cost"]
-        at_loss = price < cost_local
+        loss_pct = (price / cost_local - 1) if cost_local else None
         rk = risk.assess(t, td.df, h["qty"], state=state)
-        ds = deterioration.deterioration_score(td.df, market_ctx, at_loss=at_loss)
+        ds = deterioration.deterioration_score(td.df, market_ctx, loss_pct=loss_pct)
         evs = events.detect_events(td.df)
         rec = ladder.recommend(
             qty=h["qty"], price=price * _to_usd(td.currency), portfolio_value=total_value_usd,
@@ -163,6 +164,14 @@ def run():
     if not args.dry_run:
         risk.save_state(state)
 
+    # Real catalysts to ground the validator (entry funnel already uses finnhub; ex-div is paid-tier, so
+    # we pass earnings-soon + recent headlines and let the validator spot ex-div/splits/M&A in them).
+    earnings_soon: set = set()
+    try:
+        earnings_soon = finnhub.earnings_within(set(held_tickers), days=14)
+    except Exception as e:
+        print(f"[daily] earnings calendar unavailable: {e}", file=sys.stderr)
+
     # 3. LLM in parallel: VALIDATE each held verdict; ENTRY-analyse each watchlist name
     def _llm(t: str):
         td = data[t]
@@ -171,7 +180,12 @@ def run():
             verdict = {"action": e["ladder"]["action"], "score": e["det"]["score"],
                        "signals": e["det"]["signals"], "stop": e["risk"]["stop"],
                        "qty": holdings[t]["qty"], "price": round(float(td.df["close"].iloc[-1]), 2)}
-            return t, wyckoff.validate(t, td.df, td.name, verdict, market_ctx)
+            catalyst = {"earnings_soon": t in earnings_soon, "headlines": []}
+            try:
+                catalyst["headlines"] = [n["headline"] for n in finnhub.company_news(t, days=21, limit=5)]
+            except Exception:
+                pass
+            return t, wyckoff.validate(t, td.df, td.name, verdict, market_ctx, catalyst=catalyst)
         try:
             return t, wyckoff.analyze(t, td.df, held=False, name=td.name, mode="entry", market_ctx=market_ctx)
         except Exception as e:
