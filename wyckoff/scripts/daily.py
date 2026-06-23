@@ -108,6 +108,12 @@ def run():
             market_ctx = _get_spy_context()
         except Exception as e:
             print(f"[daily] SPY context fetch failed: {e}", file=sys.stderr)
+    if market_ctx is not None:
+        try:
+            _spy = market_data.fetch_ohlcv("SPY", days=lookback).df["close"]
+            market_ctx["spy_window_return"] = float(_spy.iloc[-1] / _spy.iloc[0] - 1)
+        except Exception as e:
+            print(f"[daily] SPY window-return fetch failed: {e}", file=sys.stderr)
 
     # 1. Fetch OHLCV for everything in parallel (network-bound)
     data: dict = {}
@@ -156,7 +162,7 @@ def run():
             is_core=(t == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
             max_stage=state[t].get("max_stage", 0), baseline_qty=rk["baseline_qty"],
             has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
-            established_markdown=ds["established_markdown"],
+            established_markdown=ds["established_markdown"], rel_weak=ds["criteria"]["rel_weak"],
         )
         state[t]["max_stage"] = rec["stage"]            # ratchet down only
         engines[t] = {"risk": rk, "det": ds, "ladder": rec}

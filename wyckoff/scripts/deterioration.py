@@ -100,18 +100,19 @@ def detect_support_break(df: pd.DataFrame, rng: dict | None) -> dict | None:
     return None
 
 
+REL_WEAK_GAP = 0.10   # underperform SPY by >10pp over the shared lookback window = relative weakness
+
+
 def _rel_weak(df: pd.DataFrame, market_ctx) -> bool:
-    """Instrument's ~3-month return below the market's (rel-strength flip)."""
-    if not market_ctx:
+    """Instrument materially weaker than the market: its return over the shared lookback window trails
+    SPY's by more than REL_WEAK_GAP. Needs market_ctx['spy_window_return'] (SPY's same-window return)."""
+    if not market_ctx or market_ctx.get("spy_window_return") is None:
         return False
     c = df["close"]
-    if len(c) < 64:
+    if len(c) < 30 or float(c.iloc[0]) <= 0:
         return False
-    inst = float(c.iloc[-1] / c.iloc[-64] - 1)
-    for k in ("market_3m_return", "market_6m_return", "spy_6m_return", "spy_6m"):
-        if k in market_ctx and market_ctx[k] is not None:
-            return inst < float(market_ctx[k])
-    return False
+    inst = float(c.iloc[-1] / c.iloc[0] - 1)
+    return (inst - float(market_ctx["spy_window_return"])) < -REL_WEAK_GAP
 
 
 def _ma_rollover(df: pd.DataFrame) -> bool:
@@ -265,6 +266,10 @@ if __name__ == "__main__":  # self-test: synthetic data
                        "volume": np.array([1000.0] * 45 + [3000.0])})
     sb = detect_support_break(bd, None)
     assert sb is not None and sb["kind"] == "swing-low", f"range-less breakdown should fire, got {sb}"
+
+    # 2e) relative weakness: instrument lagging SPY by >10pp over the shared window
+    assert deterioration_score(df_dn, market_ctx={"spy_window_return": 0.05})["criteria"]["rel_weak"], "lagging SPY -> rel_weak"
+    assert not deterioration_score(df_up, market_ctx={"spy_window_return": 0.05})["criteria"]["rel_weak"], "leading SPY -> not rel_weak"
 
     # 3) stage mapping + hard-stop override
     assert score_to_stage(2) == (0, 100) and score_to_stage(4) == (1, 75)
