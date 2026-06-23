@@ -99,16 +99,16 @@ Key events detected recently. Common signals:
 The weekly funnel is the main entry-signal generator: prescreen ~600 tickers → Wyckoff LLM on survivors → news-validate the top cut → up to 5 tiered picks (STRONG / BORDERLINE).
 
 ```bash
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/weekly.py >> logs/weekly.log 2>&1
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/entry.py >> logs/weekly.log 2>&1
 
 # Preview without sending to Telegram:
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/weekly.py --dry-run
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/entry.py --dry-run
 ```
 
 Examples of what the user might say → what to run:
-- "run the weekly analysis" / "תריץ את הניתוח השבועי" → `weekly.py`
-- "find me entry picks" / "מה כדאי לקנות?" → `weekly.py`
-- "what are this week's buys" → `weekly.py`
+- "run the weekly analysis" / "תריץ את הניתוח השבועי" → `entry.py`
+- "find me entry picks" / "מה כדאי לקנות?" → `entry.py`
+- "what are this week's buys" → `entry.py`
 
 ## Hermes Tool: Run Daily Exit-Watch On-Demand
 
@@ -116,20 +116,20 @@ The daily job reviews **held positions only** for distribution/exit risk (defaul
 
 ```bash
 # Held positions, exit-watch (default)
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/exit.py
 
 # Also available on-demand (entry-tuned): approved watchlist, or everything
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section watchlist
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --section all
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/exit.py --section watchlist
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/exit.py --section all
 
 # Preview without sending:
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py --dry-run
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/exit.py --dry-run
 ```
 
 Examples of what the user might say → what to run:
-- "analyze my portfolio" / "תנתח את הפורטפוליו" → `daily.py` (portfolio exit-watch)
-- "any exit signals?" / "יש סימני מכירה?" → `daily.py`
-- "check the watchlist" / "תבדוק את רשימת המעקב" → `daily.py --section watchlist`
+- "analyze my portfolio" / "תנתח את הפורטפוליו" → `exit.py` (portfolio exit-watch)
+- "any exit signals?" / "יש סימני מכירה?" → `exit.py`
+- "check the watchlist" / "תבדוק את רשימת המעקב" → `exit.py --section watchlist`
 
 ## Hermes Tool: Raw Candidate Scan On-Demand
 
@@ -300,7 +300,7 @@ print(f"registered {len(new_jobs)} jobs")
 EOF
 
 # 4. Run once to test
-cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/daily.py
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/exit.py
 ```
 
 ## File Structure
@@ -312,8 +312,8 @@ wyckoff/
 ├── requirements.txt
 ├── config.yaml           # approved watchlist + LLM settings
 ├── scripts/
-│   ├── weekly.py         # Sunday entry funnel: prescreen → Wyckoff LLM → news → top-5 tiered
-│   ├── daily.py          # daily exit-watch (default --section portfolio, exit mode)
+│   ├── entry.py         # Sunday entry funnel: prescreen → Wyckoff LLM → news → top-5 tiered
+│   ├── exit.py          # daily exit-watch (default --section portfolio, exit mode)
 │   ├── prescreener.py    # quant screener (no LLM): S&P 500 + NASDAQ 100 → ~30 candidates
 │   ├── events.py         # programmatic range/Spring/SOS/LPS detection (no LLM) + calibration CLI
 │   ├── analysis.py       # Wyckoff LLM analysis (entry/exit modes + market & event context)

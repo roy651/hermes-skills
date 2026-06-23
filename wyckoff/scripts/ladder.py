@@ -51,7 +51,8 @@ def recommend(*, qty: float, price: float, portfolio_value: float, is_core: bool
     ceiling = min(det_ceiling, cap_qty)  # binding upper limit
 
     if stage >= 3:
-        return _res("EXIT", 0, qty, "stop hit / exit score ≥7 — exit fully", stage=stage, pos_pct=pos_pct)
+        why = "trailing stop hit" if stop_hit else "exit score ≥7"
+        return _res("EXIT", 0, qty, f"{why} — exit fully", stage=stage, pos_pct=pos_pct)
 
     if qty > ceiling * (1 + TRIM_TOL):
         why = "deterioration" if det_ceiling <= cap_qty else "over concentration cap"

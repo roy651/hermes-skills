@@ -52,7 +52,7 @@ A quiet higher-low pullback after the SOS — the textbook entry.
 ## Scoring (`event_summary`)
 
 `score`: 0 = no range, 1 = range only, 2+ = range plus one or more of Spring/SOS/LPS.
-`has_entry_event` (the hard Gate D in `weekly.py`) is true iff a Spring, SOS, or LPS exists.
+`has_entry_event` (the hard Gate D in `entry.py`) is true iff a Spring, SOS, or LPS exists.
 The weekly composite rank uses `event_score / 4` (range + the three events) as one of its
 three equal-weighted terms.
 

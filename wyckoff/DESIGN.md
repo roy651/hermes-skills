@@ -73,7 +73,7 @@ When discussing a position, reason in this order (this is the lens the human rev
   flags the same pattern, turn it into a deterministic detector so the engine needs the LLM less.
 
 ## Relationship to the entry funnel
-Entry (`weekly.py`) and exit (`daily.py`) are mirror images: entry hunts *accumulation* structure
+Entry (`entry.py`) and exit (`exit.py`) are mirror images: entry hunts *accumulation* structure
 (Spring/SOS/LPS) to **buy**; exit hunts *distribution* structure (UT/UTAD/SOW/LPSY) to **scale out**. They
 share the data / analysis / notify core and the 0–N criteria idea; the entry funnel uses Finnhub news as a
 gate, the exit side now uses it to validate. See `README.md` for both pipelines end to end.

@@ -1,4 +1,4 @@
-"""Shared Telegram digest formatting for weekly.py and daily.py.
+"""Shared Telegram digest formatting for entry.py and exit.py.
 
 One `format_block` is the single source of truth for a per-ticker block, so the two
 schedulers can't drift (the drift between two copies caused the earlier HTML-escape bug).

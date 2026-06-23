@@ -6,8 +6,8 @@ and report to Telegram.
 
 | Pipeline | Script | Cadence | Job |
 |---|---|---|---|
-| **Entry funnel** — surface a few high-quality buy candidates from a broad universe | `weekly.py` | Sunday 08:00 UTC | `wyckoff_weekly` |
-| **Exit watch** — manage *held* positions (scale-out / stops) | `daily.py --section portfolio` | weekly, Sunday (~12:00 IL) | Hermes cron |
+| **Entry funnel** — surface a few high-quality buy candidates from a broad universe | `entry.py` | Sunday 08:00 UTC | `wyckoff_weekly` |
+| **Exit watch** — manage *held* positions (scale-out / stops) | `exit.py --section portfolio` | weekly, Sunday (~12:00 IL) | Hermes cron |
 
 > Design split: **mechanics decide, the LLM assists.** Programmatic detectors + a deterministic engine
 > make the calls; the LLM grounds the entry read and *validates* the exit verdicts — it is never the
@@ -31,7 +31,7 @@ and report to Telegram.
 
 ---
 
-## ENTRY funnel (`weekly.py`)
+## ENTRY funnel (`entry.py`)
 From ~600 names → ≤5 high-conviction buy candidates.
 
 1. **Universe** (`prescreener._get_universe`) — S&P 500 + NASDAQ 100 + ~20 sector/asset ETFs (~600, deduped);
@@ -66,7 +66,7 @@ From ~600 names → ≤5 high-conviction buy candidates.
 
 ---
 
-## EXIT watch (`daily.py --section portfolio`)
+## EXIT watch (`exit.py --section portfolio`)
 Manage *held* positions with a rigorous, convergent, deterministic engine; the LLM only validates.
 
 **Pipeline:** fetch → engine → validate → assemble.
@@ -117,4 +117,4 @@ Edit here (Mac) → `git push` → mini-PC `git pull` → copy changed `scripts/
 (preserve `.venv` / `.env` / `data/` / `logs/`); reinstall deps if `requirements.txt` changed.
 
 - **Module self-tests:** `.venv/bin/python scripts/{risk,deterioration,ladder}.py`
-- **Dry-runs (print, no Telegram, no state write):** `… scripts/daily.py --section portfolio --dry-run` · `… scripts/weekly.py --dry-run`
+- **Dry-runs (print, no Telegram, no state write):** `… scripts/exit.py --section portfolio --dry-run` · `… scripts/entry.py --dry-run`

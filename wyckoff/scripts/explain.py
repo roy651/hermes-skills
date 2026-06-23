@@ -103,9 +103,14 @@ def explain(ticker: str) -> None:
             has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
             established_markdown=ds["established_markdown"],
         )
-        out.append(f"\nLADDER: {rec['action']}  (Δ {rec['delta_qty']:+g} sh) · stage {rec['stage']}")
-        out.append(f"  reason: {rec['reason']}")
-        out.append("  NOTE: the 20% concentration cap is portfolio-level (needs total value) — not applied in this single-ticker view; see the full report.")
+        action = rec["action"]
+        if action.startswith("ADD"):
+            out.append("\nLADDER: ADD candidate · stage 0 — clean (0/9) with a fresh entry setup, below target")
+            out.append("  NOTE: the add SIZE depends on portfolio value (the 20% cap) — see the full report for the share target (this single-ticker view can't size it).")
+        else:
+            out.append(f"\nLADDER: {action}  (Δ {rec['delta_qty']:+g} sh) · stage {rec['stage']}")
+            out.append(f"  reason: {rec['reason']}")
+            out.append("  NOTE: the 20% concentration cap is portfolio-level (needs total value) — not applied in this single-ticker view; see the full report.")
     else:
         out.append("\n(not held — no stop/ladder; structural read only)")
 

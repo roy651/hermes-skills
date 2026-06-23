@@ -362,7 +362,7 @@ _FLAG_LABELS = {
 
 
 def format_header(spy_ctx: dict, n: int, date_str: str) -> list[str]:
-    """Candidate-message header lines. Shared by prescreener.run() and weekly.py."""
+    """Candidate-message header lines. Shared by prescreener.run() and entry.py."""
     spy_off = spy_ctx["spy_pct_off_high"] * 100
     req_off = spy_ctx["required_pct_off_high"] * 100
     return [
@@ -374,7 +374,7 @@ def format_header(spy_ctx: dict, n: int, date_str: str) -> list[str]:
 
 
 def format_candidate_line(r: dict) -> str:
-    """One candidate row. Shared by prescreener.run() and weekly.py."""
+    """One candidate row. Shared by prescreener.run() and entry.py."""
     flags = [label for key, label in _FLAG_LABELS.items() if r["breakdown"].get(key)]
     name_part = f" ({html.escape(str(r['name']))})" if r["name"] != r["ticker"] else ""
     rel = f"6m={r['rel_6m']:+.0f}pp 12m={r['rel_12m']:+.0f}pp vs SPY"
