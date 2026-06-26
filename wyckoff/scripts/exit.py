@@ -62,6 +62,27 @@ def _start_watchdog(seconds: int) -> None:
     threading.Thread(target=_kill, daemon=True).start()
 
 
+def _validate_voted(verdict_fn, *args, **kwargs) -> dict:
+    """One validation; escalate to best-of-3 ONLY when it flags (a lone flag on a borderline name is
+    the coin-flip we saw run-to-run). Majority wins; a split vote is tagged 'contested' so the name
+    reads as genuinely ambiguous rather than flip-flopping. Confirms/unavailable stay at one call —
+    so the extra cost lands only on the handful of names that are actually contested."""
+    first = verdict_fn(*args, **kwargs)
+    if not first or first.get("valid") is not False:
+        return first
+    votes = [first] + [verdict_fn(*args, **kwargs) for _ in range(2)]
+    flags = sum(1 for v in votes if v and v.get("valid") is False)
+    confirms = sum(1 for v in votes if v and v.get("valid") is True)
+    if flags + confirms < 2:
+        return first                                   # not enough valid votes — keep the flag
+    contested = bool(flags and confirms)
+    if flags >= confirms:                              # majority (a tie favours the cautious flag)
+        note = next((v.get("note", "") for v in votes if v and v.get("valid") is False), "")
+        return {"valid": False, "note": ("(contested) " if contested else "") + note}
+    note = next((v.get("note", "") for v in votes if v and v.get("valid") is True), "")
+    return {"valid": True, "note": "(contested) " + note}   # the flag was outvoted — a coin-flip
+
+
 def run():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -197,7 +218,7 @@ def run():
                 catalyst["headlines"] = [n["headline"] for n in finnhub.company_news(t, days=21, limit=5)]
             except Exception:
                 pass
-            return t, wyckoff.validate(t, td.df, td.name, verdict, market_ctx, catalyst=catalyst)
+            return t, _validate_voted(wyckoff.validate, t, td.df, td.name, verdict, market_ctx, catalyst=catalyst)
         try:
             return t, wyckoff.analyze(t, td.df, held=False, name=td.name, mode="entry", market_ctx=market_ctx)
         except Exception as e:
