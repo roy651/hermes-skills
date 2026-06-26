@@ -181,34 +181,76 @@ def _position_size(criteria: int, event_score: int = 0) -> str:
 
 # ── digest ────────────────────────────────────────────────────────────────
 
-def _stats_line(b: dict) -> str:
-    parts = []
+_REC_WORD = {"buy": "Buy", "add": "Add", "hold": "Hold", "reduce": "Reduce",
+             "sell": "Sell", "watch": "Watch", "pass": "Pass"}
+
+
+def _pick_block(b: dict, dot: str, with_size: bool = True) -> list[str]:
+    """One aligned pick block: a single colour cue (the tier dot) per asset, no other icons.
+    Lines: asset · recommendation(+entry/stop/size) · phase·criteria · events · stats · note(+news)."""
+    r = b["result"]
+    sym = {"USD": "$", "ILS": "₪"}.get(b["currency"], b["currency"] + " ")
+    ticker = r["ticker"]
+
+    title = f"{dot} <b>{ticker}</b>"
+    if b["name"] and b["name"] != ticker:
+        title += f" · <i>{html.escape(b['name'])}</i>"
+    lines = [f"{title} · {sym}{b['price']:.2f}"]
+
+    # recommendation (+ entry/stop only for an actionable buy/add, + size)
+    rec = r.get("recommendation", "")
+    rec_parts = [f"<b>{_REC_WORD.get(rec, rec.title() or '—')}</b>"]
+    entry, stop = r.get("entry_zone"), r.get("stop")
+    if rec in ENTRY_RECS:
+        if entry:
+            ez = f"entry {sym}{html.escape(str(entry))}"
+            if digest.entry_below_price(entry, b["price"]):
+                ez += " (await pullback)"
+            rec_parts.append(ez)
+        if stop:
+            rec_parts.append(f"stop {sym}{html.escape(str(stop))}")
+    if with_size:
+        rec_parts.append(_position_size(_criteria(r), b.get("event_score", 0)))
+    lines.append(" · ".join(rec_parts))
+
+    # phase · criteria
+    phase = html.escape(str(r.get("phase", "unclear")).title())
+    conf = r.get("phase_confidence", "")
+    lines.append(phase + (f" ({html.escape(str(conf))})" if conf else "") + f" · {_criteria(r)}/9")
+
+    # detected structure (the entry "signals")
+    if b.get("event_labels"):
+        lines.append(html.escape(", ".join(b["event_labels"])))
+
+    # liquidity / size / sector — plain line, no icon
+    stats = []
     if b.get("adv_musd"):
-        parts.append(f"ADV ${b['adv_musd']:.0f}M")
+        stats.append(f"ADV ${b['adv_musd']:.0f}M")
     cap = b.get("market_cap")
     if cap:
-        parts.append(f"Cap ${cap / 1e9:.1f}B" + (" ⚠️small-cap" if cap < 2e9 else ""))
+        stats.append(f"Cap ${cap / 1e9:.1f}B" + (" small-cap" if cap < 2e9 else ""))
     if b.get("sector"):
-        parts.append(b["sector"])
-    out = []
-    if parts:
-        out.append("  💧 " + " · ".join(parts))
-    if b.get("event_labels"):
-        out.append("  🔎 Events: " + ", ".join(b["event_labels"]))
-    return "\n".join(out)
-
-
-def _pick_block(b: dict, with_size: bool = True) -> list[str]:
-    out = [digest.format_block(
-        b["result"], None, b["price"], name=b["name"],
-        currency=b["currency"], news_info=b.get("news_info"), gate_action=True,
-    )]
-    stats = _stats_line(b)
+        stats.append(html.escape(b["sector"]))
     if stats:
-        out.append(stats)
-    if with_size:
-        out.append(f"  📐 Suggested size: {_position_size(_criteria(b['result']), b.get('event_score', 0))}")
-    return out
+        lines.append(" · ".join(stats))
+
+    # note (+ news folded in, no icons)
+    if r.get("note"):
+        lines.append(f"<i>{html.escape(str(r['note']))}</i>")
+    news = b.get("news_info")
+    if news:
+        bits = []
+        if not news.get("clean", True):
+            bits.append(f"news flag: {html.escape(news.get('flag') or 'issue')}")
+        cons = news.get("analyst_consensus")
+        if cons and cons != "unknown":
+            bits.append(f"analysts {html.escape(str(cons))}")
+        if news.get("summary"):
+            bits.append(html.escape(str(news["summary"])))
+        if bits:
+            lines.append("<i>" + " · ".join(bits) + "</i>")
+
+    return lines
 
 
 def _build_weekly_digest(
@@ -227,32 +269,32 @@ def _build_weekly_digest(
         f"📈 <b>Wyckoff Weekly — {date_str}</b>",
         f"<i>SPY {spy_off:.1f}% off 52w high · 6m {r6:+.1f}% · 12m {r12:+.1f}%</i>",
         "",
-        f"🟢 <b>STRONG — accumulation confirmed ({len(strong)})</b>",
+        f"<b>— STRONG · accumulation confirmed ({len(strong)}) —</b>",
     ]
     if strong:
         for b in strong:
-            lines.extend(_pick_block(b))
+            lines.extend(_pick_block(b, "🟢"))
             lines.append("")
     else:
         lines.append("<i>None this week — no base completed a Spring→SOS→LPS accumulation sequence.</i>")
         lines.append("")
 
-    lines.append(f"🟣 <b>MARKUP-PULLBACK — confirm before acting ({len(markup)})</b>")
+    lines.append(f"<b>— MARKUP-PULLBACK · confirm before acting ({len(markup)}) —</b>")
     if markup:
         lines.append("<i>Leaders pulling back to a recent breakout (these bypass the off-high floor). "
                      "A quiet-rally distribution top can look identical at entry — confirm by eye / lean on "
                      "the daily exit-watch, and keep half size.</i>")
         for b in markup:
-            lines.extend(_pick_block(b))
+            lines.extend(_pick_block(b, "🟣"))
             lines.append("")
     else:
         lines.append("<i>None.</i>")
         lines.append("")
 
-    lines.append(f"🟡 <b>BORDERLINE ({len(borderline)})</b>")
+    lines.append(f"<b>— BORDERLINE ({len(borderline)}) —</b>")
     if borderline:
         for b in borderline:
-            lines.extend(_pick_block(b, with_size=False))
+            lines.extend(_pick_block(b, "🟡", with_size=False))
             miss = _missing(b)
             if miss:
                 lines.append(f"  <i>Missing: {', '.join(miss)}</i>")
