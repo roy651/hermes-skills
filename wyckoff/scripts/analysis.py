@@ -167,6 +167,47 @@ def analyze(
     return result
 
 
+# Degradation tracking: the claude-proxy silently falls back to a cheaper model when claude-code is
+# down (e.g. an expired login). It reports the real backend in the X-Proxy-Backend header; we record
+# any non-claude backend so a report can WARN instead of shipping a qwen read as if it were Claude.
+_FALLBACK_BACKENDS: set[str] = set()
+
+
+def _note_backend(backend: str) -> None:
+    if backend and not backend.lower().startswith("claude"):
+        _FALLBACK_BACKENDS.add(backend)
+
+
+def reset_degradation() -> None:
+    _FALLBACK_BACKENDS.clear()
+
+
+def degradation() -> set:
+    """Non-claude backends the proxy fell back to since the last reset (empty set = clean Claude run)."""
+    return set(_FALLBACK_BACKENDS)
+
+
+def backend_warmup(timeout: int = 30) -> tuple[bool, str]:
+    """One tiny probe before the concurrent analysis batch. Two jobs: (1) trigger a Claude OAuth token
+    refresh while only ONE request is in flight — a batch racing an expired token is what silently
+    drops every call to the fallback model; and (2) report the live backend. Records a fallback too."""
+    model = os.environ.get("WYCKOFF_LLM_MODEL", "claude-opus-4-6")
+    try:
+        resp = requests.post(
+            API_URL,
+            headers={"Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'local')}",
+                     "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": "ok"}],
+                  "max_tokens": 1, "temperature": 0},
+            timeout=timeout,
+        )
+        backend = resp.headers.get("X-Proxy-Backend", "")
+    except Exception as e:
+        return False, f"probe-failed: {e}"
+    _note_backend(backend)
+    return backend.lower().startswith("claude"), backend or "unknown"
+
+
 def _call_llm(system: str, user_parts: list[str]) -> dict:
     messages = [
         {"role": "system", "content": system},
@@ -184,6 +225,7 @@ def _call_llm(system: str, user_parts: list[str]) -> dict:
         try:
             resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
             resp.raise_for_status()
+            _note_backend(resp.headers.get("X-Proxy-Backend", ""))
             text = resp.json()["choices"][0]["message"]["content"].strip()
             if not text:
                 raise ValueError("empty LLM response")

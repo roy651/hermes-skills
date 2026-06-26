@@ -225,6 +225,13 @@ def run():
             print(f"[daily] entry analyze failed for {t}: {e}", file=sys.stderr)
             return t, {"ticker": t, "phase": "unclear", "note": "(read unavailable)"}
 
+    # Warm the proxy (refresh the Claude token while only one call is in flight) + start degradation
+    # tracking, BEFORE the concurrent batch — a batch racing an expired token silently drops to qwen.
+    wyckoff.reset_degradation()
+    _hc_ok, _hc_backend = wyckoff.backend_warmup()
+    if not _hc_ok:
+        print(f"[daily] ⚠️ backend not Claude at warmup: {_hc_backend}", file=sys.stderr)
+
     llm_out: dict = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futs = {pool.submit(_llm, t): t for t in held_tickers + watch_tickers}
@@ -263,6 +270,12 @@ def run():
         "all": "Daily",
     }[args.section]
     parts = [f"📊 <b>Wyckoff {section_label} — {date_str}</b>"]
+
+    degraded = wyckoff.degradation()
+    if degraded:
+        parts.append("⚠️ <b>DEGRADED</b> — Claude was unavailable; analysis ran on "
+                     f"<code>{html.escape(', '.join(sorted(degraded)))}</code>, not Claude. "
+                     "Re-auth the claude CLI and re-run for a Claude-quality read.")
 
     if any(buckets.values()):
         for cat, label in (("EXIT", "Exit"), ("TRIM", "Trim"), ("ADD", "Add"), ("HOLD", "Hold")):

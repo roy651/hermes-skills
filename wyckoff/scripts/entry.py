@@ -268,6 +268,12 @@ def _build_weekly_digest(
     lines = [
         f"📈 <b>Wyckoff Weekly — {date_str}</b>",
         f"<i>SPY {spy_off:.1f}% off 52w high · 6m {r6:+.1f}% · 12m {r12:+.1f}%</i>",
+    ]
+    degraded = wyckoff.degradation()
+    if degraded:
+        lines.append("⚠️ <b>DEGRADED</b> — Claude was unavailable; ran on "
+                     f"<code>{html.escape(', '.join(sorted(degraded)))}</code>, not Claude. Re-run after re-auth.")
+    lines += [
         "",
         f"<b>— STRONG · accumulation confirmed ({len(strong)}) —</b>",
     ]
@@ -370,6 +376,13 @@ def run(dry_run: bool = False) -> None:
             print(f"[weekly] excluded {len(soon)} earnings-imminent: {sorted(soon)}", file=sys.stderr)
     except Exception as e:
         print(f"[weekly] earnings calendar unavailable, skipping exclusion: {e}", file=sys.stderr)
+
+    # Warm the proxy (refresh the Claude token while only one call is in flight) + start degradation
+    # tracking, BEFORE the concurrent batch — a batch racing an expired token silently drops to qwen.
+    wyckoff.reset_degradation()
+    _hc_ok, _hc_backend = wyckoff.backend_warmup()
+    if not _hc_ok:
+        print(f"[weekly] ⚠️ backend not Claude at warmup: {_hc_backend}", file=sys.stderr)
 
     # Stage 3: LLM Wyckoff on each candidate (entry mode, market context)
     bundles, errors = _analyze_candidates(candidates, spy_ctx)

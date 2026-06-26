@@ -269,9 +269,9 @@ def chat_completions():
             )
             if new_session_id:
                 _session.update({"id": new_session_id, "model": model, "msg_count": msg_count})
-            if streaming:
-                return _stream_response(content, model)
-            return jsonify(_openai_response(content, model))
+            resp = _stream_response(content, model) if streaming else jsonify(_openai_response(content, model))
+            resp.headers["X-Proxy-Backend"] = model      # the real backend that served this call
+            return resp
         except Exception as e:
             log.warning(f"Claude Code error: {e} — falling back to {FALLBACK_MODEL}")
             _session.update({"id": None, "model": None, "msg_count": 0})
@@ -293,8 +293,11 @@ def chat_completions():
     if streaming:
         return app.response_class(resp.iter_content(chunk_size=None),
                                    mimetype="text/event-stream",
-                                   headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
-    return jsonify(resp.json()), resp.status_code
+                                   headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache",
+                                            "X-Proxy-Backend": model})
+    out = jsonify(resp.json())
+    out.headers["X-Proxy-Backend"] = model               # the real backend (a fallback when claude failed)
+    return out, resp.status_code
 
 
 @app.route("/v1/models", methods=["GET"])
