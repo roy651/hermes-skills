@@ -342,18 +342,46 @@ wyckoff/
 | Price alerts | `wyckoff_price_alerts` | `1 20 * * *` | 23:01 daily | ≥3.5% move scan, no LLM |
 | Portfolio value | `wyckoff_portfolio_value` | `5 20 * * 1-5` | 23:05 Mon–Fri | Daily P&L valuation |
 
-## Hermes Tool: Bulk Load from Israeli Broker Export
+## Hermes Tool: Update Holdings from an Uploaded Broker Export (.xlsx)
 
-Roy's broker exports a Hebrew table with columns: שם נייר (name), מספר נייר (TASE security #), שער אחרון (last price), כמות בתיק (qty), שער עלות (avg cost), נתח מהתיק (portfolio %).
+When the user **uploads their broker "online balances" (יתרות מקוונות) spreadsheet** and asks to update/sync their holdings ("update my holdings from this file", "תעדכן את התיק מהקובץ"), use the deterministic importer — do **not** parse the spreadsheet yourself (it is Hebrew with redundant columns; manual parsing silently gets a quantity or cost wrong, and holdings data must be exact — it drives every trim/stop).
 
-To load these into Wyckoff holdings:
-1. Map Hebrew names + TASE IDs to Yahoo Finance tickers (see `references/roy-portfolio-tickers.md`)
-2. Use `manage.py holdings-add <TICKER> <QTY> <AVG_COST>` for each
-3. Watch for TASE tickers (`.TA` suffix) — some return 404 from yfinance (e.g., `SLRL.TA`)
+The uploaded file is cached locally as a document attachment (`~/.hermes/cache/documents/doc_*_<name>.xlsx`). Pass that path to the importer:
 
-**Known portfolio**: `references/roy-portfolio-tickers.md` has the full confirmed mapping and known broken tickers.
+```bash
+# 1. DRY-RUN first — prints the per-ticker diff, writes nothing:
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/import_holdings.py "<uploaded_file_path>"
 
-**About qty and avg_cost**: These values only affect the P&L display line in the digest header (e.g., `10 @ $520 · $532 (+2.3%)`). They have **zero effect** on Wyckoff analysis — phase detection and signals are OHLCV-only. Placeholder values (1 @ 0) are functional but produce meaningless P&L numbers.
+# 2. After the user confirms the diff, apply it (backs up holdings.json first):
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/import_holdings.py "<uploaded_file_path>" --apply
+```
+
+**Your job:**
+1. Run the dry-run and relay the printed diff (qty/cost changes per ticker) to the user in their language.
+2. Wait for explicit confirmation, then re-run with `--apply`.
+3. If the output lists **UNMAPPED rows**, a newly-bought security has no ticker mapping yet — tell the user its name + security-number; it needs a one-line entry added to `SECNUM_TO_TICKER` in `scripts/import_holdings.py` (the importer refuses `--apply` while any row is unmapped, so it never imports a position to the wrong ticker).
+
+The importer matches each position by its **stable Israeli security-number** (מספר נייר), reads quantity + average cost (`.TA` costs are agorot, stored as-is), preserves the risk-state scale-out baseline (so a trimmed position still reads as partially scaled-out), and never deletes a holding that is merely absent from the file.
+
+## Known Pitfalls & Workarounds
+
+### Yahoo Finance API Rate Limiting
+
+**Problem:** Yahoo Finance returns `"Edge: Too Many Requests"` without standard HTTP error codes, causing scripts to hang indefinitely. This is a **sliding window rate limit** (typically several hours of cooldown after ~30-50 rapid requests), not a per-day quota.
+
+**Fix Applied (`scripts/data.py`):**
+- Exponential backoff: 2s → 4s → 8s → 16s → 32s with jitter
+- `MAX_RETRIES = 5` before failing
+- 1-second delay between ticker batches (`scripts/exit.py`)
+- Check for `"Too Many Requests"` **string in response body** (not just HTTP codes)
+
+**Fallback Pattern:** When Yahoo Finance is blocked after retries, the script fails gracefully and processes remaining tickers. Consider adding:
+- **12-hour cache layer** — only refetch if data is stale
+- **Finnhub fallback** — use for price data when Yahoo is blocked (though Finnhub has limited ETF coverage)
+
+**Debug Tools:**
+- `scripts/verify_yahoo_limits.py` — Reproduce and diagnose rate limiting (test with `--count 60 --sleep 1`)
+- `references/yahoo-finance-rate-limit.md` — Complete troubleshooting guide
 
 ## Notes
 
