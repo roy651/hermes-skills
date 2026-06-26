@@ -24,6 +24,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -62,6 +63,11 @@ _session: dict = {
     "msg_count": 0,   # message count when session was last updated
 }
 _active_proc: subprocess.Popen | None = None  # currently running claude subprocess
+# Serialise Claude CLI calls. _call_claude kills the "previous" subprocess on entry (to clear a stuck
+# one) — but under CONCURRENT requests that means each call SIGKILLs (-9) the one before it, which then
+# falls back to qwen. The proxy holds a single Claude session anyway, so run claude one-at-a-time:
+# concurrent requests queue on this lock instead of killing each other.
+_claude_lock = threading.Lock()
 _last_result: dict | None = None  # raw JSON from last Claude Code invocation
 
 
@@ -246,37 +252,38 @@ def chat_completions():
     streaming = data.get("stream", False)
 
     if model.lower().startswith("claude"):
-        # Decide whether to resume the existing session or start fresh
-        sess = _session
-        should_resume = (
-            sess["id"] is not None
-            and sess["model"] == model
-            and msg_count > sess["msg_count"]
-            and msg_count > 1
-        )
-
-        if not should_resume and sess["id"]:
-            log.info(
-                f"claude: session reset "
-                f"(model_changed={sess['model'] != model}, "
-                f"msg_count={msg_count} prev={sess['msg_count']})"
+        with _claude_lock:                               # serialise: concurrent claude calls must not kill each other
+            # Decide whether to resume the existing session or start fresh
+            sess = _session
+            should_resume = (
+                sess["id"] is not None
+                and sess["model"] == model
+                and msg_count > sess["msg_count"]
+                and msg_count > 1
             )
 
-        log.info(f"→ Claude Code  model={model}  msgs={msg_count}  resume={should_resume}  stream={streaming}")
-        try:
-            content, new_session_id = _call_claude(
-                messages, resume_id=sess["id"] if should_resume else None
-            )
-            if new_session_id:
-                _session.update({"id": new_session_id, "model": model, "msg_count": msg_count})
-            resp = _stream_response(content, model) if streaming else jsonify(_openai_response(content, model))
-            resp.headers["X-Proxy-Backend"] = model      # the real backend that served this call
-            return resp
-        except Exception as e:
-            log.warning(f"Claude Code error: {e} — falling back to {FALLBACK_MODEL}")
-            _session.update({"id": None, "model": None, "msg_count": 0})
-            data["model"] = FALLBACK_MODEL
-            model = FALLBACK_MODEL
+            if not should_resume and sess["id"]:
+                log.info(
+                    f"claude: session reset "
+                    f"(model_changed={sess['model'] != model}, "
+                    f"msg_count={msg_count} prev={sess['msg_count']})"
+                )
+
+            log.info(f"→ Claude Code  model={model}  msgs={msg_count}  resume={should_resume}  stream={streaming}")
+            try:
+                content, new_session_id = _call_claude(
+                    messages, resume_id=sess["id"] if should_resume else None
+                )
+                if new_session_id:
+                    _session.update({"id": new_session_id, "model": model, "msg_count": msg_count})
+                resp = _stream_response(content, model) if streaming else jsonify(_openai_response(content, model))
+                resp.headers["X-Proxy-Backend"] = model      # the real backend that served this call
+                return resp
+            except Exception as e:
+                log.warning(f"Claude Code error: {e} — falling back to {FALLBACK_MODEL}")
+                _session.update({"id": None, "model": None, "msg_count": 0})
+                data["model"] = FALLBACK_MODEL
+                model = FALLBACK_MODEL
 
     # Forward to OpenRouter — simple pass-through.
     # Non-streaming models (e.g. those that don't support stream=True) should
