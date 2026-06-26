@@ -290,7 +290,6 @@ def run():
         parts.extend(watchlist_lines)
 
     if errors:
-        import html
         safe_errors = ", ".join(html.escape(str(e)) for e in errors)
         parts.append(f"\n<i>Errors: {safe_errors}</i>")
 
