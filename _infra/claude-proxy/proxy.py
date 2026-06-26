@@ -55,19 +55,49 @@ log = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # ---------------------------------------------------------------------------
-# Session state — one active Claude session at a time
+# Session state — one Claude session PER CONVERSATION (so resume/cache survives)
 # ---------------------------------------------------------------------------
-_session: dict = {
-    "id": None,       # claude session_id from last response
-    "model": None,    # model that owns this session
-    "msg_count": 0,   # message count when session was last updated
-}
+# Keyed by conversation (see _conv_key): the agent (gateway, sends `tools`) keeps a persistent,
+# resumable session so each turn ships only the new message; one-shot callers (wyckoff) never get a
+# stored session and so can't evict the agent's. Sessions deliberately survive a fallback — a transient
+# claude failure must not force the next turn into a full fresh re-send (the whole point of the cache).
+_sessions: dict[str, dict] = {}   # key -> {"id","model","msg_count"}
 _active_proc: subprocess.Popen | None = None  # currently running claude subprocess
 # Serialise Claude CLI calls. _call_claude kills the "previous" subprocess on entry (to clear a stuck
 # one) — but under CONCURRENT requests that means each call SIGKILLs (-9) the one before it, which then
-# falls back to qwen. The proxy holds a single Claude session anyway, so run claude one-at-a-time:
-# concurrent requests queue on this lock instead of killing each other.
+# falls back to qwen. Run claude one-at-a-time: concurrent requests queue here instead of killing.
 _claude_lock = threading.Lock()
+
+# Prepended to any reply NOT served by Claude Code (i.e. a paid API path: OpenRouter now, the Anthropic
+# API layer later) so the user can see at a glance when a message is burning metered tokens.
+NONCC_MARKER = os.environ.get("NONCC_MARKER", "💸")
+
+
+def _conv_key(data: dict) -> str | None:
+    """Stable per-conversation session key, or None for one-shots (which never benefit from resume).
+    The agent/gateway sends `tools`; one-shot callers (wyckoff) don't — so `tools` is the signal. The
+    msg_count guard in chat_completions resets the session when a genuinely new conversation starts."""
+    return "agent" if data.get("tools") else None
+
+
+def _mark_openai_json(payload: dict) -> None:
+    """Prefix the paid-tokens marker onto a non-streaming OpenAI reply's text (skips tool-call replies)."""
+    try:
+        msg = payload["choices"][0]["message"]
+        if msg.get("content"):
+            msg["content"] = f"{NONCC_MARKER} {msg['content']}"
+    except (KeyError, IndexError, TypeError):
+        pass
+
+
+def _mark_stream(upstream):
+    """Lead a streamed (passthrough) reply with a paid-tokens marker chunk, then stream it unchanged."""
+    cid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    lead = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()), "model": "fallback",
+            "choices": [{"index": 0, "delta": {"content": NONCC_MARKER + " "}, "finish_reason": None}]}
+    yield ("data: " + json.dumps(lead) + "\n\n").encode()
+    for chunk in upstream.iter_content(chunk_size=None):
+        yield chunk
 _last_result: dict | None = None  # raw JSON from last Claude Code invocation
 
 
@@ -252,43 +282,38 @@ def chat_completions():
     streaming = data.get("stream", False)
 
     if model.lower().startswith("claude"):
+        key = _conv_key(data)
         with _claude_lock:                               # serialise: concurrent claude calls must not kill each other
-            # Decide whether to resume the existing session or start fresh
-            sess = _session
+            sess = _sessions.get(key) if key else None
+            # Resume this conversation's session (ship only the new turn) when it grew by ≥1 message;
+            # a shrink (msg_count drop) means a NEW conversation took the key → fall back to fresh.
             should_resume = (
-                sess["id"] is not None
+                sess is not None
                 and sess["model"] == model
                 and msg_count > sess["msg_count"]
                 and msg_count > 1
             )
+            if sess and not should_resume:
+                log.info(f"claude: session reset key={key} (msg_count={msg_count} prev={sess['msg_count']})")
 
-            if not should_resume and sess["id"]:
-                log.info(
-                    f"claude: session reset "
-                    f"(model_changed={sess['model'] != model}, "
-                    f"msg_count={msg_count} prev={sess['msg_count']})"
-                )
-
-            log.info(f"→ Claude Code  model={model}  msgs={msg_count}  resume={should_resume}  stream={streaming}")
+            log.info(f"→ Claude Code  key={key}  model={model}  msgs={msg_count}  resume={should_resume}  stream={streaming}")
             try:
                 content, new_session_id = _call_claude(
                     messages, resume_id=sess["id"] if should_resume else None
                 )
-                if new_session_id:
-                    _session.update({"id": new_session_id, "model": model, "msg_count": msg_count})
+                if key and new_session_id:
+                    _sessions[key] = {"id": new_session_id, "model": model, "msg_count": msg_count}
                 resp = _stream_response(content, model) if streaming else jsonify(_openai_response(content, model))
-                resp.headers["X-Proxy-Backend"] = model      # the real backend that served this call
+                resp.headers["X-Proxy-Backend"] = model      # served by Claude Code (subscription) — no marker
                 return resp
             except Exception as e:
+                # Keep the session — a transient claude failure must not force the next turn to re-send
+                # the whole conversation. Just degrade THIS reply to the paid fallback.
                 log.warning(f"Claude Code error: {e} — falling back to {FALLBACK_MODEL}")
-                _session.update({"id": None, "model": None, "msg_count": 0})
                 data["model"] = FALLBACK_MODEL
                 model = FALLBACK_MODEL
 
-    # Forward to OpenRouter — simple pass-through.
-    # Non-streaming models (e.g. those that don't support stream=True) should
-    # be routed directly via provider: openrouter in the hermes config instead
-    # of going through this proxy.
+    # Forward to OpenRouter (paid, NON-Claude-Code → mark the reply so the user knows it cost tokens).
     log.info(f"→ OpenRouter  model={model}  msgs={msg_count}")
     if not OPENROUTER_KEY:
         return jsonify({"error": {"message": "OPENROUTER_API_KEY not set", "type": "proxy_error"}}), 500
@@ -298,12 +323,14 @@ def chat_completions():
     }
     resp = requests.post(OPENROUTER_URL, headers=headers, json=data, timeout=120, stream=streaming)
     if streaming:
-        return app.response_class(resp.iter_content(chunk_size=None),
+        return app.response_class(_mark_stream(resp),
                                    mimetype="text/event-stream",
                                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache",
                                             "X-Proxy-Backend": model})
-    out = jsonify(resp.json())
-    out.headers["X-Proxy-Backend"] = model               # the real backend (a fallback when claude failed)
+    out_json = resp.json()
+    _mark_openai_json(out_json)
+    out = jsonify(out_json)
+    out.headers["X-Proxy-Backend"] = model               # the real backend (a paid fallback when claude failed)
     return out, resp.status_code
 
 
@@ -326,14 +353,10 @@ def get_model(model_id):
 
 @app.route("/health", methods=["GET"])
 def health():
-    active = _session["id"] is not None
     return jsonify({
         "status": "ok",
         "claude_bin": CLAUDE_BIN,
-        "session_active": active,
-        "session_id": _session["id"],
-        "session_model": _session["model"],
-        "session_msg_count": _session["msg_count"],
+        "sessions": {k: {"id": v["id"], "msg_count": v["msg_count"]} for k, v in _sessions.items()},
     })
 
 
