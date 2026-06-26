@@ -244,12 +244,12 @@ def run():
     parts = [f"📊 <b>Wyckoff {section_label} — {date_str}</b>"]
 
     if any(buckets.values()):
-        parts.append("\n<b>Portfolio</b>")
-        for cat, label in (("EXIT", "🔴 Exit"), ("TRIM", "🟠 Trim"), ("ADD", "🟢 Add"), ("HOLD", "✅ Hold")):
+        for cat, label in (("EXIT", "Exit"), ("TRIM", "Trim"), ("ADD", "Add"), ("HOLD", "Hold")):
             blocks = buckets[cat]
             if blocks:
                 parts.append(f"\n<b>— {label} ({len(blocks)}) —</b>")
-                parts.extend(block for _score, block in sorted(blocks, key=lambda x: x[0], reverse=True))
+                # blank line before each block (the leading \n) so assets read as separate groups, not a blob
+                parts.extend("\n" + block for _score, block in sorted(blocks, key=lambda x: x[0], reverse=True))
 
     if watchlist_lines:
         parts.append("\n<b>Watchlist</b>")

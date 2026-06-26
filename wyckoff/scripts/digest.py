@@ -115,6 +115,9 @@ def format_managed_block(holding: dict, price: float, engine: dict, validation: 
     """Exit-watch block: the deterministic engine DECIDES and DESCRIBES; the LLM only VALIDATES.
     `engine` = {"risk","det","ladder"}; `validation` = {"valid": bool|None, "note": str} or None
     (valid=None → LLM unavailable, no validation line shown).
+
+    ONE colour cue per asset, keyed to the ACTION (the thing you act on); no other icons. Five
+    lines so the rec is findable at a glance: asset · recommendation · condition · signals · note.
     """
     rk, det_a, lad = engine["risk"], engine["det"], engine["ladder"]
     ticker = rk["ticker"]
@@ -124,34 +127,34 @@ def format_managed_block(holding: dict, price: float, engine: dict, validation: 
     pnl_pct = (price - cost) / cost * 100 if cost else 0.0
     psign = "+" if pnl_pct >= 0 else ""
 
-    title = f"<b>{ticker}</b>"
-    if name and name != ticker:
-        title += f" <i>({html.escape(name)})</i>"
-    header = f"{title} · {qty} @ {sym}{cost:.2f} · {sym}{price:.2f} ({psign}{pnl_pct:.1f}%)"
+    action = lad["action"]
+    dot = ("🔴" if action.startswith("EXIT") else "🟡" if action.startswith("TRIM")
+           else "🟢" if action.startswith("ADD") else "🔵")   # EXIT red · TRIM yellow · ADD green · HOLD blue
 
     score = det_a["score"]
     if rk["stop_hit"] or score >= 7:
-        struct = "🔴 Breaking down"
+        condition = "Breaking down"
     elif score >= 5:
-        struct = "⚠️ Distribution"
+        condition = "Distribution"
     elif score >= 3:
-        struct = "🟠 Weakening"
+        condition = "Weakening"
     else:
-        struct = "✅ Structure intact"
+        condition = "Structure intact"
 
-    action = lad["action"]
-    a_emoji = ("🟢" if action.startswith("ADD") else "🔴" if action.startswith("EXIT")
-               else "🟠" if action.startswith("TRIM") else "✅")
     delta = lad["delta_qty"]
-    delta_str = f" ({'buy' if delta > 0 else 'sell'} {abs(round(delta))})" if delta else ""
+    delta_str = f" · {'buy' if delta > 0 else 'sell'} {abs(round(delta))}" if delta else ""
+    name_part = f" · <i>{html.escape(name)}</i>" if name and name != ticker else ""
 
-    lines = [header, f"  {struct} · exit {score}/9"]
+    # 1. asset   2. recommendation   3. condition   4. signals   5. validator note
+    lines = [
+        f"{dot} <b>{ticker}</b>{name_part} · {qty} @ {sym}{cost:.2f} → {sym}{price:.2f} ({psign}{pnl_pct:.1f}%)",
+        f"<b>{html.escape(action)}</b>{delta_str} · stop {sym}{rk['stop']} ({rk['distance_pct']}% away) · {lad['pos_pct']}% of port",
+        f"{condition} · {score}/9",
+    ]
     if det_a["signals"]:
-        lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in det_a['signals']))}")
-    lines.append(f"  {a_emoji} <b>{html.escape(action)}</b>{delta_str} · "
-                 f"Stop {sym}{rk['stop']} ({rk['distance_pct']}% away) · {lad['pos_pct']}% of port")
+        lines.append(html.escape(", ".join(str(s) for s in det_a["signals"])))
     if validation and validation.get("valid") is not None:
-        icon, label = ("✅", "confirmed") if validation["valid"] else ("⚠️", "FLAG")
+        label = "confirmed" if validation["valid"] else "<b>flag</b>"
         note = validation.get("note", "")
-        lines.append(f"  {icon} {label}" + (f": <i>{html.escape(str(note))}</i>" if note else ""))
+        lines.append(f"Validator: {label}" + (f" — <i>{html.escape(str(note))}</i>" if note else ""))
     return "\n".join(lines)
