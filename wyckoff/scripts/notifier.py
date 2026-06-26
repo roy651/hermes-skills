@@ -1,10 +1,18 @@
 from __future__ import annotations
 import os
+import socket
 from pathlib import Path
 import requests
+import urllib3.util.connection as _urllib3_conn
 from dotenv import load_dotenv
 
 load_dotenv(Path.home() / ".hermes" / ".env")
+
+# api.telegram.org publishes both A and AAAA records, but this host's WiFi advertises an IPv6 default
+# route with no working IPv6 egress. requests/urllib3 (unlike curl, which does Happy-Eyeballs) tries the
+# IPv6 address and hangs until timeout. Force IPv4-only DNS resolution. Harmless if IPv6 egress is later
+# restored — IPv4 to Telegram works either way.
+_urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
 
 
 _MAX = 4096
