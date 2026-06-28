@@ -5,3 +5,9 @@ watchlist:
 llm:
   model: anthropic/claude-opus-4-6
   lookback_days: 120
+
+entry:
+  # How many top-ranked prescreen survivors get the (token-heavy) LLM Wyckoff read.
+  # Default 30 = prior behavior. Lower it — or pass `entry.py --cohort N` on demand — to cut
+  # tokens/time (fewer candidates analyzed) at the cost of a smaller pick pool.
+  cohort_size: 30

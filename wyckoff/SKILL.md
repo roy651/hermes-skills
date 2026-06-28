@@ -103,12 +103,17 @@ cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/entry.py >> logs/weekly.
 
 # Preview without sending to Telegram:
 cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/entry.py --dry-run
+
+# Lighter/heavier on-demand scan — cohort = how many top prescreen survivors get the LLM read
+# (default 30, from config.yaml entry.cohort_size). Fewer = cheaper/faster, smaller pick pool:
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/entry.py --cohort 15 --dry-run
 ```
 
 Examples of what the user might say → what to run:
 - "run the weekly analysis" / "תריץ את הניתוח השבועי" → `entry.py`
 - "find me entry picks" / "מה כדאי לקנות?" → `entry.py`
 - "what are this week's buys" → `entry.py`
+- "run a quick/light entry scan" / "do a smaller scan, ~15 names" → `entry.py --cohort 15`
 
 ## Hermes Tool: Run Daily Exit-Watch On-Demand
 

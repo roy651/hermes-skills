@@ -293,8 +293,9 @@ def _factor_warnings(candidates: list[dict], tags: dict[str, list[str]]) -> list
     return warnings
 
 
-def screen_universe() -> tuple[list[dict], dict]:
-    """Scan the full universe and return (top candidates, spy_ctx). Saves to CANDIDATES_FILE."""
+def screen_universe(top_n: int = TOP_N) -> tuple[list[dict], dict]:
+    """Scan the full universe and return (top candidates, spy_ctx). Saves to CANDIDATES_FILE.
+    `top_n` caps the cohort handed to the LLM stage (callers pass the configured/override size)."""
     spy_ctx = _get_spy_context()
     universe, sector_map = _get_universe()
     sector_ctx = _get_sector_context(set(sector_map.values()))
@@ -335,7 +336,7 @@ def screen_universe() -> tuple[list[dict], dict]:
     mp_cands = mp_cands[:MP_PRESCREEN_CAP]
     acc_cands = [r for r in results if r.get("lane") != "markup_pullback" and r["score"] >= MIN_SCORE]
     acc_cands.sort(key=lambda x: (-x["score"], x["pct_off_52w_high"]))
-    top = (mp_cands + acc_cands)[:TOP_N]
+    top = (mp_cands + acc_cands)[:top_n]
     if mp_total:
         print(f"[prescreener] {mp_total} markup-pullback candidate(s); admitting top {len(mp_cands)}: "
               f"{', '.join(r['ticker'] for r in mp_cands)}", file=sys.stderr)

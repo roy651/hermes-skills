@@ -29,7 +29,7 @@ import news as news_validator
 import finnhub
 import events as wyckoff_events
 import digest
-from prescreener import screen_universe, _factor_warnings, _load_factor_tags
+from prescreener import screen_universe, _factor_warnings, _load_factor_tags, TOP_N
 
 TZ = ZoneInfo("Asia/Jerusalem")
 LOOKBACK_DAYS = 120
@@ -354,7 +354,20 @@ def _start_watchdog(seconds: int) -> None:
     threading.Thread(target=_kill, daemon=True).start()
 
 
-def run(dry_run: bool = False) -> None:
+def _resolve_cohort(override: int | None) -> int:
+    """Cohort = how many top prescreen survivors get the LLM read. `--cohort` wins; else
+    config.yaml entry.cohort_size; else the prescreener default (TOP_N)."""
+    if override:
+        return override
+    try:
+        import yaml
+        cfg = yaml.safe_load((Path(__file__).parent.parent / "config.yaml").read_text()) or {}
+        return int((cfg.get("entry") or {}).get("cohort_size") or TOP_N)
+    except Exception:
+        return TOP_N
+
+
+def run(dry_run: bool = False, cohort: int | None = None) -> None:
     if not dry_run:
         if not _acquire_singleton_lock():
             print("[weekly] another run already in progress — exiting (singleton lock)", file=sys.stderr)
@@ -362,10 +375,11 @@ def run(dry_run: bool = False) -> None:
         _start_watchdog(MAX_RUNTIME_SEC)
     date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     factor_tags = _load_factor_tags()
+    cohort_n = _resolve_cohort(cohort)
 
     # Stage 1: quantitative prescreen
-    print("[weekly] running prescreener...", file=sys.stderr)
-    candidates, spy_ctx = screen_universe()
+    print(f"[weekly] running prescreener... (cohort cap {cohort_n})", file=sys.stderr)
+    candidates, spy_ctx = screen_universe(top_n=cohort_n)
     print(f"[weekly] {len(candidates)} candidates from prescreen", file=sys.stderr)
 
     # Stage 2: drop candidates reporting earnings within 14 days (signal unreliable across earnings)
@@ -432,9 +446,12 @@ def run(dry_run: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Print digest instead of sending")
+    parser.add_argument("--cohort", type=int, default=None,
+                        help="How many top prescreen survivors to LLM-analyze "
+                             "(overrides config entry.cohort_size; default 30). Lower = cheaper/faster.")
     args = parser.parse_args()
     try:
-        run(dry_run=args.dry_run)
+        run(dry_run=args.dry_run, cohort=args.cohort)
     except Exception as e:
         # The job runs detached, so surface a hard failure to Telegram (not just the log).
         import traceback
