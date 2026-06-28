@@ -1,5 +1,14 @@
 # hermes-skills — working & deploy guide
 
+## ⚠️ PRIVACY — THIS REPO IS PUBLIC
+**Never commit portfolio PII.** No holdings/positions, quantities, average costs, the broker
+security-number map, or the personal portfolio mapping — and **never put positions in commit
+messages** (e.g. "add &lt;TICKER&gt; — &lt;N&gt; units @ &lt;price&gt;"). These live **runtime-only** and are gitignored
+(`wyckoff/data/`): `holdings.json`, `secnum_map.json`. A tracked pre-commit/commit-msg hook
+(`.githooks/`, enabled via `git config core.hooksPath .githooks`) blocks the obvious cases — but
+the rule is on you (and any agent): **describe changes generically; keep the portfolio out of git.**
+This applies to the Hermes agent (which must NOT auto-push holdings) and to Claude alike.
+
 This repo (`github.com/roy651/hermes-skills`) is the **source of truth** for Roy's custom Hermes skills. It is checked out in two places and feeds a third:
 
 1. **Mac local dev** — `~/Development/private/hermes-skills` (edit here)

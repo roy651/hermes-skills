@@ -1,49 +1,6 @@
 watchlist:
-  - SPY
-  - IBN
-  - INFY
-  - DGRO
-  - IEMG
-  - IFGL
-  - IGRO
-  - INDA
-  - MBLY
-  - NICE
-  - PFE
-  - XFIV
-  - AMOT.TA
-  - SLARL.TA
-  - TCH-F3.TA
-  - XYZ
-  - DRI
-  - RF
-  - SJM
-  - GLD
-  - APO
-  - OXY
-  - T
-  - VICI
-  - WRB
-  - TFC
-  - EQT
-  - AES
-  - MLM
-  - APA
-  - TKO
-  - CBRE
-  - MCO
-  - ROL
-  - SYY
-  - PPG
-  - HBAN
-  - SNPS
-  - AMCR
-  - SW
-  - EXE
-  - AMT
-  - BXP
-  - SLV
-  - CVNA
+  - GLD   # gold
+  - SLV   # silver
 
 llm:
   model: anthropic/claude-opus-4-6

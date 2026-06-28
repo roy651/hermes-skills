@@ -26,5 +26,6 @@ navman/data/
 navman/logs/
 data/
 !wyckoff/data/factor_tags.yaml
+!wyckoff/data/secnum_map.example.json
 logs/
 .claude/

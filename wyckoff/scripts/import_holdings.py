@@ -27,16 +27,15 @@ import openpyxl
 
 HOLDINGS = Path(__file__).parent.parent / "data" / "holdings.json"
 
-# Stable map: Israeli security-number (מספר נייר, never changes) -> system ticker. Add a line when a
-# new security is bought; an unmapped row is reported, never silently dropped.
-SECNUM_TO_TICKER = {
-    "20000964": "XYZ", "60029451": "EQT", "25493883": "EXE", "1078930": "HAL",
-    "60045770": "IBN", "1065895": "INFY", "20001977": "DGRO", "60355153": "IEMG",
-    "60240165": "IFGL", "20000916": "IGRO", "60336534": "INDA", "60606209": "META",
-    "20007266": "MBLY", "100487": "NICE", "102368": "PFE", "60035680": "PCG",
-    "119529": "SNPS", "60622834": "TKO", "20028403": "XFIV",
-    "1097278": "AMOT.TA", "1109644": "SLARL.TA", "1143726": "TCH-F3.TA",
-}
+# Stable map: Israeli security-number (מספר נייר, never changes) -> system ticker. This reveals which
+# securities are held, so it's PII — it lives in data/secnum_map.json (gitignored), NOT in this public
+# file. See data/secnum_map.example.json for the format; add a line per newly-bought security. A missing
+# map → every row is "unmapped" and reported (and --apply is refused), never silently mis-imported.
+_SECNUM_MAP_PATH = Path(__file__).parent.parent / "data" / "secnum_map.json"
+try:
+    SECNUM_TO_TICKER = json.loads(_SECNUM_MAP_PATH.read_text())
+except FileNotFoundError:
+    SECNUM_TO_TICKER = {}
 
 # Broker export column order (0-based), under a header row containing HEADER_KEY.
 COL_NAME, COL_SECNUM, COL_QTY, COL_COST = 0, 1, 3, 8

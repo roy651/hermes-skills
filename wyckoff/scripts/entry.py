@@ -266,7 +266,7 @@ def _build_weekly_digest(
     r6 = spy_ctx.get("spy_ret_6m", 0) * 100
     r12 = spy_ctx.get("spy_ret_12m", 0) * 100
     lines = [
-        f"📈 <b>Wyckoff Weekly — {date_str}</b>",
+        f"📈 <b>Wyckoff Entry — {date_str}</b>",
         f"<i>SPY {spy_off:.1f}% off 52w high · 6m {r6:+.1f}% · 12m {r12:+.1f}%</i>",
     ]
     degraded = wyckoff.degradation()
@@ -347,7 +347,7 @@ def _start_watchdog(seconds: int) -> None:
         time.sleep(seconds)
         print(f"[weekly] watchdog: exceeded {seconds}s — force exit", file=sys.stderr)
         try:
-            notifier.send(f"⚠️ <b>Wyckoff Weekly</b> watchdog: run exceeded {seconds // 60} min and was killed.")
+            notifier.send(f"⚠️ <b>Wyckoff Entry</b> watchdog: run exceeded {seconds // 60} min and was killed.")
         except Exception:
             pass
         os._exit(2)
@@ -441,7 +441,7 @@ if __name__ == "__main__":
         traceback.print_exc()
         if not args.dry_run:
             try:
-                notifier.send(f"⚠️ <b>Wyckoff Weekly failed</b>: {html.escape(str(e)[:300])}")
+                notifier.send(f"⚠️ <b>Wyckoff Entry failed</b>: {html.escape(str(e)[:300])}")
             except Exception:
                 pass
         sys.exit(1)

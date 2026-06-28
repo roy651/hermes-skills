@@ -265,9 +265,9 @@ def run():
                 result, None, price, name=td.name, currency=td.currency, gate_action=False))
 
     section_label = {
-        "portfolio": "Portfolio — Exit Watch",
+        "portfolio": "Exit",
         "watchlist": "Watchlist",
-        "all": "Daily",
+        "all": "Exit — All",
     }[args.section]
     parts = [f"📊 <b>Wyckoff {section_label} — {date_str}</b>"]
 
