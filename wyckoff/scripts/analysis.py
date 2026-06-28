@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import os
+import re
 import time
 import requests
 import pandas as pd
@@ -112,9 +113,10 @@ SPECIFIC reason it may be wrong, e.g.:
 - a known catalyst the price cannot show (an earnings/guidance date, M&A, a binary event)
 - the structure is misread (e.g., a base forming, not distribution)
 
-Return ONLY valid JSON — no markdown:
-{"valid": true, "note": "<one short concrete line: the key fact confirming the call, OR the specific concern>"}
-Keep the note under ~140 characters. No hedging, no boilerplate."""
+Reply EITHER as JSON: {"valid": true|false, "note": "<one concrete line>"}   (valid=false means FLAG)
+OR as a SHORT prose note (1-2 sentences — the key confirming fact, or the specific concern) ending with a
+final line, exactly: VERDICT: CONFIRM   (or)   VERDICT: FLAG
+Keep it brief — no multi-section markdown essay, no hedging, no boilerplate."""
 
 
 def _market_context_block(market_ctx: dict) -> str:
@@ -208,7 +210,7 @@ def backend_warmup(timeout: int = 30) -> tuple[bool, str]:
     return backend.lower().startswith("claude"), backend or "unknown"
 
 
-def _call_llm(system: str, user_parts: list[str]) -> dict:
+def _call_llm(system: str, user_parts: list[str], raw: bool = False) -> dict | str:
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": "\n".join(user_parts)},
@@ -229,6 +231,8 @@ def _call_llm(system: str, user_parts: list[str]) -> dict:
             text = resp.json()["choices"][0]["message"]["content"].strip()
             if not text:
                 raise ValueError("empty LLM response")
+            if raw:
+                return text
             if text.startswith("```"):
                 text = text.split("```")[1]
                 if text.startswith("json"):
@@ -239,6 +243,43 @@ def _call_llm(system: str, user_parts: list[str]) -> dict:
             last_err = e
             time.sleep(1.5 * (attempt + 1))
     raise last_err
+
+
+def _verdict_from_text(text: str) -> dict:
+    """Parse a validator reply into {valid, note}, accepting BOTH JSON and prose. qwen returns JSON;
+    Opus writes a prose verdict (often a markdown essay) despite the JSON ask. Order: clean/embedded
+    JSON → an explicit `VERDICT: CONFIRM|FLAG` tag → score the lead's substance. The bare word "flag"
+    is NOT decisive (Opus says "endorse, with one flag"); substantive stance words are. Never returns
+    None for a real reply — that silent drop is exactly what hid the validator before."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("```")[1]
+        t = t[4:] if t.lower().startswith("json") else t
+        t = t.strip()
+    # 1. JSON — the whole reply, or an object embedded in prose
+    for cand in [t] + re.findall(r'\{[^{}]*?"valid"[^{}]*?\}', text, re.S):
+        try:
+            o = json.loads(cand)
+            if "valid" in o:
+                return {"valid": bool(o["valid"]), "note": str(o.get("note", "")).strip()[:160]}
+        except Exception:
+            pass
+    # note = the model's own headline: the first **bold** phrase, else the first sentence (de-marked-up)
+    bold = re.search(r"\*\*(.+?)\*\*", text, re.S)
+    lead = bold.group(1) if bold else re.split(r"(?<=[.!?])\s", re.sub(r"^#+[^\n]*\n+", "", t), 1)[0]
+    note = re.sub(r"\s+", " ", re.sub(r"[#*`>]+", "", lead)).strip(" :.—-")[:160]
+    # 2. explicit verdict tag, if the model gave one
+    m = re.search(r"VERDICT\s*[:=]\s*(CONFIRM|FLAG)", text, re.I)
+    if m:
+        return {"valid": m.group(1).upper() == "CONFIRM", "note": note}
+    # 3. score the stance over the lead — substance beats the bare token "flag"/"confirm"
+    head = text[:400].lower()
+    pos = sum(w in head for w in ("endorse", "agree", "confirm", "sound", "defensible",
+                                  "let it stand", "uphold", "correct call", "valid call", "stands"))
+    neg = sum(w in head for w in ("overstated", "premature", "misread", "reject", "disagree", "hold all",
+                                  "do not", "don't", "too aggressive", "false positive", "not distribution",
+                                  "base forming", "wrong", "questionable"))
+    return {"valid": pos >= neg, "note": note}
 
 
 def validate(ticker: str, df: pd.DataFrame, name: str, verdict: dict,
@@ -269,7 +310,7 @@ def validate(ticker: str, df: pd.DataFrame, name: str, verdict: dict,
             user_parts.append("\n" + "\n".join(ctx))
     user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{df.to_csv()}")
     try:
-        out = _call_llm(_SYSTEM_VALIDATE, user_parts)
-        return {"valid": bool(out.get("valid", True)), "note": str(out.get("note", ""))[:160]}
+        text = _call_llm(_SYSTEM_VALIDATE, user_parts, raw=True)
     except Exception:
-        return {"valid": None, "note": ""}
+        return {"valid": None, "note": ""}        # genuine LLM failure (timeout/HTTP) → unavailable
+    return _verdict_from_text(text)
