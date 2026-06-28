@@ -154,9 +154,9 @@ def _messages_to_prompt(messages: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[str, str | None]:
+def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[str, str | None, str | None]:
     """
-    Invoke claude CLI. Returns (response_text, session_id).
+    Invoke claude CLI. Returns (response_text, session_id, model_used).
 
     Fresh session: pass full reconstructed prompt.
     Resumed session: pass only the latest user message — Claude already has
@@ -214,12 +214,16 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
         else:
             text = stdout.strip()
         session_id = data.get("session_id")
+        # The CLI reports the model it ACTUALLY ran under modelUsage (e.g. "claude-opus-4-8") —
+        # that's the truth, not the request label. Surface it so X-Proxy-Backend is honest.
+        model_used = next(iter(data.get("modelUsage") or {}), None)
     except (json.JSONDecodeError, AttributeError):
         text = stdout.strip()
         session_id = None
+        model_used = None
 
-    log.info(f"claude: response_len={len(text)}  session_id={session_id}")
-    return text, session_id
+    log.info(f"claude: response_len={len(text)}  session_id={session_id}  model={model_used}")
+    return text, session_id, model_used
 
 
 def _openai_response(content: str, model: str) -> dict:
@@ -298,13 +302,15 @@ def chat_completions():
 
             log.info(f"→ Claude Code  key={key}  model={model}  msgs={msg_count}  resume={should_resume}  stream={streaming}")
             try:
-                content, new_session_id = _call_claude(
+                content, new_session_id, model_used = _call_claude(
                     messages, resume_id=sess["id"] if should_resume else None
                 )
+                actual = model_used or model     # what the CLI actually ran (e.g. claude-opus-4-8), not the request label
                 if key and new_session_id:
+                    # Keep the session keyed on the REQUEST label so the next same-label turn still resumes.
                     _sessions[key] = {"id": new_session_id, "model": model, "msg_count": msg_count}
-                resp = _stream_response(content, model) if streaming else jsonify(_openai_response(content, model))
-                resp.headers["X-Proxy-Backend"] = model      # served by Claude Code (subscription) — no marker
+                resp = _stream_response(content, actual) if streaming else jsonify(_openai_response(content, actual))
+                resp.headers["X-Proxy-Backend"] = actual      # served by Claude Code — the REAL model, no marker
                 return resp
             except Exception as e:
                 # Fallback DISABLED (per request): the OpenRouter/qwen fallback is out of credits, and
