@@ -307,11 +307,15 @@ def chat_completions():
                 resp.headers["X-Proxy-Backend"] = model      # served by Claude Code (subscription) — no marker
                 return resp
             except Exception as e:
-                # Keep the session — a transient claude failure must not force the next turn to re-send
-                # the whole conversation. Just degrade THIS reply to the paid fallback.
-                log.warning(f"Claude Code error: {e} — falling back to {FALLBACK_MODEL}")
-                data["model"] = FALLBACK_MODEL
-                model = FALLBACK_MODEL
+                # Fallback DISABLED (per request): the OpenRouter/qwen fallback is out of credits, and
+                # Claude must stay the sole handler. Return a clear error so callers (wyckoff runs, the
+                # agent) fail cleanly instead of getting an empty body from a dead 402 fallback — and so
+                # a claude blip never silently spends on a paid model. The session is kept (untouched),
+                # so the next turn can still resume. Re-enable by restoring:
+                #     data["model"] = FALLBACK_MODEL; model = FALLBACK_MODEL  (and remove this return)
+                log.warning(f"Claude Code error: {e} — fallback disabled, returning 503 (no qwen)")
+                return jsonify({"error": {"message": f"claude unavailable: {e}",
+                                          "type": "claude_unavailable"}}), 503
 
     # Forward to OpenRouter (paid, NON-Claude-Code → mark the reply so the user knows it cost tokens).
     log.info(f"→ OpenRouter  model={model}  msgs={msg_count}")

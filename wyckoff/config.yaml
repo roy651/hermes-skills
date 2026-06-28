@@ -8,6 +8,6 @@ llm:
 
 entry:
   # How many top-ranked prescreen survivors get the (token-heavy) LLM Wyckoff read.
-  # Default 30 = prior behavior. Lower it — or pass `entry.py --cohort N` on demand — to cut
-  # tokens/time (fewer candidates analyzed) at the cost of a smaller pick pool.
-  cohort_size: 30
+  # Lowered from the prescreener's 30 to ease the per-run Claude load. Pass `entry.py --cohort N`
+  # on demand to override (lower = cheaper/faster, fewer picks; raise for a fuller sweep).
+  cohort_size: 20
