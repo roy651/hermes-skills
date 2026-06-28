@@ -1,11 +1,36 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from typing import NamedTuple
+import random
+import time
 import requests
 import pandas as pd
 
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
 _BASE = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+_MAX_RETRIES = 5
+
+
+def _fetch_chart(ticker: str, params: dict) -> list:
+    """GET Yahoo's chart JSON with exponential backoff. Yahoo rate-limits by returning either a 429 OR
+    a 200 with an empty/non-JSON body ("Edge: Too Many Requests"), so we retry on both (and on empty
+    results). Backoff: 2,4,8,16s with jitter — without this a single rate-limited tick fails the run."""
+    last_err: Exception | None = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.get(_BASE.format(ticker=ticker), params=params, headers=_HEADERS, timeout=30)
+            if resp.status_code == 429 or "Too Many Requests" in resp.text[:500]:
+                raise requests.HTTPError(f"rate-limited (HTTP {resp.status_code})")
+            resp.raise_for_status()
+            result = resp.json().get("chart", {}).get("result")   # .json() raises on an empty/non-JSON body
+            if not result:
+                raise ValueError("empty chart result")
+            return result
+        except (requests.RequestException, ValueError) as e:
+            last_err = e
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(2 ** (attempt + 1) + random.uniform(0, 1))
+    raise ValueError(f"No data for {ticker} after {_MAX_RETRIES} tries: {last_err}")
 
 
 class TickerData(NamedTuple):
@@ -23,16 +48,7 @@ def fetch_ohlcv(ticker: str, days: int = 120, start: str | None = None, end: str
         params = {"interval": "1d", "period1": p1, "period2": p2}
     else:
         params = {"interval": "1d", "range": "1y" if days <= 252 else "2y"}
-    resp = requests.get(
-        _BASE.format(ticker=ticker),
-        params=params,
-        headers=_HEADERS,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    result = resp.json()["chart"]["result"]
-    if not result:
-        raise ValueError(f"No data returned for {ticker}")
+    result = _fetch_chart(ticker, params)
 
     r = result[0]
     meta = r["meta"]
