@@ -54,4 +54,4 @@ Have a `.venv`, scripts, `.env`, logs/data, and are executed by a **systemd serv
 - ⚠️ The **Hermes auto-improvement skill self-edits the *deployed* `~/.hermes/skills/` copies** (it inferred SKILL.md changes from chat on 2026-06-26 → git/runtime drift). TODO: add a guardrail so that when it edits a git-tracked file it also updates the git source.
 
 ## SSH
-`roy650@192.168.1.17` — reuse one connection: `-o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=600`.
+`roy650@<ip>` — **wired/primary `192.168.1.16`** (pfSense static for eno1, active after the wired lease renews/reboot), **WiFi/fallback `192.168.1.17`**, Tailscale `100.78.84.7`. Reuse one connection: `-o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=600` (drops to `ControlMaster=no` if the Mac's own network changes mid-session → "Broken pipe").
