@@ -22,6 +22,7 @@ STATE_FILE = Path(__file__).parent.parent / "data" / "positions_state.json"
 ATR_PERIOD = 14
 CHANDELIER_MULT = 3.0
 STRUCTURE_LOOKBACK = 20
+STRUCTURE_BUFFER_ATR = 0.25      # cushion below the swing low so a wick fakeout doesn't trip the stop
 
 
 def load_state() -> dict:
@@ -48,7 +49,17 @@ def chandelier_stop(df: pd.DataFrame, highest_high: float, mult: float = CHANDEL
 
 
 def structure_stop(df: pd.DataFrame, lookback: int = STRUCTURE_LOOKBACK) -> float:
-    return float(df["low"].iloc[-lookback:].min())
+    """Floor of the *prior* ``lookback`` sessions, minus a small ATR buffer.
+
+    Today's bar is excluded on purpose: if it were included, a fresh low would just
+    redefine the floor to today's low (close >= low >= floor, always), making the
+    level unbreakable and emitting a tautological "touch" every new-low day. Using
+    the prior sessions' low gives a fixed level today can genuinely close through;
+    the buffer keeps a one-tick wick from counting as a break.
+    """
+    prior = df["low"].iloc[-lookback - 1:-1]
+    floor = float(prior.min()) if len(prior) else float(df["low"].iloc[-lookback:].min())
+    return floor - STRUCTURE_BUFFER_ATR * atr(df)
 
 
 def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = None,
