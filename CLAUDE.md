@@ -62,5 +62,9 @@ Have a `.venv`, scripts, `.env`, logs/data, and are executed by a **systemd serv
 - **mini-PC is now wired-primary** — ethernet `eno1` static `192.168.1.16` (pfSense reservation), WiFi `.17` fallback, Tailscale `100.78.84.7`; BIOS "After Power Loss → On" set (auto-boots after a blip, verified).
 - **reminders skill added** (git-only kind-A, in `external_dirs`) — set/snooze/list/cancel reminders via `hermes cron create/edit/remove`.
 
+## Known state (2026-07-05)
+- **claude-proxy stale-session pitfall.** After a gateway restart (e.g. `hermes upgrade`), always restart the proxy too: `systemctl --user restart claude-proxy hermes-gateway`. The proxy caches session IDs in memory; if left running for days, those IDs expire and every claude call gets `claude exited 1` (gateway reports "model provider failed after retries"). Documented in `hermes-upstream-sync/SKILL.md`.
+- **Agent now allowed to push to hermes-skills.** Pre-push hostname block removed from `.githooks/pre-push` (it was redundant — the pre-commit + commit-msg hooks are the real PII guardrail). The agent can `git commit && git push` skill fixes directly. **After agent pushes, run `git pull` on the Mac before editing.** The public-repo PII rules still apply: no holdings/positions/quantities in commits or code.
+
 ## SSH
 `roy650@<ip>` — **wired/primary `192.168.1.16`** (pfSense static for eno1, active after the wired lease renews/reboot), **WiFi/fallback `192.168.1.17`**, Tailscale `100.78.84.7`. Reuse one connection: `-o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=600` (drops to `ControlMaster=no` if the Mac's own network changes mid-session → "Broken pipe").

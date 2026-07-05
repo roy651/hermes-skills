@@ -33,6 +33,19 @@ The job runs on the machine where hermes-agent is installed and requires:
 4. If behind → lists notable `feat`/`fix` commits and runs a dry-run rebase to detect conflicts
 5. Sends a concise Telegram report: commits behind, notable changes, clean/conflict verdict
 
+## After a `hermes upgrade` or gateway restart
+
+After pulling upstream and restarting `hermes-gateway.service`, **also restart `claude-proxy.service`**:
+
+```bash
+systemctl --user restart claude-proxy hermes-gateway
+```
+
+Why: the proxy caches conversation session IDs in memory (for `claude --resume`). If the proxy runs for days without restart, its cached session IDs expire. When the gateway restarts and sends a fresh request, the proxy tries to resume a stale session → `claude exited 1` on every call → the gateway reports "model provider failed after retries" to the user.
+
+Symptom: gateway is up, claude CLI works directly, but every API call returns `503 claude unavailable: claude exited 1`.
+Fix: `systemctl --user restart claude-proxy` — clears the in-memory session cache; next call opens a fresh session.
+
 ## Updating the Job Prompt
 
 Edit `job.json` in this repo, then update the live job on the mini-PC:
