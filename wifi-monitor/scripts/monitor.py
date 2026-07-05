@@ -25,7 +25,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -317,10 +317,129 @@ def duration_s(start_ts: str, end_ts: str) -> int:
         return -1
 
 
+# ── daily report ─────────────────────────────────────────────────────────────
+
+def daily_report() -> None:
+    """
+    Read yesterday's CSV + events log and send a Telegram digest.
+    Run via: python3 monitor.py --report  (triggered by systemd timer at 07:00 UTC)
+    """
+    yesterday = (datetime.now(tz=timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    wifi_rtt: list[float] = []
+    wired_rtt: list[float] = []
+    wifi_loss  = 0
+    wired_loss = 0
+    total      = 0
+
+    if LOG_CSV.exists():
+        with open(LOG_CSV) as f:
+            for line in f:
+                if not line.startswith(yesterday):
+                    continue
+                parts = line.strip().split(",")
+                if len(parts) < 3:
+                    continue
+                total += 1
+                if parts[1] == "LOSS":
+                    wifi_loss += 1
+                else:
+                    try:
+                        wifi_rtt.append(float(parts[1]))
+                    except ValueError:
+                        wifi_loss += 1
+                if parts[2] == "LOSS":
+                    wired_loss += 1
+                else:
+                    try:
+                        wired_rtt.append(float(parts[2]))
+                    except ValueError:
+                        wired_loss += 1
+
+    degradation_events: list[dict] = []
+    if LOG_EVENTS.exists():
+        cur: dict = {}
+        with open(LOG_EVENTS) as f:
+            for line in f:
+                if yesterday not in line:
+                    continue
+                if "DEGRADED" in line and "MID-EVENT" not in line:
+                    m = re.search(r"wifi=([\d.]+|None)", line)
+                    cur = {"start": line[:21].strip("[] "), "peak": float(m.group(1)) if m and m.group(1) != "None" else None}
+                elif "RECOVERED" in line and cur:
+                    m = re.search(r"duration=(\d+)s", line)
+                    cur["duration"] = int(m.group(1)) if m else 0
+                    m = re.search(r"peak=([\d.]+)", line)
+                    cur["peak"] = float(m.group(1)) if m else cur.get("peak")
+                    degradation_events.append(cur)
+                    cur = {}
+
+    if total == 0:
+        msg = f"📶 WiFi daily report — {yesterday}\nNo data collected."
+        send_telegram(msg)
+        return
+
+    def percentile(arr: list[float], p: int) -> float:
+        s = sorted(arr)
+        idx = int(len(s) * p / 100)
+        return s[min(idx, len(s) - 1)]
+
+    wifi_loss_pct  = 100 * wifi_loss  / total
+    wired_loss_pct = 100 * wired_loss / total
+
+    lines = [f"📶 WiFi daily report — {yesterday}", f"Samples: {total}  ({total * INTERVAL // 60} min coverage)"]
+
+    if wifi_rtt:
+        lines.append(
+            f"WiFi  — loss {wifi_loss_pct:.1f}% | "
+            f"median {percentile(wifi_rtt, 50):.0f}ms | "
+            f"p95 {percentile(wifi_rtt, 95):.0f}ms | "
+            f"max {max(wifi_rtt):.0f}ms"
+        )
+    else:
+        lines.append(f"WiFi  — {wifi_loss_pct:.1f}% loss (no good samples)")
+
+    if wired_rtt:
+        lines.append(
+            f"Wired — loss {wired_loss_pct:.1f}% | "
+            f"median {percentile(wired_rtt, 50):.0f}ms | "
+            f"max {max(wired_rtt):.0f}ms"
+        )
+    else:
+        lines.append(f"Wired — {wired_loss_pct:.1f}% loss (offline / unreachable)")
+
+    if degradation_events:
+        durations = [e["duration"] for e in degradation_events if "duration" in e]
+        total_down = sum(durations)
+        peaks = [e["peak"] for e in degradation_events if e.get("peak")]
+        lines.append(
+            f"Events: {len(degradation_events)}  |  "
+            f"total downtime ~{total_down}s  |  "
+            f"longest {max(durations) if durations else '?'}s  |  "
+            f"peak {max(peaks):.0f}ms" if peaks else ""
+        )
+        # Highlight the hour with the most events
+        hours = [e["start"][11:13] for e in degradation_events if len(e.get("start", "")) > 13]
+        if hours:
+            from collections import Counter
+            worst_hour, count = Counter(hours).most_common(1)[0]
+            if count > 1:
+                lines.append(f"Hotspot hour: {worst_hour}:xx UTC ({count} events)")
+    else:
+        lines.append("No degradation events.")
+
+    send_telegram("\n".join(lines))
+    log.info(f"Daily report sent for {yesterday}")
+
+
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
     _load_dotenv()
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--report":
+        daily_report()
+        return
 
     if not LOG_CSV.exists():
         with open(LOG_CSV, "w") as f:

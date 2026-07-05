@@ -1,0 +1,10 @@
+[Unit]
+Description=WiFi monitor daily Telegram report
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.hermes/skills/wifi-monitor
+ExecStart=/usr/bin/python3 %h/.hermes/skills/wifi-monitor/scripts/monitor.py --report
+StandardOutput=append:%h/.hermes/skills/wifi-monitor/logs/monitor.log
+StandardError=append:%h/.hermes/skills/wifi-monitor/logs/monitor.log
