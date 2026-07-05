@@ -377,6 +377,7 @@ def daily_report() -> None:
     if total == 0:
         msg = f"📶 WiFi daily report — {yesterday}\nNo data collected."
         send_telegram(msg)
+        log.info(f"Daily report sent for {yesterday} (no data)")
         return
 
     def percentile(arr: list[float], p: int) -> float:
