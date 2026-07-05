@@ -103,7 +103,7 @@ def kernel_wifi_lines(iface: str, n: int = 5) -> list[str]:
         return []
 
 
-# ── radio channel scan ────────────────────────────────────────────────────────
+# ── radio channel scan + SNR ──────────────────────────────────────────────────
 
 def current_channel_mhz(iface: str) -> int | None:
     """Current connected frequency in MHz from 'iw dev <iface> link'."""
@@ -113,6 +113,71 @@ def current_channel_mhz(iface: str) -> int | None:
         return int(m.group(1)) if m else None
     except Exception:
         return None
+
+
+def snr_line(iface: str) -> str:
+    """
+    Returns a one-line SNR summary: signal + noise floor + derived SNR + quality label.
+
+    Signal comes from 'iw station dump' (RSSI in dBm).
+    Noise floor comes from 'iw dev <iface> survey dump' — the kernel tracks per-channel
+    noise; the in-use channel entry has '[in use]' on its frequency line.
+
+    SNR = signal_dBm − noise_floor_dBm.  Thresholds:
+      ≥ 25 dB → excellent  |  15–25 → good  |  10–15 → fair  |  < 10 → poor
+    """
+    signal_dbm: float | None = None
+    noise_dbm:  float | None = None
+
+    try:
+        r = subprocess.run(
+            ["iw", "dev", iface, "station", "dump"],
+            capture_output=True, text=True, timeout=5,
+        )
+        m = re.search(r"signal:\s*([-\d.]+)", r.stdout)
+        if m:
+            signal_dbm = float(m.group(1))
+    except Exception:
+        pass
+
+    try:
+        r = subprocess.run(
+            ["iw", "dev", iface, "survey", "dump"],
+            capture_output=True, text=True, timeout=5,
+        )
+        in_use_block = False
+        for line in r.stdout.splitlines():
+            if "frequency:" in line and "[in use]" in line:
+                in_use_block = True
+            elif "frequency:" in line:
+                in_use_block = False
+            if in_use_block and "noise:" in line:
+                m = re.search(r"noise:\s*([-\d.]+)", line)
+                if m:
+                    noise_dbm = float(m.group(1))
+                break
+    except Exception:
+        pass
+
+    if signal_dbm is None:
+        return "SNR: n/a (no signal data)"
+
+    sig_str = f"signal {signal_dbm:.0f} dBm"
+
+    if noise_dbm is None:
+        return f"{sig_str} | noise floor: n/a | SNR: n/a"
+
+    snr = signal_dbm - noise_dbm
+    if snr >= 25:
+        quality = "excellent"
+    elif snr >= 15:
+        quality = "good"
+    elif snr >= 10:
+        quality = "fair"
+    else:
+        quality = "poor"
+
+    return f"{sig_str} | noise {noise_dbm:.0f} dBm | SNR {snr:.0f} dB ({quality})"
 
 
 def radio_scan_summary(iface: str) -> str:
@@ -180,7 +245,7 @@ def radio_scan_summary(iface: str) -> str:
 # ── full event snapshot (at event start) ─────────────────────────────────────
 
 def event_start_snapshot(iface: str) -> str:
-    parts = ["--- WiFi state ---", station_dump(iface)]
+    parts = ["--- WiFi state ---", station_dump(iface), snr_line(iface)]
     kernel = kernel_wifi_lines(iface)
     if kernel:
         parts += ["--- kernel ---"] + kernel
@@ -198,7 +263,7 @@ def mid_event_poll(iface: str) -> str:
       - Signal dropping   → radio issue or the client is moving away
       - Signal stable     → radio is fine; problem is in the AP stack or upstream
     """
-    parts = [station_dump(iface)]
+    parts = [station_dump(iface), snr_line(iface)]
     kernel = kernel_wifi_lines(iface, n=3)
     if kernel:
         parts += ["--- kernel ---"] + kernel
