@@ -29,6 +29,7 @@ import news as news_validator
 import finnhub
 import events as wyckoff_events
 import digest
+import reddit
 from prescreener import screen_universe, _factor_warnings, _load_factor_tags, TOP_N
 
 TZ = ZoneInfo("Asia/Jerusalem")
@@ -261,6 +262,8 @@ def _build_weekly_digest(
     factor_tags: dict,
     date_str: str,
     errors: list[str],
+    reddit_data: dict | None = None,
+    rd_threshold: float = 2.0,
 ) -> str:
     spy_off = spy_ctx.get("spy_pct_off_high", 0) * 100
     r6 = spy_ctx.get("spy_ret_6m", 0) * 100
@@ -280,6 +283,9 @@ def _build_weekly_digest(
     if strong:
         for b in strong:
             lines.extend(_pick_block(b, "🟢"))
+            ann = reddit.annotation_line(reddit_data.get(b["ticker"]) if reddit_data else None, rd_threshold)
+            if ann:
+                lines.append(ann)
             lines.append("")
     else:
         lines.append("<i>None this week — no base completed a Spring→SOS→LPS accumulation sequence.</i>")
@@ -292,6 +298,9 @@ def _build_weekly_digest(
                      "the daily exit-watch, and keep half size.</i>")
         for b in markup:
             lines.extend(_pick_block(b, "🟣"))
+            ann = reddit.annotation_line(reddit_data.get(b["ticker"]) if reddit_data else None, rd_threshold)
+            if ann:
+                lines.append(ann)
             lines.append("")
     else:
         lines.append("<i>None.</i>")
@@ -301,6 +310,9 @@ def _build_weekly_digest(
     if borderline:
         for b in borderline:
             lines.extend(_pick_block(b, "🟡", with_size=False))
+            ann = reddit.annotation_line(reddit_data.get(b["ticker"]) if reddit_data else None, rd_threshold)
+            if ann:
+                lines.append(ann)
             miss = _missing(b)
             if miss:
                 lines.append(f"  <i>Missing: {', '.join(miss)}</i>")
@@ -431,11 +443,46 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
         except Exception as e:
             print(f"[weekly] market cap unavailable for {b['ticker']}: {e}", file=sys.stderr)
 
-    msg = _build_weekly_digest(spy_ctx, strong, markup, borderline, factor_tags, date_str, errors)
+    # Reddit mention data (annotation layer only — no ranking influence)
+    try:
+        import yaml as _yaml
+        _rd_cfg = (_yaml.safe_load((Path(__file__).parent.parent / "config.yaml").read_text()) or {}).get("reddit") or {}
+    except Exception:
+        _rd_cfg = {}
+    rd_threshold = float(_rd_cfg.get("velocity_warn_threshold", 2.0))
+    rd_pages     = int(_rd_cfg.get("pages", 2))
+    rd_radar_n   = int(_rd_cfg.get("radar_top_n", 10))
+
+    reddit_data: dict = {}
+    try:
+        reddit_data = reddit.fetch_mentions(pages=rd_pages)
+        print(f"[weekly] Reddit: {len(reddit_data)} tickers fetched", file=sys.stderr)
+    except Exception as e:
+        print(f"[weekly] Reddit fetch failed (non-fatal): {e}", file=sys.stderr)
+
+    msg = _build_weekly_digest(
+        spy_ctx, strong, markup, borderline, factor_tags, date_str, errors,
+        reddit_data=reddit_data, rd_threshold=rd_threshold,
+    )
     if dry_run:
         print(msg)
     else:
         notifier.send(msg)
+
+    # Reddit Radar — separate message; top velocity movers cross-referenced against the full
+    # prescreener cohort (bundles). Observe over multiple weeks before drawing conclusions.
+    if reddit_data:
+        picked_set = {b["ticker"] for b in strong + markup}
+        radar = reddit.radar_message(
+            reddit_data, picked_set, bundles,
+            top_n=rd_radar_n, threshold=rd_threshold, date_str=date_str,
+        )
+        if radar:
+            if dry_run:
+                print("\n---\n" + radar)
+            else:
+                notifier.send(radar)
+
     print(
         f"[weekly] {'(dry-run) ' if dry_run else ''}done — "
         f"{len(strong)} STRONG, {len(markup)} MARKUP-PULLBACK, {len(borderline)} BORDERLINE",

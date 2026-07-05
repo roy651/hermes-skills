@@ -11,3 +11,8 @@ entry:
   # Lowered from the prescreener's 30 to ease the per-run Claude load. Pass `entry.py --cohort N`
   # on demand to override (lower = cheaper/faster, fewer picks; raise for a fuller sweep).
   cohort_size: 20
+
+reddit:
+  pages: 2                      # ApeWisdom pages to fetch (25 tickers per page)
+  velocity_warn_threshold: 2.0  # ≥200% mention increase → ⚠️ distribution warning
+  radar_top_n: 10               # items in the weekly Radar side-path report

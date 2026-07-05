@@ -29,6 +29,7 @@ import deterioration
 import ladder
 import events
 import finnhub
+import reddit
 from prescreener import _get_spy_context
 
 TZ = ZoneInfo("Asia/Jerusalem")
@@ -244,6 +245,16 @@ def run():
                 errors.append(f"{t}: {e}")
                 print(f"[daily] llm error on {t}: {e}", file=sys.stderr)
 
+    # Reddit mention data — annotation layer only, fetched after LLM (non-blocking; failure is silent)
+    rd_cfg = cfg.get("reddit") or {}
+    rd_threshold = float(rd_cfg.get("velocity_warn_threshold", 2.0))
+    reddit_data: dict = {}
+    try:
+        reddit_data = reddit.fetch_mentions(pages=int(rd_cfg.get("pages", 2)))
+        print(f"[daily] Reddit: {len(reddit_data)} tickers fetched", file=sys.stderr)
+    except Exception as e:
+        print(f"[daily] Reddit fetch failed (non-fatal): {e}", file=sys.stderr)
+
     # 4. Assemble: group held positions by ACTION (Exit -> Trim -> Add -> Hold), each sorted by exit score
     buckets: dict = {"EXIT": [], "TRIM": [], "ADD": [], "HOLD": []}
     for t in all_tickers:
@@ -258,11 +269,18 @@ def run():
             block = digest.format_managed_block(
                 holdings[t], price, engines[t], validation=llm_out.get(t),
                 name=td.name, currency=td.currency)
+            ann = reddit.annotation_line(reddit_data.get(t), rd_threshold)
+            if ann:
+                block += "\n" + ann
             buckets[cat].append((engines[t]["det"]["score"], block))
         else:
             result = llm_out.get(t) or {"ticker": t, "phase": "unclear"}
-            watchlist_lines.append(digest.format_block(
-                result, None, price, name=td.name, currency=td.currency, gate_action=False))
+            block = digest.format_block(
+                result, None, price, name=td.name, currency=td.currency, gate_action=False)
+            ann = reddit.annotation_line(reddit_data.get(t), rd_threshold)
+            if ann:
+                block += "\n" + ann
+            watchlist_lines.append(block)
 
     section_label = {
         "portfolio": "Exit",
