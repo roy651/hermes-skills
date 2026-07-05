@@ -31,8 +31,9 @@ from pathlib import Path
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-TARGET           = "192.168.1.1"   # LAN gateway — tests WiFi hop
-WAN_TARGET       = os.environ.get("WAN_TARGET", "8.8.8.8")  # internet — tests pfSense WAN
+TARGET           = "192.168.1.1"    # LAN gateway  — tests WiFi/Tenda hop
+MODEM_TARGET     = os.environ.get("MODEM_TARGET", "192.168.3.1")  # WAN gateway — tests pfSense→modem; "" to disable
+WAN_TARGET       = os.environ.get("WAN_TARGET",   "8.8.8.8")      # internet    — tests full ISP path
 WIFI_IFACE       = os.environ.get("WIFI_IFACE",           "wlp1s0")
 WIRED_IFACE      = os.environ.get("WIRED_IFACE",          "eno1")
 INTERVAL         = int(os.environ.get("INTERVAL",         "5"))
@@ -45,7 +46,7 @@ _LOGS = _HERE.parent / "logs"
 _LOGS.mkdir(exist_ok=True)
 
 LOG_CSV    = _LOGS / "wifi_monitor.csv"
-_CSV_HEADER = "timestamp_utc,wifi_ms,wired_ms,wan_ms\n"
+_CSV_HEADER = "timestamp_utc,wifi_ms,wired_ms,modem_ms,wan_ms\n"
 LOG_EVENTS = _LOGS / "wifi_events.log"
 
 logging.basicConfig(
@@ -384,9 +385,30 @@ def _fmt(v: float | None) -> str:
     return str(v) if v is not None else "LOSS"
 
 
-def append_csv(ts: str, wifi_ms: float | None, wired_ms: float | None, wan_ms: float | None) -> None:
+def _fmt_ms(v: float | None) -> str:
+    return f"{v:.0f}ms" if v is not None else "LOSS"
+
+
+def _ping_target(target: str, timeout: int = 2) -> float | None:
+    """Unbound ping to a specific target (used for modem/WAN gateway)."""
+    try:
+        r = subprocess.run(
+            ["ping", "-c", "1", "-W", str(timeout), target],
+            capture_output=True, text=True, timeout=timeout + 1,
+        )
+        if r.returncode == 0:
+            m = re.search(r"time=(\d+(?:\.\d+)?)", r.stdout)
+            if m:
+                return float(m.group(1))
+        return None
+    except Exception:
+        return None
+
+
+def append_csv(ts: str, wifi_ms: float | None, wired_ms: float | None,
+               modem_ms: float | None, wan_ms: float | None) -> None:
     with open(LOG_CSV, "a") as f:
-        f.write(f"{ts},{_fmt(wifi_ms)},{_fmt(wired_ms)},{_fmt(wan_ms)}\n")
+        f.write(f"{ts},{_fmt(wifi_ms)},{_fmt(wired_ms)},{_fmt(modem_ms)},{_fmt(wan_ms)}\n")
 
 
 def append_event(text: str) -> None:
@@ -415,11 +437,20 @@ def daily_report() -> None:
 
     wifi_rtt:  list[float] = []
     wired_rtt: list[float] = []
+    modem_rtt: list[float] = []
     wan_rtt:   list[float] = []
-    wifi_loss  = 0
-    wired_loss = 0
-    wan_loss   = 0
-    total      = 0
+    wifi_loss = wired_loss = modem_loss = wan_loss = total = 0
+
+    def _parse_col(parts: list[str], idx: int, rtt_list: list, loss_ref: list) -> None:
+        if idx >= len(parts):
+            return
+        if parts[idx] == "LOSS":
+            loss_ref[0] += 1
+        else:
+            try:
+                rtt_list.append(float(parts[idx]))
+            except ValueError:
+                loss_ref[0] += 1
 
     if LOG_CSV.exists():
         with open(LOG_CSV) as f:
@@ -430,28 +461,13 @@ def daily_report() -> None:
                 if len(parts) < 3:
                     continue
                 total += 1
-                if parts[1] == "LOSS":
-                    wifi_loss += 1
-                else:
-                    try:
-                        wifi_rtt.append(float(parts[1]))
-                    except ValueError:
-                        wifi_loss += 1
-                if parts[2] == "LOSS":
-                    wired_loss += 1
-                else:
-                    try:
-                        wired_rtt.append(float(parts[2]))
-                    except ValueError:
-                        wired_loss += 1
-                if len(parts) >= 4:
-                    if parts[3] == "LOSS":
-                        wan_loss += 1
-                    else:
-                        try:
-                            wan_rtt.append(float(parts[3]))
-                        except ValueError:
-                            wan_loss += 1
+                wl, wrl, ml, wanl = [0], [0], [0], [0]
+                _parse_col(parts, 1, wifi_rtt,  wl)
+                _parse_col(parts, 2, wired_rtt, wrl)
+                _parse_col(parts, 3, modem_rtt, ml)
+                _parse_col(parts, 4, wan_rtt,   wanl)
+                wifi_loss  += wl[0]; wired_loss += wrl[0]
+                modem_loss += ml[0]; wan_loss   += wanl[0]
 
     degradation_events: list[dict] = []
     if LOG_EVENTS.exists():
@@ -506,6 +522,16 @@ def daily_report() -> None:
     else:
         lines.append(f"Wired — {wired_loss_pct:.1f}% loss (offline / unreachable)")
 
+    modem_loss_pct = 100 * modem_loss / total if total else 0
+    if modem_rtt:
+        lines.append(
+            f"Modem — loss {modem_loss_pct:.1f}% | "
+            f"median {percentile(modem_rtt, 50):.0f}ms | "
+            f"max {max(modem_rtt):.0f}ms"
+        )
+    elif modem_loss > 0:
+        lines.append(f"Modem — {modem_loss_pct:.1f}% loss")
+
     wan_loss_pct = 100 * wan_loss / total if total else 0
     if wan_rtt:
         lines.append(
@@ -553,8 +579,9 @@ def main() -> None:
         with open(LOG_CSV, "w") as f:
             f.write(_CSV_HEADER)
 
+    modem_enabled = bool(MODEM_TARGET)
     log.info(
-        f"wifi-monitor starting — target={TARGET}  wan={WAN_TARGET}  "
+        f"wifi-monitor starting — target={TARGET}  modem={MODEM_TARGET or 'disabled'}  wan={WAN_TARGET}  "
         f"wifi={WIFI_IFACE}  wired={WIRED_IFACE}  "
         f"interval={INTERVAL}s  bad_threshold={BAD_MS}ms×{BAD_CONFIRM}  "
         f"mid_poll={MID_POLL_INTERVAL}s"
@@ -568,11 +595,12 @@ def main() -> None:
     next_mid_poll  = 0.0
 
     while True:
-        ts       = utcnow()
-        wifi_ms  = ping_one(WIFI_IFACE)
-        wired_ms = ping_one(WIRED_IFACE)
-        wan_ms   = ping_one(None)          # unbound — uses default route (eno1 metric 100)
-        append_csv(ts, wifi_ms, wired_ms, wan_ms)
+        ts        = utcnow()
+        wifi_ms   = ping_one(WIFI_IFACE)
+        wired_ms  = ping_one(WIRED_IFACE)
+        modem_ms  = _ping_target(MODEM_TARGET) if modem_enabled else None
+        wan_ms    = ping_one(None)
+        append_csv(ts, wifi_ms, wired_ms, modem_ms, wan_ms)
 
         wifi_bad   = wifi_ms is None or wifi_ms > BAD_MS
         bad_streak = bad_streak + 1 if wifi_bad else 0
@@ -580,23 +608,30 @@ def main() -> None:
         if degraded and wifi_ms is not None:
             event_peak = max(event_peak, wifi_ms)
 
-        # ── WAN up/down transitions (independent of WiFi state) ───────────────
+        # ── WAN up/down transitions ────────────────────────────────────────────
         wan_bad_now = wan_ms is None
         if not wan_down and wan_bad_now:
             wan_down = True
-            msg = (
-                f"🌐 WAN down ({WAN_TARGET} unreachable)\n"
-                f"WiFi→pfSense: {'LOSS' if wifi_ms is None else f'{wifi_ms:.0f}ms'}"
-            )
-            log.warning(f"WAN DOWN  wifi={wifi_ms} wired={wired_ms}")
+            # Isolate: modem reachable = ISP fault; modem also down = pfSense/modem fault
+            if modem_enabled:
+                if modem_ms is not None:
+                    cause = f"modem OK ({modem_ms:.0f}ms) → Bezeq/ISP fault"
+                else:
+                    cause = f"modem also LOSS → pfSense WAN or modem fault"
+            else:
+                cause = f"WiFi→pfSense: {_fmt_ms(wifi_ms)}"
+            msg = f"🌐 WAN down\n{cause}"
+            log.warning(f"WAN DOWN  modem={modem_ms} wan={wan_ms}")
             send_telegram(msg)
-            append_event(f"WAN_DOWN  wifi={wifi_ms} wired={wired_ms}")
+            append_event(f"WAN_DOWN  modem={modem_ms} wan={wan_ms}")
         elif wan_down and not wan_bad_now:
             wan_down = False
-            msg = f"🌐 WAN restored ({WAN_TARGET} {wan_ms:.0f}ms)"
-            log.info(f"WAN RESTORED  {wan_ms:.0f}ms")
+            msg = f"🌐 WAN restored ({wan_ms:.0f}ms)"
+            if modem_enabled:
+                msg += f"  modem {_fmt_ms(modem_ms)}"
+            log.info(f"WAN RESTORED  wan={wan_ms} modem={modem_ms}")
             send_telegram(msg)
-            append_event(f"WAN_RESTORED  wan={wan_ms}")
+            append_event(f"WAN_RESTORED  wan={wan_ms} modem={modem_ms}")
 
         # ── OK → DEGRADED ─────────────────────────────────────────────────────
         if not degraded and bad_streak >= BAD_CONFIRM:
@@ -605,22 +640,22 @@ def main() -> None:
             event_peak     = wifi_ms or 9999.0
             next_mid_poll  = time.monotonic() + MID_POLL_INTERVAL
 
-            if wan_ms is None:
-                fault = "WAN also down — pfSense or ISP fault"
-            elif wired_ms is not None and wired_ms < BAD_MS:
-                fault = f"wired OK ({wired_ms:.0f}ms), WAN OK ({wan_ms:.0f}ms) → Tenda fault"
+            if wan_ms is None and (not modem_enabled or modem_ms is None):
+                fault = "WAN + modem LOSS → pfSense or modem fault"
+            elif wan_ms is None and modem_ms is not None:
+                fault = f"modem OK ({modem_ms:.0f}ms), WAN LOSS → Bezeq/ISP fault"
             else:
-                fault = f"wired LOSS, WAN OK ({wan_ms:.0f}ms) → eno1 routing issue"
+                fault = f"WAN OK ({_fmt_ms(wan_ms)}) → Tenda fault"
 
             snapshot = event_start_snapshot(WIFI_IFACE)
             msg = (
                 f"⚠️ WiFi degraded\n"
-                f"WiFi: {'LOSS' if wifi_ms is None else f'{wifi_ms:.0f}ms'} | {fault}\n\n"
+                f"WiFi: {_fmt_ms(wifi_ms)} | {fault}\n\n"
                 f"{snapshot}"
             )
-            log.warning(f"DEGRADED  wifi={wifi_ms} wired={wired_ms} wan={wan_ms}")
+            log.warning(f"DEGRADED  wifi={wifi_ms} modem={modem_ms} wan={wan_ms}")
             send_telegram(msg)
-            append_event(f"DEGRADED  wifi={wifi_ms} wired={wired_ms} wan={wan_ms}\n{snapshot}")
+            append_event(f"DEGRADED  wifi={wifi_ms} modem={modem_ms} wan={wan_ms}\n{snapshot}")
 
         # ── DEGRADED → RECOVERED ──────────────────────────────────────────────
         elif degraded and not wifi_bad:
@@ -628,7 +663,7 @@ def main() -> None:
             msg = (
                 f"✅ WiFi recovered\n"
                 f"Duration: ~{dur}s  |  peak RTT: {event_peak:.0f}ms\n"
-                f"WiFi: {wifi_ms:.0f}ms  |  WAN: {'LOSS' if wan_ms is None else f'{wan_ms:.0f}ms'}"
+                f"WiFi: {_fmt_ms(wifi_ms)}  |  modem: {_fmt_ms(modem_ms)}  |  WAN: {_fmt_ms(wan_ms)}"
             )
             log.info(f"RECOVERED  duration={dur}s peak={event_peak:.0f}ms")
             send_telegram(msg)
