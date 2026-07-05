@@ -1,7 +1,7 @@
 ---
 name: reolink-renew
 description: Check and renew the free Reolink Cloud subscription (Basic Plan — 1GB/7-day/1-cam). Runs a direct API flow against apis.reolink.com — no browser required. After each run, maintains a rolling buffer of 3 forward monthly reminders (topping the queue back up to 3 every run) so a single missed run self-heals instead of silently lapsing. Renews only when the plan is expired or within 2 days of expiry; buffered reminders that fire early are harmless no-ops. Sends a notification on every run, and a loud high-priority alert on any failure.
-version: 3.0.0
+version: 3.1.0
 author: Hermes Agent
 license: MIT
 metadata:
@@ -121,6 +121,7 @@ Name each reminder `reolink-renew-YYYY-MM-DD` after the date it fires. A slot th
 2. If `N == 0` (first run / empty buffer): create the earliest slot at **EXPIRY − 1 day**; that becomes `L`, `N = 1`.
 3. While `N < 3`: create one more one-time reminder at **`L` + 1 month** (09:00); that becomes the new `L`; `N += 1`. Repeat until `N == 3`.
 4. **Only add the missing later slots — never touch reminders that already exist.** Re-running just tops the queue back to 3 and stops. That's the whole idempotency guarantee.
+5. **Clean up stale slots:** delete any `reolink-renew-*` job whose date is already **in the past** (left over from an outage where reminders went past-due without firing). They're excluded from the future-count so they don't cause duplicates, but they clutter the list and can fire late on catch-up.
 
 Each reminder is a **one-time** job (`--repeat 1`) that re-invokes this skill. When it fires it renews-if-needed (per the Renewal Decision) and re-runs this top-up, extending the buffer by one — so the 3-deep queue rolls forward on its own.
 
@@ -136,8 +137,14 @@ Example (EXPIRY 2026-08-05) → the 3 buffer slots are:
 - `reolink-renew-2026-09-04` → `0 9 4 9 *`
 - `reolink-renew-2026-10-04` → `0 9 4 10 *`
 
-### Re-anchor safety (drift correction)
-The +1-month chain tracks the ~monthly renewal cycle, but can drift a few days over many cycles. After a **renewal** (STATUS: renewed), if the earliest future reminder is more than **3 days** off from the new `EXPIRY − 1 day`, delete all future `reolink-renew-*` jobs and reseed from step 2. Normally it stays aligned and this never fires.
+### Re-anchor the lead slot after every renewal (margin fix — do NOT skip)
+The `+1 month` chain keeps a fixed day-of-month, but the **lead** reminder erodes its 1-day safety margin if you trust the chain for the front of the queue: seed the lead at EXPIRY−1 (e.g. Aug-4 for expiry Aug-5), it fires and renews Aug-4 → new expiry Sep-4, but the next chained slot is Sep-4 = expiry *day*, not Sep-3 → the margin is gone and it converges to firing **on** expiry day. See `references/scheduling-semantics.md` for the full cycle-by-cycle trace.
+
+So after **every renewal** (STATUS: renewed), re-derive the lead from reality rather than the chain:
+- Recompute the target lead date = new `EXPIRY − 1 day`.
+- If the earliest future `reolink-renew-*` slot differs from it by **≥ 1 day**, delete **all** future `reolink-renew-*` jobs and reseed from step 2 off the fresh EXPIRY (the delete-first reseed is why this never creates a duplicate same-month slot). If it already matches, leave the buffer alone.
+
+This keeps the "renew a day early" margin every cycle. NB: whether the drift even occurs depends on Reolink's active-renewal semantics (stack-from-expiry vs reset-from-renewal-date) — an **open question**, see the reference. Re-anchoring is correct either way.
 
 ## Failure Alerting (loud — mandatory)
 
@@ -161,3 +168,5 @@ REOLINK_PASSWORD=your_password_here
 - Cameras are in Israel, cloud storage is in Italy (`reolink_cloud_it` region)
 - Device re-association is handled automatically if the camera becomes unlinked on renewal
 - The `.venv` is created automatically on first run via `run.sh`
+- **Renewal cycle is calendar-monthly on a fixed day-of-month, NOT a rolling 30 days** — renew on the Nth → expires the Nth next month (evidence: Jul-5 → Aug-5; a 30-day cycle would give Aug-4). This is why the `+1 month` buffer chain stays aligned. Whether an *early* (still-active) renewal stacks onto the current expiry or resets from the renewal date is still unconfirmed — see `references/scheduling-semantics.md` and verify on the next active-state renewal.
+- **Deploy:** this skill is kind-A but **runs from the git checkout** (`~/hermes-skills/reolink-renew/`, no `~/.hermes/skills/` copy), so a git commit is the deploy — no file-copy/restart. The mini-PC host is **pull-only**; a deliberate push from there needs `HERMES_ALLOW_PUSH=1 git push`.
