@@ -1,0 +1,16 @@
+[Unit]
+Description=WiFi quality monitor — dual-interface ping loop with Telegram alerts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.hermes/skills/wifi-monitor
+ExecStart=/usr/bin/python3 %h/.hermes/skills/wifi-monitor/scripts/monitor.py
+Restart=on-failure
+RestartSec=10s
+StandardOutput=append:%h/.hermes/skills/wifi-monitor/logs/monitor.log
+StandardError=append:%h/.hermes/skills/wifi-monitor/logs/monitor.log
+
+[Install]
+WantedBy=default.target
