@@ -79,20 +79,92 @@ def ping_one(iface: str | None, timeout: int = 2) -> float | None:
         return None
 
 
-# ── WiFi state snapshot ───────────────────────────────────────────────────────
+# ── WiFi state helpers — iw preferred, wpa_cli + /proc fallback ───────────────
+#
+# `iw` is the richest source but not installed on this machine.
+# Fallback chain:
+#   signal/noise  → /proc/net/wireless  (always present; iwlwifi noise = -256 = unavailable)
+#   BSSID/freq    → wpa_cli status      (wpa_supplicant manages the interface)
+#   speed         → wpa_cli signal_poll
+#   AP scan       → wpa_cli scan_results (cached; no new scan triggered)
 
-def station_dump(iface: str) -> str:
-    """Key fields from 'iw dev <iface> station dump': signal, bitrate, BSSID, connected time."""
+import shutil as _shutil
+_IW = _shutil.which("iw")
+
+
+def _proc_signal(iface: str) -> tuple[float | None, float | None]:
+    """Read (signal_dBm, noise_dBm) from /proc/net/wireless. Noise is -256 on iwlwifi = n/a."""
+    try:
+        with open("/proc/net/wireless") as f:
+            for line in f:
+                if iface not in line:
+                    continue
+                parts = line.split()
+                sig   = float(parts[3].rstrip("."))
+                noise = float(parts[4].rstrip("."))
+                if sig   > 0: sig   -= 256
+                if noise > 0: noise -= 256
+                return sig, (noise if noise > -200 else None)
+    except Exception:
+        pass
+    return None, None
+
+
+def _wpa_run(*args: str, iface: str) -> str:
     try:
         r = subprocess.run(
-            ["iw", "dev", iface, "station", "dump"],
+            ["wpa_cli", "-i", iface, *args],
             capture_output=True, text=True, timeout=5,
         )
-        wanted = ("signal:", "tx bitrate:", "rx bitrate:", "connected time:", "BSSID")
-        lines = [l.strip() for l in r.stdout.splitlines() if any(k in l for k in wanted)]
-        return "\n".join(lines) if lines else "(no station data)"
+        return r.stdout if r.returncode == 0 else ""
     except Exception:
-        return "(iw unavailable)"
+        return ""
+
+
+def _wpa_kv(iface: str, cmd: str) -> dict[str, str]:
+    """Run a wpa_cli command and return key=value pairs as a dict."""
+    out = _wpa_run(cmd, iface=iface)
+    result = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            result[k.strip()] = v.strip()
+    return result
+
+
+def station_dump(iface: str) -> str:
+    """Connection state: BSSID, signal, tx speed. Uses iw if available, wpa_cli otherwise."""
+    if _IW:
+        try:
+            r = subprocess.run(
+                ["iw", "dev", iface, "station", "dump"],
+                capture_output=True, text=True, timeout=5,
+            )
+            wanted = ("signal:", "tx bitrate:", "rx bitrate:", "connected time:", "BSSID")
+            lines = [l.strip() for l in r.stdout.splitlines() if any(k in l for k in wanted)]
+            if lines:
+                return "\n".join(lines)
+        except Exception:
+            pass
+
+    # wpa_cli fallback
+    lines = []
+    status = _wpa_kv(iface, "status")
+    if status.get("bssid"):
+        lines.append(f"BSSID: {status['bssid']}")
+    if status.get("ssid"):
+        lines.append(f"SSID: {status['ssid']}")
+    if status.get("freq"):
+        lines.append(f"freq: {status['freq']} MHz")
+    poll = _wpa_kv(iface, "signal_poll")
+    if poll.get("RSSI"):
+        lines.append(f"signal: {poll['RSSI']} dBm")
+    if poll.get("LINKSPEED"):
+        lines.append(f"tx bitrate: {poll['LINKSPEED']} MBit/s")
+    sig_proc, _ = _proc_signal(iface)
+    if sig_proc is not None and not poll.get("RSSI"):
+        lines.append(f"signal (proc): {sig_proc:.0f} dBm")
+    return "\n".join(lines) if lines else "(no station data)"
 
 
 def kernel_wifi_lines(iface: str, n: int = 5) -> list[str]:
@@ -107,143 +179,151 @@ def kernel_wifi_lines(iface: str, n: int = 5) -> list[str]:
         return []
 
 
-# ── radio channel scan + SNR ──────────────────────────────────────────────────
+# ── radio channel + SNR ───────────────────────────────────────────────────────
 
 def current_channel_mhz(iface: str) -> int | None:
-    """Current connected frequency in MHz from 'iw dev <iface> link'."""
-    try:
-        r = subprocess.run(["iw", "dev", iface, "link"], capture_output=True, text=True, timeout=5)
-        m = re.search(r"freq:\s*(\d+)", r.stdout)
-        return int(m.group(1)) if m else None
-    except Exception:
-        return None
+    """Current connected frequency in MHz."""
+    if _IW:
+        try:
+            r = subprocess.run(["iw", "dev", iface, "link"], capture_output=True, text=True, timeout=5)
+            m = re.search(r"freq:\s*(\d+)", r.stdout)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+    # wpa_cli fallback
+    status = _wpa_kv(iface, "status")
+    if status.get("freq"):
+        try:
+            return int(status["freq"])
+        except ValueError:
+            pass
+    return None
 
 
 def snr_line(iface: str) -> str:
-    """
-    Returns a one-line SNR summary: signal + noise floor + derived SNR + quality label.
-
-    Signal comes from 'iw station dump' (RSSI in dBm).
-    Noise floor comes from 'iw dev <iface> survey dump' — the kernel tracks per-channel
-    noise; the in-use channel entry has '[in use]' on its frequency line.
-
-    SNR = signal_dBm − noise_floor_dBm.  Thresholds:
-      ≥ 25 dB → excellent  |  15–25 → good  |  10–15 → fair  |  < 10 → poor
-    """
+    """Signal + noise floor + SNR.  SNR thresholds: ≥25 excellent, 15-25 good, 10-15 fair, <10 poor."""
     signal_dbm: float | None = None
     noise_dbm:  float | None = None
 
-    try:
-        r = subprocess.run(
-            ["iw", "dev", iface, "station", "dump"],
-            capture_output=True, text=True, timeout=5,
-        )
-        m = re.search(r"signal:\s*([-\d.]+)", r.stdout)
-        if m:
-            signal_dbm = float(m.group(1))
-    except Exception:
-        pass
+    if _IW:
+        try:
+            r = subprocess.run(["iw", "dev", iface, "station", "dump"],
+                               capture_output=True, text=True, timeout=5)
+            m = re.search(r"signal:\s*([-\d.]+)", r.stdout)
+            if m:
+                signal_dbm = float(m.group(1))
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(["iw", "dev", iface, "survey", "dump"],
+                               capture_output=True, text=True, timeout=5)
+            in_use = False
+            for line in r.stdout.splitlines():
+                if "frequency:" in line and "[in use]" in line:
+                    in_use = True
+                elif "frequency:" in line:
+                    in_use = False
+                if in_use and "noise:" in line:
+                    m = re.search(r"noise:\s*([-\d.]+)", line)
+                    if m:
+                        noise_dbm = float(m.group(1))
+                    break
+        except Exception:
+            pass
 
-    try:
-        r = subprocess.run(
-            ["iw", "dev", iface, "survey", "dump"],
-            capture_output=True, text=True, timeout=5,
-        )
-        in_use_block = False
-        for line in r.stdout.splitlines():
-            if "frequency:" in line and "[in use]" in line:
-                in_use_block = True
-            elif "frequency:" in line:
-                in_use_block = False
-            if in_use_block and "noise:" in line:
-                m = re.search(r"noise:\s*([-\d.]+)", line)
-                if m:
-                    noise_dbm = float(m.group(1))
-                break
-    except Exception:
-        pass
+    if signal_dbm is None:
+        # wpa_cli / proc fallback
+        poll = _wpa_kv(iface, "signal_poll")
+        if poll.get("RSSI"):
+            try:
+                signal_dbm = float(poll["RSSI"])
+            except ValueError:
+                pass
+        if signal_dbm is None:
+            signal_dbm, noise_dbm = _proc_signal(iface)
+        elif noise_dbm is None:
+            _, noise_dbm = _proc_signal(iface)
 
     if signal_dbm is None:
         return "SNR: n/a (no signal data)"
 
     sig_str = f"signal {signal_dbm:.0f} dBm"
-
     if noise_dbm is None:
-        return f"{sig_str} | noise floor: n/a | SNR: n/a"
+        return f"{sig_str} | noise floor: n/a (iwlwifi driver limitation)"
 
     snr = signal_dbm - noise_dbm
-    if snr >= 25:
-        quality = "excellent"
-    elif snr >= 15:
-        quality = "good"
-    elif snr >= 10:
-        quality = "fair"
-    else:
-        quality = "poor"
-
+    quality = "excellent" if snr >= 25 else "good" if snr >= 15 else "fair" if snr >= 10 else "poor"
     return f"{sig_str} | noise {noise_dbm:.0f} dBm | SNR {snr:.0f} dB ({quality})"
 
 
 def radio_scan_summary(iface: str) -> str:
-    """
-    Dumps cached kernel scan results (no new scan triggered, no root needed).
-    Returns a summary: our channel + APs on the same channel + top interferers.
-    Useful to see channel congestion at the moment degradation begins.
-    """
-    try:
-        r = subprocess.run(
-            ["iw", "dev", iface, "scan", "dump"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if not r.stdout.strip():
-            return "(no cached scan results — may not have scanned recently)"
+    """Nearby APs with signal + channel — iw scan dump preferred, wpa_cli scan_results fallback."""
+    aps: list[dict] = []
 
-        # Parse BSS blocks
-        aps: list[dict] = []
-        current: dict = {}
-        for line in r.stdout.splitlines():
-            if line.startswith("BSS "):
+    if _IW:
+        try:
+            r = subprocess.run(["iw", "dev", iface, "scan", "dump"],
+                               capture_output=True, text=True, timeout=10)
+            if r.stdout.strip():
+                current: dict = {}
+                for line in r.stdout.splitlines():
+                    if line.startswith("BSS "):
+                        if current:
+                            aps.append(current)
+                        bssid = line.split()[1].split("(")[0].strip()
+                        current = {"bssid": bssid, "freq": None, "signal": None, "ssid": ""}
+                    elif current:
+                        ls = line.strip()
+                        if ls.startswith("freq:"):
+                            m = re.search(r"freq:\s*(\d+)", ls)
+                            if m:
+                                current["freq"] = int(m.group(1))
+                        elif ls.startswith("signal:"):
+                            m = re.search(r"signal:\s*([-\d.]+)", ls)
+                            if m:
+                                current["signal"] = float(m.group(1))
+                        elif ls.startswith("SSID:"):
+                            current["ssid"] = ls[5:].strip()
                 if current:
                     aps.append(current)
-                bssid = line.split()[1].split("(")[0].strip()
-                current = {"bssid": bssid, "freq": None, "signal": None, "ssid": ""}
-            elif current:
-                line = line.strip()
-                if line.startswith("freq:"):
-                    m = re.search(r"freq:\s*(\d+)", line)
-                    if m:
-                        current["freq"] = int(m.group(1))
-                elif line.startswith("signal:"):
-                    m = re.search(r"signal:\s*([-\d.]+)", line)
-                    if m:
-                        current["signal"] = float(m.group(1))
-                elif line.startswith("SSID:"):
-                    current["ssid"] = line[5:].strip()
-        if current:
-            aps.append(current)
+        except Exception:
+            pass
 
-        if not aps:
-            return "(scan dump returned data but could not parse BSS entries)"
+    if not aps:
+        # wpa_cli scan_results: BSS\tfreq\trssi\tflags\tssid
+        out = _wpa_run("scan_results", iface=iface)
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 5 and re.match(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", parts[0]):
+                try:
+                    aps.append({
+                        "bssid":  parts[0],
+                        "freq":   int(parts[1]),
+                        "signal": float(parts[2]),
+                        "ssid":   parts[4],
+                    })
+                except (ValueError, IndexError):
+                    pass
 
-        our_freq = current_channel_mhz(iface)
-        same_ch  = [a for a in aps if a["freq"] == our_freq] if our_freq else []
-        top_all  = sorted([a for a in aps if a["signal"] is not None],
-                          key=lambda a: a["signal"], reverse=True)[:5]
+    if not aps:
+        return "(no scan data available)"
 
-        parts = [f"Total visible APs: {len(aps)}"]
-        if our_freq:
-            parts.append(f"Our frequency: {our_freq} MHz ({len(same_ch)} AP(s) on same channel)")
-            for a in sorted(same_ch, key=lambda x: x.get("signal") or -999, reverse=True):
-                parts.append(f"  {a['bssid']}  {a['signal']} dBm  \"{a['ssid']}\"")
-        parts.append("Top 5 by signal:")
-        for a in top_all:
-            marker = " ← same ch" if a["freq"] == our_freq else ""
-            parts.append(f"  {a['bssid']}  {a['signal']} dBm  {a['freq']}MHz  \"{a['ssid']}\"{marker}")
+    our_freq = current_channel_mhz(iface)
+    same_ch  = [a for a in aps if a["freq"] == our_freq] if our_freq else []
+    top_all  = sorted([a for a in aps if a["signal"] is not None],
+                      key=lambda a: a["signal"], reverse=True)[:5]
 
-        return "\n".join(parts)
-
-    except Exception as e:
-        return f"(scan dump failed: {e})"
+    parts = [f"Total visible APs: {len(aps)}"]
+    if our_freq:
+        parts.append(f"Our frequency: {our_freq} MHz ({len(same_ch)} AP(s) on same channel)")
+        for a in sorted(same_ch, key=lambda x: x.get("signal") or -999, reverse=True):
+            parts.append(f"  {a['bssid']}  {a['signal']} dBm  \"{a['ssid']}\"")
+    parts.append("Top 5 by signal:")
+    for a in top_all:
+        marker = " ← same ch" if a["freq"] == our_freq else ""
+        parts.append(f"  {a['bssid']}  {a['signal']} dBm  {a['freq']}MHz  \"{a['ssid']}\"{marker}")
+    return "\n".join(parts)
 
 
 # ── full event snapshot (at event start) ─────────────────────────────────────
