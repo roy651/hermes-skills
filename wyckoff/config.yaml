@@ -1,6 +1,8 @@
 watchlist:
   - GLD   # gold
   - SLV   # silver
+  - XOM   # ExxonMobil — energy, watching 135-137 for accumulation vs. break
+  - HBM   # Hudbay Minerals — copper, fundamentals-ahead-of-tape
 
 llm:
   model: anthropic/claude-opus-4-6
