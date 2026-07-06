@@ -248,6 +248,22 @@ Examples of what the user might say → what to do:
 - "תוסיף את כולם לרשימת המעקב" → same as "add them all"
 - "תוסיף את כולם חוץ מ-TSLA" → add all except TSLA
 
+### What the watchlist IS — an entry-pipeline tripwire (curation rule)
+
+The watchlist is **not** a generic favorites list. It is a curated set of names you'd buy *only if* Wyckoff hands you a defined, low-risk entry — a **spring that holds, an LPS, or a confirmed SOS/markup breakout**. Curate it for that purpose:
+
+- **Only include names in an accumulation / spring-watch posture.** A name still rolling over with no base gives the scan nothing crisp to watch (only a blunt %-move).
+- **Drop distributive names.** If a name prints SOW + LPSY / is topping (e.g. GLD, dropped 2026-07-06), it's the *opposite* of a spring setup — it doesn't belong in an entry list. Keep it only if the user explicitly wants to stalk a spring *below* support that reclaims (a different, speculative setup).
+- Two cadences work together: **weekly `exit.py --section watchlist` = deep LLM phase re-assessment**; a **daily no-LLM scan = the cheap level tripwire** that fires when a name hits a pre-defined level, so the user doesn't miss the entry "hole" between the Sunday LLM reads.
+
+### Daily no-LLM watchlist scan — params are coarse alert bands, not entry rules
+
+Deterministic **level-crossing is exactly what a no-LLM scan does best** ("is price ≤ support?" is pure arithmetic). So per-name trigger levels are **not** meaningless for a mechanical scan — they're what upgrades it from `price_alerts.py`'s blunt 3.5%-mover into a *targeted* tripwire. Design rules:
+
+- **Because the user LLM-verifies every alert manually afterward, tune params as coarse "wake me up" bands, not precise entry signals.** Fire on *approach* (~1% of a level), not only exact touch — better early than missed. No volume-confirm / spring-vs-fail discrimination in the scan; that's the LLM verification's job.
+- **Store levels in a sidecar map, keep `watchlist:` a bare ticker list.** Enriching watchlist entries to objects breaks `exit.py`/`manage.py` (they read bare strings). Add a separate `watchlist_levels: { TICKER: {support, resistance} }` the scan reads; a name with no clean structure → generic %-move fallback until a base forms.
+- Alert semantics: within ~1% of `support` → "spring/support watch"; near/above `resistance` → "breakout/SOS watch". End every alert with "→ reply to LLM-verify."
+
 ## Configuration
 
 Edit `~/.hermes/skills/wyckoff/config.yaml`:
