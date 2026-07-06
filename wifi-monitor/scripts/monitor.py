@@ -54,7 +54,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
         logging.FileHandler(_LOGS / "monitor.log"),
-        logging.StreamHandler(sys.stdout),
     ],
 )
 log = logging.getLogger(__name__)
