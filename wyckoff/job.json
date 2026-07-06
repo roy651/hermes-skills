@@ -46,5 +46,17 @@
     },
     "deliver": "origin",
     "enabled": true
+  },
+  {
+    "id": "wyckoff_watchlist_scan",
+    "name": "Wyckoff Daily Watchlist Scan",
+    "prompt": "Run the Wyckoff daily no-LLM watchlist tripwire — it posts to Telegram ONLY if a curated watchlist name nears a defined level (support/resistance in config watchlist_levels) or moves ≥3.5%; otherwise silent. No Claude credits:\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/watchlist_scan.py >> logs/watchlist_scan.log 2>&1\n```\n\nIf the command exits non-zero, report the last 20 lines of logs/watchlist_scan.log to Roy. Otherwise respond with [SILENT].",
+    "schedule": {
+      "kind": "cron",
+      "expr": "45 20 * * 1-5",
+      "display": "45 20 * * 1-5"
+    },
+    "deliver": "origin",
+    "enabled": true
   }
 ]
