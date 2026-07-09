@@ -4,8 +4,10 @@
 Watches the *curated* config `watchlist` (names awaiting a defined Wyckoff entry) against
 per-name `watchlist_levels` (support/resistance seeded weekly from the LLM read). Purely
 arithmetic: fires a "spring/LPS watch" as price approaches support, a "SOS/breakout watch"
-as it approaches or closes above resistance, and a generic %-move alert for names with no
-levels yet. Zero Claude credits.
+as it approaches or closes above resistance. A name with NO defined levels is a candidate
+still awaiting a base — it has no decision level to watch, so it stays silent (no generic
+%-move alarm) until the weekly LLM read seeds levels. This keeps the tripwire about
+*decision levels*, not raw volatility. Zero Claude credits.
 
 Every alert ends with a nudge to reply for a manual LLM verify — the scan only needs to be a
 good "wake me up" band, not a precise entry rule. Silent (no Telegram) when nothing trips, to
@@ -64,10 +66,12 @@ def _check(ticker: str, levels: dict | None, band: float) -> dict | None:
                 elif -band <= dist <= 0:
                     triggers.append(f"🟢 nearing resistance {res:g} ({dist*100:+.1f}%) — breakout watch")
 
-        # Generic %-move: always relevant for structure-less names; for level names it's
-        # extra signal only when no level band already fired.
-        if not triggers and abs(pct_chg) >= MOVE_THRESHOLD:
-            triggers.append(f"⚡ {pct_chg*100:+.1f}% day — no defined level, eyeball it")
+        # Generic %-move: extra signal ONLY for names that already have defined levels but
+        # moved big without hitting a band (e.g. a mid-range lurch). Level-less names get no
+        # %-alarm — they're base-watch candidates, handled by the weekly LLM read, not this
+        # deterministic tripwire.
+        if levels and not triggers and abs(pct_chg) >= MOVE_THRESHOLD:
+            triggers.append(f"⚡ {pct_chg*100:+.1f}% day — big move off its levels, eyeball it")
 
         if not triggers:
             return None
