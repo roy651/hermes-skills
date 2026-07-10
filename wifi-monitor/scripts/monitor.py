@@ -78,21 +78,26 @@ def iface_ipv4(iface: str) -> str | None:
         return None
 
 
-def ping_one(src_ip: str | None, target: str = TARGET, timeout: int = 2) -> float | None:
-    """Ping `target`, binding to source IP `src_ip` (not the interface device).
+def ping_one(bind: str | None, target: str = TARGET, timeout: int = 2) -> float | None:
+    """Ping `target`, binding to interface device `bind` (e.g. "eno1" / "wlp1s0").
 
-    Binding by source IP — rather than `-I <iface>` — is deliberate.  `-I <iface>` uses
-    SO_BINDTODEVICE, so the socket only hears replies arriving on *that* device.  With
-    both NICs on one subnet (eno1 .16 + wlp1s0 .17 → 192.168.1.0/24), ARP flux can
-    deliver a reply on the other NIC and the bound socket counts it as loss — the
-    "wired 76% loss / 0ms RTT" artifact.  Source-IP bind still pins egress (the route
-    for that src selects its interface) but accepts the reply on whichever NIC it
-    returns via.  src_ip=None → unbound (WAN check via the default route).
+    Device-bind (`-I <iface>`, SO_BINDTODEVICE) pins BOTH egress and the receive
+    interface, so each NIC's path is measured symmetrically.  This requires ARP
+    hardening (`/etc/sysctl.d/20-wifi-monitor-arp.conf`: arp_ignore=1 arp_announce=2)
+    so that, with both NICs on one subnet (eno1 .16 + wlp1s0 .17 → 192.168.1.0/24),
+    the gateway's reply returns on the NIC that sent it instead of ARP-fluxing to the
+    other — otherwise the bound socket misses it and reports false loss.
+
+    NB: do NOT bind by source IP here.  Source-IP bind does *not* pin egress — the
+    route lookup picks the lowest-metric NIC (eno1) regardless of source — so a
+    .17-sourced ping leaks out eno1 and returns over wlp1s0, an asymmetric path that
+    measures ~67ms of nonsense and trips the fault alarm (the 2026-07-10 false-faults
+    regression).  bind=None → unbound (WAN check via the default route).
     """
     try:
         cmd = ["ping", "-c", "1", "-W", str(timeout), target]
-        if src_ip:
-            cmd = ["ping", "-I", src_ip, "-c", "1", "-W", str(timeout), target]
+        if bind:
+            cmd = ["ping", "-I", bind, "-c", "1", "-W", str(timeout), target]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 1,
         )
         if r.returncode == 0:
@@ -620,10 +625,13 @@ def main() -> None:
 
     while True:
         ts        = utcnow()
-        wifi_src  = iface_ipv4(WIFI_IFACE)
-        wired_src = iface_ipv4(WIRED_IFACE)
-        wifi_ms   = ping_one(wifi_src,  TARGET) if wifi_src  else None
-        wired_ms  = ping_one(wired_src, TARGET) if wired_src else None
+        # device-bind (not source-IP) so each NIC's path is measured symmetrically;
+        # requires the ARP-hardening sysctl (see ping_one docstring). iface_ipv4 guards
+        # that the NIC is up/addressed before we bother pinging it.
+        wifi_up   = iface_ipv4(WIFI_IFACE)
+        wired_up  = iface_ipv4(WIRED_IFACE)
+        wifi_ms   = ping_one(WIFI_IFACE,  TARGET) if wifi_up  else None
+        wired_ms  = ping_one(WIRED_IFACE, TARGET) if wired_up else None
         modem_ms  = _ping_target(MODEM_TARGET) if modem_enabled else None
         wan_ms    = ping_one(None, WAN_TARGET)
         append_csv(ts, wifi_ms, wired_ms, modem_ms, wan_ms)

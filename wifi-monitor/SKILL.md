@@ -21,18 +21,22 @@ Since the mini-PC went wired-primary, **both NICs are on one subnet**: `eno1` .1
 route metric 100) and `wlp1s0` .17 (fallback, metric 600), both `192.168.1.0/24` → gateway `.1`.
 Two consequences the monitor is built around:
 
-1. **Pings bind by source IP, not device.** `ping -I <iface>` uses `SO_BINDTODEVICE`, so the
-   socket only hears replies arriving on that device. Under ARP flux, pfSense delivers an
-   eno1-sourced reply on the `wlp1s0` NIC → the bound socket counts it as loss (the historic
-   "wired 76% loss / 0ms RTT" artifact). `monitor.py` resolves each NIC's IPv4 (`iface_ipv4`,
-   re-read every loop) and uses `ping -I <source-ip>`: egress stays pinned via the src route,
-   but the reply is accepted on whichever NIC returns it. A link-down NIC (address gone) is
-   recorded as real LOSS.
-2. **ARP hardening (host sysctl, one-time, needs root):** `/etc/sysctl.d/20-wifi-monitor-arp.conf`
-   sets `arp_ignore=1` + `arp_announce=2` (all+default) so a reply to an eno1-sourced ping
-   returns on eno1 — keeps the "wired" column a clean WiFi-vs-not control (stops WiFi jitter
-   leaking in via a mis-delivered return path). `rp_filter=2` (loose) is set in
-   `10-network-security.conf`. This file lives in `/etc` (not git); re-create it after a reinstall.
+1. **Pings bind by DEVICE (`-I <iface>`), paired with ARP hardening (#2).** `ping -I <iface>`
+   uses `SO_BINDTODEVICE`, which pins *both* egress and the receive interface, so each NIC's
+   path is measured symmetrically. `monitor.py` guards with `iface_ipv4` (a NIC with no address
+   is link-down → real LOSS) then pings bound to the iface name. **Do NOT bind by source IP**
+   — that was tried (2026-07-10) to dodge ARP flux and backfired: source-IP bind does *not*
+   pin egress (the route lookup picks the lowest-metric NIC, eno1, regardless of source), so a
+   `.17`-sourced "WiFi" ping leaked out eno1 and returned over wlp1s0 — an asymmetric path that
+   measured ~67ms of garbage and fired **dozens of false "Tenda fault" alerts** while the real
+   WiFi was ~5ms. Reverted to device-bind once #2 was in place.
+2. **ARP hardening (host sysctl, one-time, needs root) — this is what actually fixes the flux:**
+   `/etc/sysctl.d/20-wifi-monitor-arp.conf` sets `arp_ignore=1` + `arp_announce=2` (all+default)
+   so each NIC only answers/announces ARP for its own IP → the gateway's reply returns on the
+   NIC that sent it instead of ARP-fluxing to the other. This cured the historic "wired 76% loss
+   / 0ms RTT" artifact directly (verified: device-bind eno1 = 0% loss / 0.3ms once applied), and
+   is the prerequisite for device-bind in #1. `rp_filter=2` (loose) is set in
+   `10-network-security.conf`. Both files live in `/etc` (not git); re-create after a reinstall.
 
 ## What It Does
 
