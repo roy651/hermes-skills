@@ -61,13 +61,38 @@ log = logging.getLogger(__name__)
 
 # ── ping ──────────────────────────────────────────────────────────────────────
 
-def ping_one(iface: str | None, timeout: int = 2) -> float | None:
-    """Ping via iface (bound) or WAN_TARGET (unbound if iface is None).  Returns RTT ms or None."""
+def iface_ipv4(iface: str) -> str | None:
+    """Current IPv4 address of iface (e.g. '192.168.1.16'), or None if down/unaddressed.
+
+    Re-read each loop so a link-down NIC (its address disappears) is detected as LOSS
+    rather than silently falling back to the other interface's path.
+    """
     try:
-        target = TARGET if iface else WAN_TARGET
+        r = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show", "dev", iface],
+            capture_output=True, text=True, timeout=5,
+        )
+        m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", r.stdout)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def ping_one(src_ip: str | None, target: str = TARGET, timeout: int = 2) -> float | None:
+    """Ping `target`, binding to source IP `src_ip` (not the interface device).
+
+    Binding by source IP — rather than `-I <iface>` — is deliberate.  `-I <iface>` uses
+    SO_BINDTODEVICE, so the socket only hears replies arriving on *that* device.  With
+    both NICs on one subnet (eno1 .16 + wlp1s0 .17 → 192.168.1.0/24), ARP flux can
+    deliver a reply on the other NIC and the bound socket counts it as loss — the
+    "wired 76% loss / 0ms RTT" artifact.  Source-IP bind still pins egress (the route
+    for that src selects its interface) but accepts the reply on whichever NIC it
+    returns via.  src_ip=None → unbound (WAN check via the default route).
+    """
+    try:
         cmd = ["ping", "-c", "1", "-W", str(timeout), target]
-        if iface:
-            cmd = ["ping", "-I", iface, "-c", "1", "-W", str(timeout), target]
+        if src_ip:
+            cmd = ["ping", "-I", src_ip, "-c", "1", "-W", str(timeout), target]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 1,
         )
         if r.returncode == 0:
@@ -595,10 +620,12 @@ def main() -> None:
 
     while True:
         ts        = utcnow()
-        wifi_ms   = ping_one(WIFI_IFACE)
-        wired_ms  = ping_one(WIRED_IFACE)
+        wifi_src  = iface_ipv4(WIFI_IFACE)
+        wired_src = iface_ipv4(WIRED_IFACE)
+        wifi_ms   = ping_one(wifi_src,  TARGET) if wifi_src  else None
+        wired_ms  = ping_one(wired_src, TARGET) if wired_src else None
         modem_ms  = _ping_target(MODEM_TARGET) if modem_enabled else None
-        wan_ms    = ping_one(None)
+        wan_ms    = ping_one(None, WAN_TARGET)
         append_csv(ts, wifi_ms, wired_ms, modem_ms, wan_ms)
 
         wifi_bad   = wifi_ms is None or wifi_ms > BAD_MS
