@@ -15,6 +15,25 @@ Comparing both interfaces gives conclusive fault attribution:
 - WiFi slow, wired OK → Tenda/WiFi fault (scheduled reboot, interference, association issue)
 - Both slow → pfSense / upstream problem, not Tenda
 
+## Network notes — same-subnet multihoming (important)
+
+Since the mini-PC went wired-primary, **both NICs are on one subnet**: `eno1` .16 (primary,
+route metric 100) and `wlp1s0` .17 (fallback, metric 600), both `192.168.1.0/24` → gateway `.1`.
+Two consequences the monitor is built around:
+
+1. **Pings bind by source IP, not device.** `ping -I <iface>` uses `SO_BINDTODEVICE`, so the
+   socket only hears replies arriving on that device. Under ARP flux, pfSense delivers an
+   eno1-sourced reply on the `wlp1s0` NIC → the bound socket counts it as loss (the historic
+   "wired 76% loss / 0ms RTT" artifact). `monitor.py` resolves each NIC's IPv4 (`iface_ipv4`,
+   re-read every loop) and uses `ping -I <source-ip>`: egress stays pinned via the src route,
+   but the reply is accepted on whichever NIC returns it. A link-down NIC (address gone) is
+   recorded as real LOSS.
+2. **ARP hardening (host sysctl, one-time, needs root):** `/etc/sysctl.d/20-wifi-monitor-arp.conf`
+   sets `arp_ignore=1` + `arp_announce=2` (all+default) so a reply to an eno1-sourced ping
+   returns on eno1 — keeps the "wired" column a clean WiFi-vs-not control (stops WiFi jitter
+   leaking in via a mis-delivered return path). `rp_filter=2` (loose) is set in
+   `10-network-security.conf`. This file lives in `/etc` (not git); re-create it after a reinstall.
+
 ## What It Does
 
 - Pings `192.168.1.1` every 5s on both interfaces simultaneously
