@@ -186,7 +186,9 @@ def run():
         executed_stage = 2 if ratio <= 0.625 else 1 if ratio <= 0.875 else 0
         rec = ladder.recommend(
             qty=h["qty"], price=price * _to_usd(td.currency), portfolio_value=total_value_usd,
-            is_core=(t == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
+            is_core=(t == "DGRO"), det_score=ds["score"],
+            stop_hit=rk["stop_hit"] and not portfolio.no_trailing_stop(h),   # bonds/rate-driven: no trailing-stop scale-out
+
             max_stage=executed_stage, baseline_qty=baseline,
             has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
             established_markdown=ds["established_markdown"],

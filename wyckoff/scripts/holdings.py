@@ -4,6 +4,18 @@ from pathlib import Path
 
 _FILE = Path(__file__).parent.parent / "data" / "holdings.json"
 
+# Instruments whose price is driven by rates/duration/a formula — NOT a supply-demand
+# trend — so a Wyckoff trailing stop mis-fires on them (it would sell a bond at the yield
+# high on rate noise). Tag such a holding in holdings.json with "asset_class": "bond"
+# (or explicit "no_trailing_stop": true) to exempt it from the mechanical stop. Their exit
+# is a thesis/rate decision, not a trailing stop — see SKILL.md.
+NO_TRAIL_CLASSES = {"bond", "treasury", "cash", "money_market"}
+
+
+def no_trailing_stop(h: dict) -> bool:
+    """True if this holding should be exempt from the mechanical trailing stop."""
+    return bool(h.get("no_trailing_stop")) or h.get("asset_class") in NO_TRAIL_CLASSES
+
 
 def load() -> dict:
     if not _FILE.exists():

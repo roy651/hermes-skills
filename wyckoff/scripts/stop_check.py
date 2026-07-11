@@ -33,7 +33,11 @@ def run(dry_run: bool = False) -> None:
     state = risk.load_state()
     breaches = []   # CLOSE through the stop — a hard exit signal
     touches = []    # intraday low dipped to/through the stop but recovered into the close — informational
+    exempt = []     # rate/formula-driven holdings (bonds, etc.) — no trailing stop applies
     for ticker, h in held.items():
+        if portfolio.no_trailing_stop(h):     # e.g. XFIV (5yr Treasury ETF) — exit is a rate/thesis call, not a stop
+            exempt.append(ticker)
+            continue
         try:
             td = market_data.fetch_ohlcv(ticker, days=120)
             rk = risk.assess(ticker, td.df, h["qty"], state=state)   # updates the trail (highest_high)
@@ -67,6 +71,9 @@ def run(dry_run: bool = False) -> None:
         print(f"[stop_check] {len(breaches)} breach(es), {len(touches)} touch(es)", file=sys.stderr)
     else:
         print("[stop_check] no breaches", file=sys.stderr)
+
+    if exempt:
+        print(f"[stop_check] {len(exempt)} no-trailing-stop holding(s) skipped: {', '.join(exempt)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
