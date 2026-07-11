@@ -58,5 +58,17 @@
     },
     "deliver": "origin",
     "enabled": true
+  },
+  {
+    "id": "wyckoff_bond_review",
+    "name": "Wyckoff Monthly Bond Review",
+    "prompt": "Launch the Wyckoff monthly bond-sleeve review in the background — it reviews rate/duration-driven holdings (asset_class:bond, exempt from the trailing stop) with one LLM call per name and posts its own Telegram digest (HOLD/TRIM/ADD per name):\n\n```bash\ncd ~/.hermes/skills/wyckoff && nohup .venv/bin/python scripts/bond_review.py >> logs/bond_review.log 2>&1 & disown\n```\n\nThe job is detached and self-reporting; do not wait for it. Respond with [SILENT].",
+    "schedule": {
+      "kind": "cron",
+      "expr": "0 7 1 * *",
+      "display": "1st of month 07:00 UTC (~10:00 IL)"
+    },
+    "deliver": "origin",
+    "enabled": true
   }
 ]

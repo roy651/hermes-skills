@@ -1,7 +1,7 @@
 ---
 name: wyckoff
 description: Wyckoff method analysis for ETFs and stocks via Telegram. Weekly entry funnel (prescreen → Wyckoff LLM → up to 5 tiered buy picks) plus a daily portfolio exit-watch for distribution signals.
-version: 1.2.0
+version: 1.3.0
 license: MIT
 metadata:
   hermes:
@@ -264,6 +264,45 @@ Deterministic **level-crossing is exactly what a no-LLM scan does best** ("is pr
 - **Store levels in a sidecar map, keep `watchlist:` a bare ticker list.** Enriching watchlist entries to objects breaks `exit.py`/`manage.py` (they read bare strings). Add a separate `watchlist_levels: { TICKER: {support, resistance} }` the scan reads; a name with no clean structure → generic %-move fallback until a base forms.
 - Alert semantics: within ~1% of `support` → "spring/support watch"; near/above `resistance` → "breakout/SOS watch". End every alert with "→ reply to LLM-verify."
 
+## Instrument character decides the tool — exempt bonds/rate-driven names from the trailing stop
+
+Wyckoff (and its trailing stop) is only valid for instruments that trend on **supply/demand** —
+equities, and commodity / sector / index ETFs (GLD, SLV, an Israeli banks or real-estate ETF) which
+genuinely accumulate and distribute. It is the WRONG tool for instruments priced by a **formula**:
+bonds / Treasury ETFs (price = rates × duration), buffered/defined-outcome, and leveraged/inverse ETFs.
+On those a trailing stop **mis-fires** — it forces a sale at the *yield high* on rate noise (e.g. XFIV,
+the BondBloxx 5-yr Treasury ETF, tripped `stop_check` on a 3-cent / 0.06% close-through on a broad-red
+day; a bond's drawdown while it earns carry is expected and self-correcting, not deterioration).
+
+- **Sort by character, not by the ETF-vs-stock wrapper.** A sector/commodity ETF trends → full Wyckoff.
+  A bond ETF is rate-driven → exempt. (Don't be fooled by a fund-looking ticker: an Israeli banks ETF
+  and a real-estate ETF are equity *sector* baskets that trend → they stay in the Wyckoff book.)
+- **Tag exempt holdings** in `holdings.json` with `"asset_class": "bond"` (also `treasury` / `cash` /
+  `money_market`) or explicit `"no_trailing_stop": true`. `holdings.no_trailing_stop(h)` centralises the
+  check: `stop_check.py` skips them (and logs which were skipped); `exit.py` does not feed their stop into
+  the scale-out ladder. (Shipped 2026-07-11.)
+- **Their exit is a thesis/rate decision, not a mechanical stop** — there is no reliable automated
+  price-exit for a bond. Discipline them via the monthly bond-sleeve review below, plus (optionally) a
+  *wide, static* informational alert band; the user decides. A user trimming such a name is a discretionary
+  duration/rate call, not a stop — treat it as consistent, don't argue it against the (absent) stop.
+
+## Hermes Tool: Monthly Bond-Sleeve Review
+
+`bond_review.py` is the exit discipline for the exempt (bond/rate-driven) sleeve, since those carry no
+trailing stop. Once a month it gathers price + unrealised P/L + the rate backdrop (5-yr Treasury yield via
+`^FVX`, level and 1m/3m trend) and asks the LLM one focused question per name — is the duration thesis
+intact: **HOLD / TRIM / ADD** — then posts to Telegram. It reviews only holdings where `no_trailing_stop(h)`
+is true, and is silent if the sleeve is empty. Uses `analysis.backend_warmup()` + a DEGRADED banner like
+entry/exit.
+
+```bash
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/bond_review.py --dry-run   # preview, no Telegram
+```
+
+Examples → what to run:
+- "review my bonds" / "how's the bond sleeve / XFIV thesis?" → `bond_review.py`
+- Runs monthly as `wyckoff_bond_review` (Hermes cron; register alongside the other jobs).
+
 ## Configuration
 
 Edit `~/.hermes/skills/wyckoff/config.yaml`:
@@ -335,6 +374,8 @@ wyckoff/
 ├── scripts/
 │   ├── entry.py         # Sunday entry funnel: prescreen → Wyckoff LLM → news → top-5 tiered
 │   ├── exit.py          # daily exit-watch (default --section portfolio, exit mode)
+│   ├── stop_check.py     # daily trailing-stop breach check (no LLM); skips no_trailing_stop holdings
+│   ├── bond_review.py    # monthly LLM review of the bond/rate-driven sleeve (no trailing stop applies)
 │   ├── prescreener.py    # quant screener (no LLM): S&P 500 + NASDAQ 100 → ~30 candidates
 │   ├── events.py         # programmatic range/Spring/SOS/LPS detection (no LLM) + calibration CLI
 │   ├── analysis.py       # Wyckoff LLM analysis (entry/exit modes + market & event context)
@@ -344,7 +385,7 @@ wyckoff/
 │   ├── portfolio_value.py# daily P&L valuation report
 │   ├── explain.py        # on-demand plain-language deep dive for one ticker
 │   ├── data.py           # Yahoo Finance OHLCV fetch
-│   ├── holdings.py       # portfolio state (data/holdings.json)
+│   ├── holdings.py       # portfolio state (data/holdings.json); no_trailing_stop() = bond-sleeve check
 │   ├── manage.py         # CLI: add/remove holdings and watchlist
 │   └── notifier.py       # Telegram sender (4096-char auto-split)
 ├── data/
