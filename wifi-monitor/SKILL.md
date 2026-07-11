@@ -1,7 +1,7 @@
 ---
 name: wifi-monitor
 description: Background systemd service that monitors WiFi quality on the mini-PC — dual-interface ping loop (WiFi vs wired), Telegram alerts on degradation/recovery, CSV log for analysis.
-version: 1.0.0
+version: 1.1.0
 metadata:
   hermes:
     tags: [monitoring, wifi, network, systemd, background]
@@ -37,6 +37,21 @@ Two consequences the monitor is built around:
    / 0ms RTT" artifact directly (verified: device-bind eno1 = 0% loss / 0.3ms once applied), and
    is the prerequisite for device-bind in #1. `rp_filter=2` (loose) is set in
    `10-network-security.conf`. Both files live in `/etc` (not git); re-create after a reinstall.
+
+## Triaging an alert burst (real vs artifact vs AP) — see `references/fault-triage.md`
+
+Before recommending any fix when "a few dozen drops" arrive, work three questions in order:
+1. **Artifact of a recent monitor change?** Correlate the DEGRADED-per-hour histogram against
+   `git log` + service restart time. A burst that lines up with an experiment-then-revert window
+   (e.g. the 2026-07-10 source-IP-bind, 164 false faults 09–11 UTC) is the code, not the network.
+2. **Real spike — radio or network?** Through a *real* WiFi spike, `modem_ms` (~0.7 ms) and
+   `wan_ms` (~10 ms) stay solid → pfSense/modem/ISP cleared, it's the radio hop. A low median
+   (~4 ms) with hour-clustered bursts = intermittent problem, **not** power-save (BPS raises the
+   floor uniformly — don't chase `power_scheme` on a 4 ms median).
+3. **Card or AP?** A second independent client (Roy's phone) failing at the *same wall-clock
+   moment* localizes it to the AP and exonerates the 8265 card — skip the power-save test.
+   Then the 2.4-vs-5-GHz phone test picks the Tenda fix. Full Tenda remediation list is in the
+   reference file.
 
 ## What It Does
 
