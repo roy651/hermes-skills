@@ -1,7 +1,7 @@
 ---
 name: wyckoff
 description: Wyckoff method analysis for ETFs and stocks via Telegram. Weekly entry funnel (prescreen → Wyckoff LLM → up to 5 tiered buy picks) plus a daily portfolio exit-watch for distribution signals.
-version: 1.3.0
+version: 1.4.0
 license: MIT
 metadata:
   hermes:
@@ -263,6 +263,43 @@ Deterministic **level-crossing is exactly what a no-LLM scan does best** ("is pr
 - **Because the user LLM-verifies every alert manually afterward, tune params as coarse "wake me up" bands, not precise entry signals.** Fire on *approach* (~1% of a level), not only exact touch — better early than missed. No volume-confirm / spring-vs-fail discrimination in the scan; that's the LLM verification's job.
 - **Store levels in a sidecar map, keep `watchlist:` a bare ticker list.** Enriching watchlist entries to objects breaks `exit.py`/`manage.py` (they read bare strings). Add a separate `watchlist_levels: { TICKER: {support, resistance} }` the scan reads; a name with no clean structure → generic %-move fallback until a base forms.
 - Alert semantics: within ~1% of `support` → "spring/support watch"; near/above `resistance` → "breakout/SOS watch". End every alert with "→ reply to LLM-verify."
+
+## Hermes Tool: Weekly Parked / Thesis-Watch (`parked_scan.py`)
+
+The `watchlist` is for names with a *defined* entry (levels → daily tripwire). Names whose thesis is
+alive but which have **no low-risk entry yet** (still falling-knife, awaiting a base) don't belong there
+— in the daily scan they'd only fire noise, and level-less they'd sit silent and forgotten. They go in a
+separate `parked:` list (config.yaml) with a **weekly** no-LLM touch instead:
+
+```bash
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/parked_scan.py   # weekly digest, no credits
+```
+
+Per name it prints price, 1-week move, the 0-9 deterioration score, and a verdict. The one thing it
+watches for is a name that **stops deteriorating / starts basing** (score ≤2 and no ma_rollover/rel_weak
+→ 🟢) — the cue to **promote it into `watchlist` and seed levels**, at which point the daily tripwire
+takes over. A high-score name with structure → ⚠️ distributive (thesis at risk, consider dropping). Runs
+as `wyckoff_parked_watch` (Sundays 07:00 UTC). Promote/demote by moving a ticker between `parked:` and
+`watchlist:` — same "curated by character" discipline as the watchlist itself.
+
+## Hermes Tool: Trade-Execution Ledger (`trade_log.py`)
+
+holdings.json is a **snapshot** (qty + avg_cost, overwritten on every broker re-import) with **no dates**;
+`positions_state.entry_date` is a tracker baseline, not a real fill date. So actual entries/exits can't be
+reconstructed after the fact — do **not** try to store dates in holdings.json (they'd be wiped on re-import
+and can't be back-derived from the balances export anyway). Instead, capture fills going forward in an
+append-only ledger `data/trade_log.jsonl` (gitignored, runtime-only like holdings.json):
+
+```bash
+# When the user reports a fill in chat, record it:
+trade_log.py add --date 2026-07-11 --ticker KMB --side buy --qty 10 --price 112.41 --note "starter"
+# Periodic entry-execution review ("how did the last N weeks' entries do?"):
+trade_log.py review --weeks 4          # prints; add --send to also post to Telegram
+```
+
+`review` fetches current price per fill and shows % since entry (buys) or since exit (sells: a good exit
+shows the name fell further). Deterministic, no Claude credits. This is the source of truth for the
+"review my recent entries" question — seed it whenever a fill is mentioned.
 
 ## Instrument character decides the tool — exempt bonds/rate-driven names from the trailing stop
 

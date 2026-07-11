@@ -70,5 +70,17 @@
     },
     "deliver": "origin",
     "enabled": true
+  },
+  {
+    "id": "wyckoff_parked_watch",
+    "name": "Wyckoff Weekly Parked Watch",
+    "prompt": "Run the Wyckoff weekly parked/thesis-watch — a no-LLM deterioration read of the config `parked` list (thesis-alive names with no defined entry yet). It posts a compact digest flagging any name that has stopped deteriorating / started basing (the cue to promote it to the watchlist). No Claude credits:\n\n```bash\ncd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/parked_scan.py >> logs/parked_scan.log 2>&1\n```\n\nIf the command exits non-zero, report the last 20 lines of logs/parked_scan.log to Roy. Otherwise respond with [SILENT].",
+    "schedule": {
+      "kind": "cron",
+      "expr": "0 7 * * 0",
+      "display": "Sundays 07:00 UTC (~10:00 IL)"
+    },
+    "deliver": "origin",
+    "enabled": true
   }
 ]
