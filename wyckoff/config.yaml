@@ -5,6 +5,7 @@ watchlist:
   - XOM   # ExxonMobil — energy, 135-137 accumulation test vs. break; reclaim 142
   - IWM   # Russell 2000 — small-cap rotation markup; 294 support / 302.72 SOS breakout
   - URI   # United Rentals — promoted 2026-07-12: stabilized after 07-07 shakeout (3 up-closes). ENTRY WAITS FOR post-Jul-23 earnings / pullback — no breakout entry into the print
+  - KMB   # Kimberly-Clark — pending discretionary starter buy 9 @112.41 (defensive rotation). Tracked here UNTIL FILL; on fill it moves to holdings and risk.py owns its stop. 109.40 = bounce-break invalidation / 114.74 = 3mo-high breakout
 
 # Parked / thesis-watch: names with a live thesis but NO defined low-risk entry yet (still
 # falling-knife or awaiting a base). NOT in the daily watchlist (they'd only fire noise), NOT
@@ -27,6 +28,7 @@ watchlist_levels:
   IWM: { support: 294, resistance: 302.72 }   # spring-hold / SOS breakout
   XOM: { support: 135, resistance: 142 }       # 135-137 accum test / reclaim 142
   URI: { support: 1042, resistance: 1140 }     # 07-07 shakeout low / 06-25 SOS high — entry gated by Jul-23 earnings
+  KMB: { support: 109.40, resistance: 114.74 } # 07-09 bounce low (invalidation) / 07-07 3mo high (breakout) — tracked pending fill
   # (parked names like HBM/SLV live in `parked:` above → weekly parked_scan.py, not here)
 scan_band_pct: 1.0   # proximity band (%) around a level that trips a watch alert
 
