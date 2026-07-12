@@ -174,22 +174,27 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
         _active_proc.wait()
     _active_proc = None
 
+    # The prompt is passed on stdin, never as an argv element: a full reconstructed
+    # conversation can be tens of KB and would blow past ARG_MAX, making the exec fail
+    # with "[Errno 7] Argument list too long" (which surfaced as 503s after a restart
+    # cleared the session cache and forced full prompts down the fresh path).
     if resume_id:
         prompt = _last_user_message(messages)
         cmd = [CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
-               "--output-format", "json", "--resume", resume_id, prompt]
+               "--output-format", "json", "--resume", resume_id]
         log.info(f"claude: resume={resume_id}  new_msg_len={len(prompt)}")
     else:
         prompt = _messages_to_prompt(messages)
         cmd = [CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
-               "--output-format", "json", prompt]
+               "--output-format", "json"]
         log.info(f"claude: fresh session  prompt_len={len(prompt)}")
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
     _active_proc = proc
 
     try:
-        stdout, stderr = proc.communicate(timeout=300)
+        stdout, stderr = proc.communicate(input=prompt, timeout=300)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
