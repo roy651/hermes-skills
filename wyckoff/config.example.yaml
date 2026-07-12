@@ -1,0 +1,41 @@
+# Template config for the wyckoff skill. Copy to `config.yaml` (which is gitignored,
+# runtime-only) and fill in your own names. The real config.yaml holds personal/specific
+# trading info (which tickers you watch, park, and their trigger levels) and is kept OUT
+# of git, same as holdings — this repo stays neutral to any personal info.
+
+# Curated entry-pipeline: names awaiting a defined, low-risk Wyckoff entry (spring/LPS/SOS).
+# Read by the weekly LLM exit.py (deep phase re-assessment) AND the daily no-LLM
+# watchlist_scan.py (level tripwire).
+watchlist: []
+  # - TICK   # note on the setup / levels being watched
+
+# Parked / thesis-watch: names with a live thesis but NO defined low-risk entry yet (still
+# falling-knife or awaiting a base). NOT in the daily watchlist (they'd only fire noise), NOT
+# traded. Monitored WEEKLY by parked_scan.py (no-LLM deterioration read) — the digest flags
+# when one stops deteriorating / starts basing, the cue to promote it into `watchlist` with levels.
+parked: []
+  # - TICK   # thesis note
+
+# Per-name trigger levels for the daily no-LLM scan (watchlist_scan.py). Coarse alert
+# bands, not precise entry rules — every alert gets a manual LLM-verify afterward, so the
+# scan only needs to be a good "wake me up" band. Seeded from the weekly LLM Wyckoff read
+# and refreshed weekly. A name with NO levels here is silent in the daily scan (it's a
+# base-watch candidate with no decision level yet). Fires within ~1% of a level (see scan_band_pct).
+watchlist_levels: {}
+  # TICK: { support: 0, resistance: 0 }   # what each level means
+scan_band_pct: 1.0   # proximity band (%) around a level that trips a watch alert
+
+llm:
+  model: anthropic/claude-opus-4-6
+  lookback_days: 120
+
+entry:
+  # How many top-ranked prescreen survivors get the (token-heavy) LLM Wyckoff read.
+  # Lowered from the prescreener's 30 to ease the per-run Claude load. Pass `entry.py --cohort N`
+  # on demand to override (lower = cheaper/faster, fewer picks; raise for a fuller sweep).
+  cohort_size: 20
+
+reddit:
+  pages: 2                      # ApeWisdom pages to fetch (25 tickers per page)
+  velocity_warn_threshold: 2.0  # ≥200% mention increase → ⚠️ distribution warning
+  radar_top_n: 10               # items in the weekly Radar side-path report
