@@ -29,3 +29,7 @@ data/
 !wyckoff/data/secnum_map.example.json
 logs/
 .claude/
+
+# haaretz-puzzler runtime artifacts (cache + downloaded puzzle images)
+haaretz-puzzler/cache_state.json
+haaretz-puzzler/output/
