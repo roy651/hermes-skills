@@ -20,9 +20,10 @@ if [ -n "$blocked" ]; then
   exit 1
 fi
 
-# Content scan: staged ADDED lines that look like holdings data (qty/avg_cost). Exclude .githooks/
-# (these hook files legitimately contain the patterns) to avoid self-tripping.
-if git diff --cached -U0 -- . ':!.githooks/' | grep -E '^\+' | grep -qE '"avg_cost"|"qty"[[:space:]]*:[[:space:]]*[0-9]'; then
+# Content scan: staged ADDED lines that look like holdings DATA — a qty/avg_cost key followed by a
+# number (e.g. "qty": 100). Both patterns require the numeric value so code that merely reads the
+# fields (holding["avg_cost"]) doesn't trip. Exclude .githooks/ to avoid self-tripping.
+if git diff --cached -U0 -- . ':!.githooks/' | grep -E '^\+' | grep -qE '"avg_cost"[[:space:]]*:[[:space:]]*[0-9]|"qty"[[:space:]]*:[[:space:]]*[0-9]'; then
   echo "✋ pre-commit BLOCKED — staged content looks like holdings data (qty/avg_cost)."
   echo "   This repo is PUBLIC; keep holdings runtime-only. Bypass (rarely): git commit --no-verify"
   exit 1

@@ -152,40 +152,6 @@ def _is_hebrew(text: str) -> bool:
     return any("\u05d0" <= c <= "\u05ea" for c in text)
 
 
-_COORD_PAIR_RE = re.compile(r"^(\d{5,7}(?:\.\d+)?)[/\\](\d{5,7}(?:\.\d+)?)$")
-
-
-def _expand_combined_coords(rows: list[list[str]]) -> list[list[str]]:
-    """
-    If any cell contains 'X/Y' or 'X\\Y' coordinate pairs (e.g. '698868/445925'),
-    split them in-place so downstream column detection sees separate X and Y columns.
-    """
-    if not rows:
-        return rows
-    # Detect which column has combined coords
-    split_col = None
-    for ci in range(max(len(r) for r in rows)):
-        hits = sum(
-            1 for r in rows[:10]
-            if ci < len(r) and _COORD_PAIR_RE.match(r[ci].strip())
-        )
-        if hits >= len([r for r in rows[:10] if ci < len(r)]) * 0.5:
-            split_col = ci
-            break
-    if split_col is None:
-        return rows
-    expanded = []
-    for row in rows:
-        if split_col < len(row):
-            m = _COORD_PAIR_RE.match(row[split_col].strip())
-            if m:
-                new_row = row[:split_col] + [m.group(1), m.group(2)] + row[split_col + 1:]
-                expanded.append(new_row)
-                continue
-        expanded.append(row)
-    return expanded
-
-
 def _detect_nav_columns(rows: list[list[str]]) -> tuple[int, int, int, int] | None:
     """
     Auto-detect column indices: (id_col, x_col, y_col, desc_col).
@@ -222,9 +188,9 @@ def _detect_nav_columns(rows: list[list[str]]) -> tuple[int, int, int, int] | No
     for ci, s in col_stats.items():
         if not s["mostly_float"]:
             continue
-        if 620_000 <= s["median"] <= 900_000:
+        if 600_000 <= s["median"] <= 900_000:
             easting_col = ci
-        elif (3_300_000 <= s["median"] <= 3_700_000) or (400_000 <= s["median"] <= 600_000):
+        elif 3_300_000 <= s["median"] <= 3_700_000:
             northing_col = ci
         elif 0 < s["median"] < 10_000:
             id_col = ci
@@ -257,8 +223,8 @@ def _parse_nav_rows(rows: list[list[str]], cols: tuple) -> list[dict]:
             pt_id = int(float(str(row[id_col]).strip()))
             x = _to_float(row[x_col])
             y = _to_float(row[y_col])
-            x, y = _fix_swapped_coords(x, y)
-            if not _valid_coords(x, y):
+            # Reject obviously garbled coordinates (missing decimal)
+            if not (600_000 <= x <= 900_000) or not (3_300_000 <= y <= 3_700_000):
                 continue
             if not (0 < pt_id < 10_000):
                 continue
@@ -369,7 +335,7 @@ def parse_nav_file(file_path: str) -> list[dict]:
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
-    rows = _expand_combined_coords(_skip_header(rows))
+    rows = _skip_header(rows)
     cols = _detect_nav_columns(rows)
     if cols is None:
         raise ValueError("לא הצלחתי לזהות עמודות נקודות ניווט בקובץ (צפוי: מספר, X, Y, תיאור)")
@@ -398,29 +364,8 @@ def _cache_save(cache: dict) -> None:
     _PARSE_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _is_easting(v: float) -> bool:
-    return 620_000 <= v <= 900_000
-
-
-def _is_northing(v: float) -> bool:
-    return (3_300_000 <= v <= 3_700_000) or (400_000 <= v <= 600_000)
-
-
-def _valid_coords(x: float, y: float) -> bool:
-    return _is_easting(x) and _is_northing(y)
-
-
-def _fix_swapped_coords(x: float, y: float) -> tuple[float, float]:
-    """If x and y appear swapped (y is in easting range, x in northing), swap them back."""
-    if _is_easting(x) and _is_northing(y):
-        return x, y
-    if _is_easting(y) and _is_northing(x):
-        return y, x
-    return x, y
-
-
 def _validate_nav_points(pts: list) -> list[dict]:
-    """Keep only rows with plausible ITM or abbreviated ITM coordinates."""
+    """Keep only rows with plausible ITM coordinates."""
     valid = []
     for p in pts:
         if not isinstance(p, dict):
@@ -431,10 +376,7 @@ def _validate_nav_points(pts: list) -> list[dict]:
             y = float(p.get("y", 0))
         except (TypeError, ValueError):
             continue
-        x, y = _fix_swapped_coords(x, y)
-        if 400_000 <= y <= 600_000:
-            y += 3_000_000  # normalize abbreviated northing to full ITM
-        if 0 < pid < 10_000 and _valid_coords(x, y):
+        if 0 < pid < 10_000 and 620_000 <= x <= 900_000 and 3_300_000 <= y <= 3_700_000:
             valid.append({**p, "id": pid, "x": x, "y": y})
     return valid
 
@@ -471,7 +413,7 @@ def parse_nav_images(image_paths: list[str], api_cfg: dict) -> tuple[list[dict],
         # Docling
         rows = _docling_extract_rows(path)
         if rows is not None:
-            rows = _expand_combined_coords(_skip_header(rows))
+            rows = _skip_header(rows)
             cols = _detect_nav_columns(rows)
             if cols is not None:
                 pts = _validate_nav_points(_parse_nav_rows(rows, cols))
@@ -499,15 +441,13 @@ def parse_nav_images(image_paths: list[str], api_cfg: dict) -> tuple[list[dict],
             ).hexdigest()[:16]
 
             if batch_key in cache and cache[batch_key]:
-                validated = _validate_nav_points(cache[batch_key])
-                print(f"[ingestion] batch cache hit ({len(validated)} pts)", file=sys.stderr)
-                all_points.extend(validated)
+                print(f"[ingestion] batch cache hit ({len(cache[batch_key])} pts)", file=sys.stderr)
+                all_points.extend(cache[batch_key])
             else:
                 llm_pts, failed_names = _llm_parse_nav_batch(needs_llm, api_cfg)
-                validated_pts = _validate_nav_points(llm_pts)
-                all_points.extend(validated_pts)
-                if validated_pts:
-                    cache[batch_key] = validated_pts
+                all_points.extend(llm_pts)
+                if llm_pts:  # only cache successful results
+                    cache[batch_key] = llm_pts
                     cache_dirty = True
                 if failed_names:
                     print(f"[ingestion] Warning: LLM failed for {failed_names}", file=sys.stderr)
@@ -530,25 +470,21 @@ def _llm_parse_nav_batch(image_paths: list[str], api_cfg: dict) -> tuple[list[di
     import requests
 
     prompt = (
-        "These images show one or more pages of a navigation points table for an Israeli navigation exercise. "
-        "All coordinates are in Israel. The table has 2–4 columns in any order:\n"
-        "- Point number: small integer (typically 1–999)\n"
-        "- Easting (X): 6-digit number in the range 620000–900000, may have decimal (e.g. 698868)\n"
-        "- Northing (Y): EITHER a 7-digit number 3300000–3700000 (full ITM, e.g. 3445925) "
-        "OR a 6-digit abbreviated form 400000–600000 (e.g. 445925). Both are valid — use whichever appears.\n"
+        "These images show one or more pages of a navigation points table. "
+        "The table has 3 or 4 columns in any order:\n"
+        "- Point number: small integer (typically 1–200)\n"
+        "- Easting (X): 6-digit number, roughly 620000–900000, may have decimal (e.g. 663917.4)\n"
+        "- Northing (Y): 7-digit number, roughly 3300000–3700000 (e.g. 3405245)\n"
         "- Description: optional Hebrew text — may be absent\n\n"
-        "IMPORTANT: X and Y sometimes appear COMBINED in one cell separated by '/' (e.g. '698868/445925'). "
-        "In that case X=698868 and Y=445925. Split them and output separately.\n"
-        "Also: some rows may have X and Y swapped. Always ensure X is in easting range (620000–900000) "
-        "and Y is in northing range. If they appear reversed, swap them.\n\n"
         "Extract ALL points from ALL pages and return ONE JSON array.\n"
         "Required keys: id (int), x (float), y (float). Add 'description' only if present.\n"
         "STRICT RULES — skip any row where:\n"
-        "- The point number is not a plain integer (blank, contains letters, or garbled)\n"
-        "- X or Y is missing, non-numeric, or outside the valid ranges above\n"
-        "- You are guessing a value not clearly visible — do NOT hallucinate\n"
-        "Fix obvious single-character OCR errors (e.g. '0' vs 'O') only when unambiguous.\n"
-        "Example: [{\"id\":383,\"x\":698868,\"y\":445925},{\"id\":384,\"x\":698918,\"y\":446125}]"
+        "- The point number is not a plain integer (e.g. contains letters like 'D', is blank, or is garbled)\n"
+        "- The X or Y coordinate is missing, non-numeric, or outside the valid ranges above\n"
+        "- You are guessing or inferring a value that is not clearly visible — do NOT hallucinate\n"
+        "Fix obvious single-character OCR errors (e.g. '0' vs 'O', '1' vs 'I') only when the correct "
+        "value is unambiguous from context. When in doubt, skip the row.\n"
+        "Example: [{\"id\":1,\"x\":663917.4,\"y\":3405245},{\"id\":2,\"x\":663687.4,\"y\":3405200}]"
     )
 
     content = []
@@ -578,7 +514,7 @@ def _llm_parse_nav_batch(image_paths: list[str], api_cfg: dict) -> tuple[list[di
             delays = [5, 15, 45]
             resp = None
             for attempt, delay in enumerate(delays + [None]):
-                resp = requests.post(api_cfg["url"], headers=headers, json=payload, timeout=300)
+                resp = requests.post(api_cfg["url"], headers=headers, json=payload, timeout=120)
                 if resp.status_code == 429 and delay is not None:
                     print(f"[ingestion] {model} rate-limited, retrying in {delay}s ({attempt+1}/{len(delays)})...", file=sys.stderr)
                     time.sleep(delay)
