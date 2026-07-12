@@ -220,11 +220,13 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
             text = stdout.strip()
         session_id = data.get("session_id")
         # The CLI reports every model it touched under modelUsage — the main model
-        # (e.g. claude-opus-4-8) AND a tiny background/housekeeping model (claude-haiku-*).
-        # Pick the primary responder (most output tokens), not just the first key, so
-        # X-Proxy-Backend names the model that actually wrote the reply.
+        # (e.g. claude-opus-4-8) AND, intermittently, a tiny background/housekeeping model
+        # (claude-haiku-*, for topic classification etc.). Pick the model with the most
+        # INPUT tokens: the main model always ingests the full system prompt + conversation,
+        # while the background model gets a tiny sub-prompt. (Output tokens would misfire on
+        # a short reply, where a housekeeping call can out-token the actual answer.)
         mu = data.get("modelUsage") or {}
-        model_used = max(mu, key=lambda m: (mu[m] or {}).get("outputTokens", 0), default=None)
+        model_used = max(mu, key=lambda m: (mu[m] or {}).get("inputTokens", 0), default=None)
     except (json.JSONDecodeError, AttributeError):
         text = stdout.strip()
         session_id = None
