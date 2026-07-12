@@ -219,9 +219,12 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
         else:
             text = stdout.strip()
         session_id = data.get("session_id")
-        # The CLI reports the model it ACTUALLY ran under modelUsage (e.g. "claude-opus-4-8") —
-        # that's the truth, not the request label. Surface it so X-Proxy-Backend is honest.
-        model_used = next(iter(data.get("modelUsage") or {}), None)
+        # The CLI reports every model it touched under modelUsage — the main model
+        # (e.g. claude-opus-4-8) AND a tiny background/housekeeping model (claude-haiku-*).
+        # Pick the primary responder (most output tokens), not just the first key, so
+        # X-Proxy-Backend names the model that actually wrote the reply.
+        mu = data.get("modelUsage") or {}
+        model_used = max(mu, key=lambda m: (mu[m] or {}).get("outputTokens", 0), default=None)
     except (json.JSONDecodeError, AttributeError):
         text = stdout.strip()
         session_id = None
