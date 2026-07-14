@@ -48,18 +48,32 @@ def chandelier_stop(df: pd.DataFrame, highest_high: float, mult: float = CHANDEL
     return highest_high - mult * atr(df)
 
 
-def structure_stop(df: pd.DataFrame, lookback: int = STRUCTURE_LOOKBACK) -> float:
-    """Floor of the *prior* ``lookback`` sessions, minus a small ATR buffer.
+def structure_stop(df: pd.DataFrame, lookback: int = STRUCTURE_LOOKBACK,
+                   entry_date: date | None = None) -> float | None:
+    """Floor of the *prior* ``lookback`` sessions since entry, minus a small ATR buffer.
 
-    Today's bar is excluded on purpose: if it were included, a fresh low would just
-    redefine the floor to today's low (close >= low >= floor, always), making the
-    level unbreakable and emitting a tautological "touch" every new-low day. Using
-    the prior sessions' low gives a fixed level today can genuinely close through;
-    the buffer keeps a one-tick wick from counting as a break.
+    Two bars are excluded on purpose:
+
+    - **Today's** bar: if it were included, a fresh low would just redefine the floor
+      to today's low (close >= low >= floor, always), making the level unbreakable and
+      emitting a tautological "touch" every new-low day. Using the *prior* sessions' low
+      gives a fixed level today can genuinely close through; the buffer keeps a one-tick
+      wick from counting as a break.
+    - **Pre-entry** bars: the lookback is clamped to sessions from ``entry_date`` onward.
+      A stop derived from price action *before you owned the position* is not a stop on
+      your trade — buy into a one-day crash and the old (higher) range would place the
+      "structure" floor above your entry and fire an instant, nonsensical breach (this is
+      exactly what put IBM's stop above its entry on a same-day add). Only the range you
+      have actually held through defines your structure risk.
+
+    Returns ``None`` when there is not yet a prior *owned* session (entered today), so the
+    caller falls back to the chandelier trail until a real owned range exists.
     """
-    prior = df["low"].iloc[-lookback - 1:-1]
-    floor = float(prior.min()) if len(prior) else float(df["low"].iloc[-lookback:].min())
-    return floor - STRUCTURE_BUFFER_ATR * atr(df)
+    owned = df.loc[df.index >= entry_date] if entry_date is not None else df
+    prior = owned["low"].iloc[-lookback - 1:-1]
+    if not len(prior):
+        return None
+    return float(prior.min()) - STRUCTURE_BUFFER_ATR * atr(df)
 
 
 def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = None,
@@ -87,8 +101,11 @@ def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = No
     rec["highest_high"] = highest_high
 
     chand = chandelier_stop(df, highest_high)
-    struct = structure_stop(df)
-    stop, stop_type = (chand, "chandelier") if chand >= struct else (struct, "structure")  # tighter = higher
+    struct = structure_stop(df, entry_date=date.fromisoformat(rec["entry_date"]))
+    if struct is None or chand >= struct:        # no owned range yet, or chandelier is tighter (higher)
+        stop, stop_type = chand, "chandelier"
+    else:
+        stop, stop_type = struct, "structure"
 
     if standalone:
         save_state(st)
@@ -110,20 +127,32 @@ def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = No
 
 if __name__ == "__main__":  # self-test: synthetic data, shared state (no file writes)
     import numpy as np
+    from datetime import timedelta
 
     n = 60
-    close = pd.Series(100 + np.arange(n) * 0.5)          # steady uptrend
+    close = 100 + np.arange(n) * 0.5                     # steady uptrend
+    idx = [date(2026, 4, 1) + timedelta(days=i) for i in range(n)]   # date index, like real data
     df = pd.DataFrame({"high": close + 0.8, "low": close - 0.8, "close": close,
-                       "volume": pd.Series([1000] * n)})
+                       "volume": [1000] * n}, index=pd.Index(idx, name="Date"))
 
     shared: dict = {}
-    r = assess("TEST", df, qty=10, today=date(2026, 6, 22), state=shared)
+    r = assess("TEST", df, qty=10, today=idx[-1], state=shared)
     print(json.dumps(r, indent=2))
     assert r["stop"] < r["price"], "stop must sit below price in an uptrend"
     assert not r["stop_hit"], "no stop hit in a clean uptrend"
     assert r["stop_type"] in ("chandelier", "structure")
     assert shared["TEST"]["baseline_qty"] == 10 and shared["TEST"]["max_stage"] == 0
 
-    assess("TEST", df, qty=15, today=date(2026, 6, 23), state=shared)   # adding
+    assess("TEST", df, qty=15, today=idx[-1] + timedelta(days=1), state=shared)   # adding
     assert shared["TEST"]["baseline_qty"] == 15, "adding should ratchet baseline up + reset ladder"
+
+    # Same-day entry into a crash: prior 20-session range sits ABOVE today's price. The structure
+    # stop must NOT anchor to that pre-entry range — it falls back to the chandelier, below price.
+    crash = df.copy()
+    crash.iloc[-1, crash.columns.get_indexer(["high", "low", "close"])] = [92, 80, 82]   # gap-down day
+    fresh: dict = {}
+    rc = assess("CRASH", crash, qty=10, today=idx[-1], state=fresh)   # entry_date == today
+    assert rc["stop_type"] == "chandelier", "same-day entry must fall back to chandelier, not pre-entry structure"
+    assert rc["stop"] < rc["price"], f"a fresh-entry stop must sit below price, got {rc['stop']} vs {rc['price']}"
+    assert not rc["stop_hit"], "a same-day entry into a dip must not self-trigger a breach"
     print("\n[self-test OK]")
