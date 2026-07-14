@@ -97,6 +97,13 @@ def run():
         action="store_true",
         help="Print the digest instead of sending to Telegram",
     )
+    parser.add_argument(
+        "--ew-lens",
+        action="store_true",
+        help="Enable the Elliott/structure Fibonacci confluence lens on the LLM read (opt-in, "
+             "extra credits + one extra data fetch per name — use on a reply-to-verify, NOT the "
+             "scheduled scan).",
+    )
     args = parser.parse_args()
 
     if not args.dry_run:
@@ -221,9 +228,11 @@ def run():
                 catalyst["headlines"] = [n["headline"] for n in finnhub.company_news(t, days=21, limit=5)]
             except Exception:
                 pass
-            return t, _validate_voted(wyckoff.validate, t, td.df, td.name, verdict, market_ctx, catalyst=catalyst)
+            return t, _validate_voted(wyckoff.validate, t, td.df, td.name, verdict, market_ctx,
+                                      catalyst=catalyst, ew_lens=args.ew_lens)
         try:
-            return t, wyckoff.analyze(t, td.df, held=False, name=td.name, mode="entry", market_ctx=market_ctx)
+            return t, wyckoff.analyze(t, td.df, held=False, name=td.name, mode="entry",
+                                      market_ctx=market_ctx, ew_lens=args.ew_lens)
         except Exception as e:
             print(f"[daily] entry analyze failed for {t}: {e}", file=sys.stderr)
             return t, {"ticker": t, "phase": "unclear", "note": "(read unavailable)"}
@@ -289,7 +298,8 @@ def run():
         "watchlist": "Watchlist",
         "all": "Exit — All",
     }[args.section]
-    parts = [f"📊 <b>Wyckoff {section_label} — {date_str}</b>"]
+    lens_tag = " · 🌀 EW-lens" if args.ew_lens else ""
+    parts = [f"📊 <b>Wyckoff {section_label} — {date_str}</b>{lens_tag}"]
 
     degraded = wyckoff.degradation()
     if degraded:

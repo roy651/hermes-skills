@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 import requests
 import pandas as pd
@@ -11,6 +12,8 @@ from dotenv import load_dotenv
 load_dotenv(Path.home() / ".hermes" / ".env")
 
 API_URL = os.environ.get("LLM_API_URL", "http://localhost:8765/v1/chat/completions")
+
+_SYM = {"USD": "$", "ILS": "₪"}
 
 _SYSTEM = """You are a Wyckoff method analyst. Analyze the OHLCV data and return a JSON object — no markdown, no explanation.
 
@@ -119,6 +122,31 @@ final line, exactly: VERDICT: CONFIRM   (or)   VERDICT: FLAG
 Keep it brief — no multi-section markdown essay, no hedging, no boilerplate."""
 
 
+# The Elliott/structure confluence lens — opt-in (never on the scheduled scan). Appended to the
+# system prompt when ew_lens=True, alongside a deterministic Fibonacci grid in the data. The rules
+# enforce the arsenal discipline: fibs/structure CONFIRM or TEMPER a Wyckoff read, never trigger one,
+# and every read must cite an invalidation price. No forced wave-counting.
+_EW_LENS_ADDENDUM = """
+
+STRUCTURE / ELLIOTT-FIBONACCI CONFLUENCE LENS — the user has enabled a structure confluence pass:
+- A deterministic Fibonacci grid is included in the data below. Treat it as CONFLUENCE ONLY: it may
+  CONFIRM or TEMPER the Wyckoff read, but it must NEVER on its own trigger or justify an entry/exit —
+  Wyckoff price/volume structure stays the sole trigger.
+- Where a Wyckoff decision level (Spring / LPS / SOS / stop) sits within ~1% of a fib level, call the
+  confluence out explicitly in "note".
+- Judge whether the current leg looks IMPULSIVE (5-wave-like) or CORRECTIVE (3-wave-like) — for
+  conviction/sizing only. Do NOT force or emit a full wave count; say so if it is not clean.
+- ALWAYS cite a specific invalidation PRICE: put it in "stop", and summarise the structural read in
+  "note". Return the SAME JSON schema — no extra keys, no markdown."""
+
+_EW_LENS_ADDENDUM_VALIDATE = """
+
+STRUCTURE / ELLIOTT-FIBONACCI CONFLUENCE LENS: a deterministic Fibonacci grid is included below. Use it
+as CONFLUENCE ONLY (confirm or temper the mechanical read — never a standalone trigger). Note any Wyckoff
+level that coincides with a fib level, judge impulsive-vs-corrective for conviction only (no forced wave
+count), and cite a specific invalidation price. Keep the reply short and end with the VERDICT line."""
+
+
 def _market_context_block(market_ctx: dict) -> str:
     """Render SPY regime + this instrument's relative strength so the LLM can ground
     criteria 1 (broad market trend) and 2 (relative strength vs market)."""
@@ -141,6 +169,45 @@ def _market_context_block(market_ctx: dict) -> str:
     return "\n".join(lines)
 
 
+def _structure_lens_block(ticker: str, df: pd.DataFrame, lookback: int = 504) -> str:
+    """Deterministic Fibonacci grid for the confluence lens — arithmetic only, no LLM, zero credits.
+    Detects the dominant swing over a longer (~2y) window so larger-degree structure is visible (a
+    120d analysis window misses multi-year swings like SNPS 651→365), then renders the retracement /
+    extension grid + the nearest bracket around the current price. Best-effort: ANY failure returns ''
+    so the core Wyckoff read is never blocked by the lens."""
+    try:
+        import fib
+        import data as market_data
+        sym = "$"
+        try:
+            td = market_data.fetch_ohlcv(ticker, days=lookback)
+            ldf, sym = td.df, _SYM.get(td.currency, td.currency + " ")
+        except Exception:
+            ldf = df                                    # fall back to the analysis window
+        hi, lo, direction = fib._detect_swing(ldf)
+        grid = fib.compute(hi, lo, direction)
+        price = float(df["close"].iloc[-1])
+        br = fib._bracket(price, grid)
+        lines = [
+            "STRUCTURE / FIBONACCI grid (deterministic — arithmetic only; confluence, NOT a trigger):",
+            f"- Dominant swing over ~{len(ldf)}d: {direction.upper()}  high {sym}{hi:.2f} → low {sym}{lo:.2f}  (range {grid['range']:g}).",
+            f"- Current price {sym}{price:.2f}.",
+            "- Retracements (" + grid["retr_label"] + "): "
+            + ", ".join(f"{r*100:.1f}% {sym}{grid['retracements'][r]:.2f}" for r in fib.RETRACEMENTS) + ".",
+        ]
+        if grid["extensions"]:
+            lines.append("- Extensions (" + grid["ext_label"] + "): "
+                + ", ".join(f"{r*100:.1f}% {sym}{grid['extensions'][r]:.2f}"
+                            for r in fib.EXTENSIONS if r in grid["extensions"]) + ".")
+        sup = f"{sym}{br['support']:.2f}" if br["support"] is not None else "—"
+        res = f"{sym}{br['resistance']:.2f}" if br["resistance"] is not None else "—"
+        lines.append(f"- Nearest fib bracket around price: support {sup} · resistance {res}.")
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"[analysis] structure lens skipped for {ticker}: {e}", file=sys.stderr)
+        return ""
+
+
 def analyze(
     ticker: str,
     df: pd.DataFrame,
@@ -149,10 +216,13 @@ def analyze(
     mode: str = "entry",
     market_ctx: dict | None = None,
     detected_events: list[str] | None = None,
+    ew_lens: bool = False,
 ) -> dict:
     context = "Currently HELD in portfolio." if held else "On watchlist (not held)."
     label = f"{ticker} ({name})" if name and name != ticker else ticker
     system = _SYSTEM_EXIT if mode == "exit" else _SYSTEM
+    if ew_lens:
+        system = system + _EW_LENS_ADDENDUM
     csv = df.to_csv()
     user_parts = [f"Ticker: {label}", context]
     if market_ctx:
@@ -163,6 +233,10 @@ def analyze(
             "trust these over your own visual reading of the numbers): "
             + ", ".join(detected_events) + "."
         )
+    if ew_lens:
+        block = _structure_lens_block(ticker, df)
+        if block:
+            user_parts.append("\n" + block)
     user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{csv}")
     result = _call_llm(system, user_parts)
     result["ticker"] = ticker
@@ -287,7 +361,8 @@ def _verdict_from_text(text: str) -> dict:
 
 
 def validate(ticker: str, df: pd.DataFrame, name: str, verdict: dict,
-             market_ctx: dict | None = None, catalyst: dict | None = None) -> dict:
+             market_ctx: dict | None = None, catalyst: dict | None = None,
+             ew_lens: bool = False) -> dict:
     """Validator role: the LLM stress-tests the engine's decision (it does NOT decide or narrate).
     `verdict` = {action, score, signals, stop}; `catalyst` = {earnings_soon: bool, headlines: [str]}
     (real Finnhub context). Returns {valid: bool|None, note}; valid=None = LLM unavailable."""
@@ -312,9 +387,14 @@ def validate(ticker: str, df: pd.DataFrame, name: str, verdict: dict,
             ctx += [f"- {h}" for h in heads[:5]]
         if ctx:
             user_parts.append("\n" + "\n".join(ctx))
+    if ew_lens:
+        block = _structure_lens_block(ticker, df)
+        if block:
+            user_parts.append("\n" + block)
     user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{df.to_csv()}")
+    system = _SYSTEM_VALIDATE + (_EW_LENS_ADDENDUM_VALIDATE if ew_lens else "")
     try:
-        text = _call_llm(_SYSTEM_VALIDATE, user_parts, raw=True)
+        text = _call_llm(system, user_parts, raw=True)
     except Exception:
         return {"valid": None, "note": ""}        # genuine LLM failure (timeout/HTTP) → unavailable
     return _verdict_from_text(text)
