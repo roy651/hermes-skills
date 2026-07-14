@@ -78,6 +78,12 @@ def run():
     for ticker, h in holdings_map.items():
         qty = h["qty"]
         avg_cost = h["avg_cost"]
+        open_date = None
+        if h.get("open_date"):
+            try:
+                open_date = date.fromisoformat(h["open_date"])
+            except (ValueError, TypeError):
+                print(f"[portfolio_value] bad open_date for {ticker}: {h.get('open_date')!r}", file=sys.stderr)
         td = raw.get(ticker)
         if td is None:
             print(f"[portfolio_value] no data for {ticker}, skipping", file=sys.stderr)
@@ -97,8 +103,26 @@ def run():
         pnl_start_pct = pnl_start_usd / cost_basis_usd if cost_basis_usd else 0.0
 
         def _pnl(period: str) -> float:
-            p = _period_price(df, today, period)
-            return qty * (curr_price - p) * to_usd if p is not None else 0.0
+            # If the position was opened within this period, measure P/L from the
+            # actual buy price (avg_cost) — you didn't own it at the period start,
+            # so the market price then isn't your baseline. This corrects the
+            # inflated day/week/month move on same-day (or same-week/month) buys.
+            ref = None
+            if open_date is not None:
+                if period == "day":
+                    prior_date = df.index[-2] if len(df) >= 2 else None
+                    if prior_date is not None and open_date > prior_date:
+                        ref = avg_cost_local
+                elif period == "week":
+                    monday = today - timedelta(days=today.weekday())
+                    if open_date >= monday:
+                        ref = avg_cost_local
+                elif period == "month":
+                    if open_date >= today.replace(day=1):
+                        ref = avg_cost_local
+            if ref is None:
+                ref = _period_price(df, today, period)
+            return qty * (curr_price - ref) * to_usd if ref is not None else 0.0
 
         rows.append({
             "ticker": ticker,

@@ -27,9 +27,15 @@ def save(holdings: dict) -> None:
     _FILE.write_text(json.dumps(holdings, indent=2))
 
 
-def add(ticker: str, qty: float, avg_cost: float) -> None:
+def add(ticker: str, qty: float, avg_cost: float, open_date: str | None = None) -> None:
+    """Add/replace a holding. Pass open_date ('YYYY-MM-DD') for a freshly opened
+    position so day/week/month P&L is measured from the buy price, not the market
+    price at the period start (see portfolio_value.py)."""
     h = load()
-    h[ticker.upper()] = {"qty": round(qty, 4), "avg_cost": round(avg_cost, 4)}
+    rec = {"qty": round(qty, 4), "avg_cost": round(avg_cost, 4)}
+    if open_date:
+        rec["open_date"] = open_date
+    h[ticker.upper()] = rec
     save(h)
 
 
