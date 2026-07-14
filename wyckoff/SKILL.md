@@ -166,6 +166,21 @@ Examples → what to run:
 - "should I add IEMG?" → `explain.py IEMG`, then weigh the setup against the validator's caution
 - "מה המצב של MBLY?" → `explain.py MBLY`
 
+## Hermes Tool: Fibonacci Confluence Grid (`fib.py`)
+
+Deterministic (no-LLM, no-Telegram) retracement/extension helper — for "is there a fib level near X?", Elliott/wave-target questions, or seeding a `watchlist_levels` support/resistance from structure. Takes a swing and prints the retracement grid (support/resistance *inside* the swing) + extension grid (measured-move targets *beyond* the terminal pivot) + a nearest-bracket levels suggestion.
+
+```bash
+cd ~/.hermes/skills/wyckoff
+.venv/bin/python scripts/fib.py SNPS                       # auto-detect dominant swing over 1y
+.venv/bin/python scripts/fib.py SNPS --high 651.73 --low 365.74 --dir down   # pin the swing by hand
+.venv/bin/python scripts/fib.py SNPS --lookback 400 --json # widen auto-window / machine output
+```
+
+Direction sets interpretation: UP swing → retracements are pullback SUPPORT, extensions are upside TARGETS; DOWN swing → retracements are bounce RESISTANCE, extensions are downside TARGETS (sub-zero down-extensions are dropped). Auto-detect finds the extreme high/low over `--lookback` and infers direction from which printed last; **override with `--high/--low` when you have specific pivots** (auto max/min can miss the swing you care about).
+
+**Discipline (critical):** fib levels are **confluence-only — they confirm a Wyckoff signal or mark invalidation, never trigger an entry standalone.** Seed a fib level into `watchlist_levels` **only where it lines up with a real Wyckoff decision level** (spring/LPS/SOS), not just because the arithmetic produced it. This mirrors the user's standing rule: any new analytical lens must be deterministic-first and confluence-only; reject indecisive/standalone use. (Same reason there is deliberately **no automated wave-counting** — the machine does Fibs + rule-checks; wave *labels* stay human/LLM-judged.)
+
 ## Hermes Tool: Wyckoff Method Explanation
 
 When the user asks general questions about the Wyckoff method — what it is, how it works, what the phases mean — answer from your own knowledge. You do not need to run a script for this. Key points to cover if asked:
@@ -407,7 +422,7 @@ wyckoff/
 ├── SKILL.md
 ├── job.json              # array of 4 cron jobs (weekly, portfolio, price_alerts, portfolio_value)
 ├── requirements.txt
-├── config.yaml           # approved watchlist + LLM settings
+├── config.yaml           # watchlist/parked/levels + LLM settings — GITIGNORED runtime-only PII (template: config.example.yaml)
 ├── scripts/
 │   ├── entry.py         # Sunday entry funnel: prescreen → Wyckoff LLM → news → top-5 tiered
 │   ├── exit.py          # daily exit-watch (default --section portfolio, exit mode)
@@ -421,7 +436,11 @@ wyckoff/
 │   ├── price_alerts.py   # daily ≥3.5% move scan (no LLM)
 │   ├── portfolio_value.py# daily P&L valuation report
 │   ├── explain.py        # on-demand plain-language deep dive for one ticker
-│   ├── data.py           # Yahoo Finance OHLCV fetch
+│   ├── fib.py            # deterministic Fibonacci retracement/extension confluence grid (no LLM/Telegram)
+│   ├── parked_scan.py    # weekly no-LLM thesis-watch on the parked: list
+│   ├── trade_log.py      # append-only executed-fill ledger + entry-performance review
+│   ├── import_holdings.py# secnum-matched broker-export (.xlsx) importer (dry-run + --apply)
+│   ├── data.py           # Yahoo Finance OHLCV fetch → TickerData(df, name, currency); .TA agorot→ILS normalized
 │   ├── holdings.py       # portfolio state (data/holdings.json); no_trailing_stop() = bond-sleeve check
 │   ├── manage.py         # CLI: add/remove holdings and watchlist
 │   └── notifier.py       # Telegram sender (4096-char auto-split)
@@ -463,6 +482,21 @@ cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/import_holdings.py "<upl
 The importer matches each position by its **stable Israeli security-number** (מספר נייר), reads quantity + average cost (`.TA` costs are agorot, stored as-is), preserves the risk-state scale-out baseline (so a trimmed position still reads as partially scaled-out), and never deletes a holding that is merely absent from the file.
 
 ## Known Pitfalls & Workarounds
+
+### Smoke-testing a script can POST to the user's Telegram
+
+Most digest scripts **send to Telegram on a bare run** — running one to "just test it" fires a real message to the user's channel. Not all have a preview flag:
+- **Have `--dry-run` / `--no-send`:** `entry.py`, `exit.py` (use these for previews — see the on-demand sections above).
+- **NO preview flag — a bare run sends** (silently, only when something trips): `watchlist_scan.py`, `parked_scan.py`, `stop_check.py`, `bond_review.py`, `price_alerts.py`, `portfolio_value.py`.
+
+So to **validate config/logic without sending**, don't invoke the sender script — exercise the piece under test in isolation instead (e.g. `python -c "import yaml; ..."` to confirm a config parses, or import the pure function). If you must run the full script to smoke-test, tell the user it will (or did) post, since it duplicates their scheduled digest. (Learned 2026-07-14: a `watchlist_scan.py` smoke-test re-sent that day's XOM/IWM scan.)
+
+### `config.yaml` is gitignored runtime-only PII — watchlist changes are NOT committed
+
+As of 2026-07-14 the user reclassified the **watchlist / parked list / watchlist_levels** as PII (same class as holdings): `config.yaml` is now **gitignored**, lives runtime-only in the git checkout, and a neutral `config.example.yaml` (empty lists) is the tracked template. Consequences:
+- Editing the watchlist/parked/levels is a **runtime-only edit — do not `git commit` it** (and it won't show in `git status`). Only *neutral code* (scripts) gets committed/pushed.
+- A `git pull` on the Mac will **delete** the Mac's working-tree `config.yaml` (it's ignored + removed from the index) — copy it aside first if a local copy is wanted. The mini-PC runtime copy is untouched.
+- When adding a new git-only helper script, commit the script; the watchlist/level change that motivated it stays out of git.
 
 ### Yahoo Finance API Rate Limiting
 
