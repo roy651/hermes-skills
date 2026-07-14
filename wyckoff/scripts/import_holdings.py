@@ -95,8 +95,13 @@ def main():
     current = json.loads(HOLDINGS.read_text())
     parsed, unmapped = parse_xlsx(args.xlsx)
 
-    merged = dict(current)          # keep holdings absent from the file; update the rest
-    merged.update(parsed)
+    # Keep holdings absent from the file; for those present, update qty/avg_cost from the sheet but
+    # PRESERVE any hand-set metadata (e.g. "asset_class": "bond", "no_trailing_stop") — the broker
+    # export carries only qty+cost, so a blind ``update`` would wipe those flags on every re-import
+    # (that silently un-exempted XFIV from the trailing stop and mis-fired a breach).
+    merged = dict(current)
+    for ticker, fields in parsed.items():
+        merged[ticker] = {**current.get(ticker, {}), **fields}
 
     changes = diff_lines(current, merged)
     print(f"[import] {len(parsed)} positions parsed · {len(changes)} change(s):")
