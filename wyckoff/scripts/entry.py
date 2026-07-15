@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Sunday Wyckoff weekly run: prescreen → LLM Wyckoff on candidates → news-validate the
-top cut → emit tiered entry picks (accumulation STRONG / MARKUP-PULLBACK / BORDERLINE) to Telegram.
+"""Sunday Wyckoff weekly run: prescreen → LLM Wyckoff on candidates → tier a NEWS-LESS shortlist
+(accumulation STRONG / MARKUP-PULLBACK / BORDERLINE) → verify news on the shortlisted picks
+(adverse news demotes STRONG → BORDERLINE; absence never blocks) → emit to Telegram.
 
 The weekly digest IS the entry signal. Portfolio exit-watch is the separate daily job.
 """
@@ -36,7 +37,7 @@ TZ = ZoneInfo("Asia/Jerusalem")
 LOOKBACK_DAYS = 120
 
 MAX_PICKS = 5               # total picks emitted (STRONG + BORDERLINE)
-NEWS_CUT = 8                # news-validate only the top-N by composite (saves API calls)
+NEWS_CUT = 8                # cap on news calls; verify only the top-N shortlisted picks (saves API calls)
 ANALYZE_WORKERS = 4         # concurrent LLM analyses — keep low; the local proxy chokes at 10
 STRONG_MIN_CRITERIA = 7     # Gate B threshold
 NEWS_RECS = {"buy", "add", "reduce", "sell"}   # recs worth a news check
@@ -143,14 +144,14 @@ def _composite(bundle: dict) -> float:
 
 
 def _gates(bundle: dict) -> dict:
-    """Four STRONG gates. Gate C requires news validated AND clean (unvalidated → never STRONG).
-    Gate D is the hard programmatic event flag from events.py."""
+    """Three NEWS-LESS STRONG gates — the shortlist is decided on Wyckoff structure alone.
+    News is NOT a gate (absence must never block a structurally-strong name); it is a downstream
+    verify/veto lens applied to the shortlist (see run() Stage 5). Gate D is the hard
+    programmatic event flag from events.py (a confirmed SOS/LPS, not a lone early-stage Spring)."""
     r = bundle["result"]
-    news = bundle.get("news_info")
     return {
         "A_rec": r.get("recommendation", "") in ENTRY_RECS,
         "B_criteria": _criteria(r) >= STRONG_MIN_CRITERIA,
-        "C_news": news is not None and news.get("clean", True),
         "D_event": bool(bundle.get("has_event")),
     }
 
@@ -162,8 +163,6 @@ def _missing(bundle: dict) -> list[str]:
         miss.append("rec≠buy/add")
     if not g["B_criteria"]:
         miss.append(f"criteria {_criteria(bundle['result'])}, need ≥{STRONG_MIN_CRITERIA}")
-    if not g["C_news"]:
-        miss.append("news unverified/flagged")
     if not g["D_event"]:
         miss.append("no confirmed SOS/LPS")  # a lone Spring is early-stage, not a confirmed entry
     return miss
@@ -414,20 +413,13 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
     bundles, errors = _analyze_candidates(candidates, spy_ctx)
     print(f"[weekly] analyzed {len(bundles)} candidates", file=sys.stderr)
 
-    # Stage 4: news-validate only the top cut by composite
+    # Stage 4: tier the NEWS-LESS shortlist. STRONG is decided on Wyckoff structure alone
+    # (rec + criteria + confirmed SOS/LPS) — a name is shortlisted by structure, never by whether
+    # it made a news cut. Accumulation STRONG (range-lane SOS/LPS) gets the high-conviction label;
+    # markup-pullback entries get their OWN confirm-before-acting tier — the MP lane bypasses the
+    # off-high floor + rel-perf cap and carries an entry-irreducible quiet-top FP (review 4), so it
+    # must not share the autonomous-STRONG label. BORDERLINE fills the rest.
     bundles.sort(key=_composite, reverse=True)
-    for b in bundles[:NEWS_CUT]:
-        rec = b["result"].get("recommendation", "")
-        if rec in NEWS_RECS:
-            try:
-                b["news_info"] = news_validator.validate(b["ticker"], b["name"], rec)
-            except Exception as e:
-                print(f"[weekly] news validation failed for {b['ticker']}: {e}", file=sys.stderr)
-
-    # Stage 5: tier gated picks. Accumulation STRONG (range-lane SOS/LPS) gets the high-conviction
-    # label; markup-pullback entries get their OWN confirm-before-acting tier — the MP lane bypasses
-    # the off-high floor + rel-perf cap and carries an entry-irreducible quiet-top FP (review 4),
-    # so it must not share the autonomous-STRONG label. BORDERLINE fills the rest.
     gated = [b for b in bundles if all(_gates(b).values())]
     strong = sorted([b for b in gated if not b.get("is_markup")], key=_composite, reverse=True)[:MAX_PICKS]
     markup = sorted([b for b in gated if b.get("is_markup")], key=_composite, reverse=True)[:MAX_PICKS]
@@ -435,6 +427,27 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
     borderline = sorted(
         [b for b in bundles if b["ticker"] not in picked], key=_composite, reverse=True
     )[: max(0, MAX_PICKS - len(strong) - len(markup))]
+
+    # Stage 5: verify news on the SHORTLIST only (the emitted picks, composite-ordered, capped at
+    # NEWS_CUT) — not a pre-gate composite cut. News is a verify/veto lens: adverse news (clean=False)
+    # DEMOTES a STRONG accumulation pick to BORDERLINE (kept visible, flagged); absence of news never
+    # blocks a pick. Markup/borderline already carry a manual-confirm caveat, so news there annotates.
+    shortlist = sorted(strong + markup + borderline, key=_composite, reverse=True)[:NEWS_CUT]
+    for b in shortlist:
+        rec = b["result"].get("recommendation", "")
+        if rec in NEWS_RECS:
+            try:
+                b["news_info"] = news_validator.validate(b["ticker"], b["name"], rec)
+            except Exception as e:
+                print(f"[weekly] news validation failed for {b['ticker']}: {e}", file=sys.stderr)
+
+    demoted = [b for b in strong if b.get("news_info") and not b["news_info"].get("clean", True)]
+    if demoted:
+        strong = [b for b in strong if b not in demoted]
+        borderline = demoted + borderline   # keep visible, now news-flagged — do not re-truncate
+        for b in demoted:
+            print(f"[weekly] {b['ticker']} demoted STRONG→BORDERLINE on adverse news: "
+                  f"{b['news_info'].get('flag') or 'flagged'}", file=sys.stderr)
 
     # Enrich the final picks with market cap (cheap — only a few lookups)
     for b in strong + markup + borderline:

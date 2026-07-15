@@ -498,6 +498,10 @@ As of 2026-07-14 the user reclassified the **watchlist / parked list / watchlist
 - A `git pull` on the Mac will **delete** the Mac's working-tree `config.yaml` (it's ignored + removed from the index) — copy it aside first if a local copy is wanted. The mini-PC runtime copy is untouched.
 - When adding a new git-only helper script, commit the script; the watchlist/level change that motivated it stays out of git.
 
+### Diagnosing an entry/exit bug: check `git diff`, not just committed code
+
+wyckoff **runs from the git checkout** (`~/.hermes/skills/wyckoff` is a symlink to `~/hermes-skills/wyckoff`), so the **working tree is the live code** — an *uncommitted* change is already running in the next scheduled job. Before you confirm a bug diagnosed from the committed source (especially a diagnosis inherited from another session/chat), run `git diff scripts/<file>.py`: the fix may already be sitting uncommitted in the working tree, making the committed-code reading a **phantom bug**. (Learned 2026-07-15: an inherited analysis correctly showed the entry `_gates()` `C_news` gate made 🟢 STRONG structurally unreachable — but `git diff` revealed that exact fix already applied and un-committed, i.e. live but drift-risk. The right move was to surface + commit it, not re-implement.) Design note this confirmed: entry STRONG tiering is **news-less by design** — news is a downstream verify/veto lens on the shortlist (adverse news *demotes* STRONG→BORDERLINE; absence never blocks), **not** a gate. Don't "fix" the absence of a news gate.
+
 ### Yahoo Finance API Rate Limiting
 
 **Problem:** Yahoo Finance returns `"Edge: Too Many Requests"` without standard HTTP error codes, causing scripts to hang indefinitely. This is a **sliding window rate limit** (typically several hours of cooldown after ~30-50 rapid requests), not a per-day quota.
