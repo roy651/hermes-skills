@@ -39,3 +39,20 @@ reddit:
   pages: 2                      # ApeWisdom pages to fetch (25 tickers per page)
   velocity_warn_threshold: 2.0  # ≥200% mention increase → ⚠️ distribution warning
   radar_top_n: 10               # items in the weekly Radar side-path report
+
+# Optional prescreen-universe sleeves — widen the aperture beyond the default S&P 500 +
+# NASDAQ 100 + sector ETFs. Both sleeves flow through the SAME funnel (ADV floor, 5-criterion
+# score, all lanes). A missing `universe:` block just means the default index universe.
+universe:
+  # ADR / foreign sleeve: liquid non-S&P names (e.g. BABA-class) that the index universe is
+  # blind to. Curated list — they have no GICS→sector-ETF map (None-safe downstream). Cheap.
+  adr_sleeve: []
+    # - BABA
+  # Small-cap (Russell) sleeve — OPT-IN, adds Yahoo fetch load to the weekly run. Reads
+  # constituents from data/russell_universe.txt (one ticker/line, '#' comments ok), IDEALLY
+  # ordered most-liquid-first: only the first `russell_top_n` are fetched (bounds the load),
+  # then the existing $20M ADV floor + 5-criterion score do the real mechanical cull. The
+  # file is gitignored (data/); auto-sourcing R2000 constituents is unreliable, so it's
+  # file-based. Leave include_russell false until the file is present + you accept the load.
+  include_russell: false
+  russell_top_n: 300

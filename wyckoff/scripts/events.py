@@ -47,6 +47,23 @@ MP_EFFORT_X = 1.5         # reject if the rally-leg AVG volume exceeds this × t
                           # a climactic/blow-off advance is a buying-climax/distribution risk, not a
                           # healthy re-accumulation pullback (review 3, empirically proven FP)
 
+# --- Early-accumulation lane: the markdown→base TRANSITION (selling-climax → automatic rally →
+#     secondary test) that the accumulation lane's above-MA200 + rel-perf floors structurally
+#     EXCLUDE (a basing name is below its MA200 and a big underperformer by construction). This is
+#     stopping-ACTION evidence — supply exhausting — NOT a confirmed entry: it is a base-FORMING
+#     watch (confluence only), invalidated by a close back below the selling-climax low. Deliberately
+#     conservative: a real prior markdown, a genuine volume+range climax bar that closes off its low,
+#     a rally off it, then a lighter-volume test that holds above the climax low.
+EA_LOOKBACK = 90           # bars examined for the SC→AR→ST sequence
+EA_MARKDOWN_MIN = 0.15     # prior high must be >=15% above the SC low (a real markdown into the climax)
+EA_SC_VOL_X = 1.8          # selling-climax volume vs the trailing 20-bar average (panic spike)
+EA_SC_RANGE_X = 1.4        # SC bar range vs the trailing 20-bar average range (wide/climactic bar)
+EA_SC_CLOSE_OFF_LOW = 0.35 # SC bar must close >=35% up from its low (absorption / long lower wick)
+EA_AR_MIN = 0.05           # automatic rally: a subsequent high >=5% above the SC low
+EA_ST_VOL_X = 0.8          # secondary-test volume must be below SC volume * this (supply drying up)
+EA_ST_NEAR = 0.08          # ST must come back within 8% of the SC low (a genuine re-test, not a runaway)
+EA_ST_HOLD_TOL = 0.03      # ST low may dip this far below the SC low but must close above it
+
 
 def _cluster_count(positions: list[int], gap: int) -> int:
     """Number of time-separated clusters in a sorted list of bar positions."""
@@ -156,12 +173,95 @@ def detect_markup_pullback(df: pd.DataFrame, enforce_effort: bool = True) -> dic
     return None
 
 
+def detect_early_accumulation(df: pd.DataFrame) -> dict | None:
+    """Early-accumulation lane: the markdown→base TRANSITION that the accumulation lane's
+    above-MA200 + rel-perf floors structurally EXCLUDE (a basing name is below its MA200 and a
+    big underperformer by construction). Detects the classic stopping-action sequence:
+
+      prior markdown → Selling-Climax bar (wide range + volume spike, closes well off its low
+      = absorption) → Automatic Rally off the SC low → Secondary Test that returns near the SC
+      low on LIGHTER volume and HOLDS above it (supply drying up).
+
+    This is stopping ACTION — supply exhausting — NOT a confirmed entry: it is a base-FORMING
+    watch (confluence only, surfaces to BORDERLINE for manual verify), invalidated by a close
+    back below the SC low. Deliberately conservative; the SC→AR→ST completion is itself the
+    falling-knife guard. Returns the FRESHEST completed sequence (latest ST), or None."""
+    n = len(df)
+    if n < 40:
+        return None
+    close = df["close"].values
+    high = df["high"].values
+    low = df["low"].values
+    vol = df["volume"].values
+    idx = df.index
+
+    v20 = df["volume"].rolling(20).mean().values
+    rng = (df["high"] - df["low"])
+    r20 = rng.rolling(20).mean().values
+
+    w_start = max(21, n - EA_LOOKBACK)
+    best: dict | None = None  # keep the sequence with the latest ST
+
+    # SC candidates: a climactic down-bar (wide range + volume spike) that closes off its low,
+    # sitting at the bottom of a real prior markdown. Leave room after it for AR + ST.
+    for sc in range(w_start, n - 2):
+        if pd.isna(v20[sc]) or v20[sc] <= 0 or pd.isna(r20[sc]) or r20[sc] <= 0:
+            continue
+        bar_rng = high[sc] - low[sc]
+        if bar_rng <= 0:
+            continue
+        if vol[sc] < EA_SC_VOL_X * v20[sc]:
+            continue                                    # no volume climax
+        if bar_rng < EA_SC_RANGE_X * r20[sc]:
+            continue                                    # not a wide/climactic bar
+        if (close[sc] - low[sc]) / bar_rng < EA_SC_CLOSE_OFF_LOW:
+            continue                                    # closed near its low → no absorption
+        sc_low = float(low[sc])
+        if sc_low <= 0:
+            continue
+        prior_high = float(high[w_start:sc].max()) if sc > w_start else 0.0
+        if prior_high < sc_low * (1 + EA_MARKDOWN_MIN):
+            continue                                    # no real markdown into the climax
+
+        # Automatic rally — the highest high after the SC must clear the SC low by EA_AR_MIN
+        ar_i = sc + 1 + int(high[sc + 1:n].argmax())
+        if float(high[ar_i]) < sc_low * (1 + EA_AR_MIN):
+            continue
+
+        # Secondary test — first bar after the AR that returns near the SC low on lighter
+        # volume than the SC and holds (may dip a touch below, but closes back above the SC low)
+        sc_vol = float(vol[sc])
+        for st in range(ar_i + 1, n):
+            if (low[st] <= sc_low * (1 + EA_ST_NEAR)
+                    and vol[st] < EA_ST_VOL_X * sc_vol
+                    and low[st] >= sc_low * (1 - EA_ST_HOLD_TOL)
+                    and close[st] > sc_low):
+                seq = {
+                    "sc": {"date": str(idx[sc]), "low": round(sc_low, 2),
+                           "vol_x": round(vol[sc] / v20[sc], 1)},
+                    "ar": {"date": str(idx[ar_i]), "high": round(float(high[ar_i]), 2)},
+                    "st": {"date": str(idx[st]), "close": round(float(close[st]), 2),
+                           "vol_x_sc": round(float(vol[st] / sc_vol), 2)},
+                    "st_i": st,
+                }
+                if best is None or st > best["st_i"]:
+                    best = seq
+                break
+
+    if best is not None:
+        best.pop("st_i", None)
+    return best
+
+
 def detect_events(df: pd.DataFrame) -> dict:
-    """Return {'range','spring','sos','lps','markup_pullback'} (each a dict or None). Spring→SOS→LPS
-    chronology is enforced (an SOS predating the most recent Spring is dropped with its LPS). The
-    markup-pullback lane is detected independently of the range."""
-    out = {"range": None, "spring": None, "sos": None, "lps": None, "markup_pullback": None}
+    """Return {'range','spring','sos','lps','markup_pullback','early_accum'} (each a dict or None).
+    Spring→SOS→LPS chronology is enforced (an SOS predating the most recent Spring is dropped with
+    its LPS). The markup-pullback and early-accumulation lanes are detected independently of the
+    range."""
+    out = {"range": None, "spring": None, "sos": None, "lps": None,
+           "markup_pullback": None, "early_accum": None}
     out["markup_pullback"] = detect_markup_pullback(df)
+    out["early_accum"] = detect_early_accumulation(df)
     rng = detect_range(df)
     out["range"] = rng
     if not rng:
@@ -259,6 +359,13 @@ def event_summary(events: dict) -> tuple[int, list[str]]:
     if mp:
         score += 2
         labels.append(f"Markup-pullback LPS {mp['lps']['date']} (holds >breakout {mp['breakout_level']})")
+    ea = events.get("early_accum")
+    if ea:
+        # base-FORMING watch — do NOT add to the entry score (it's not a confirmed entry); label only
+        labels.append(
+            f"Early-accum SC {ea['sc']['date']} (low {ea['sc']['low']}) → AR → ST {ea['st']['date']} "
+            f"(vol {ea['st']['vol_x_sc']}×SC)"
+        )
     return score, labels
 
 
