@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wyckoff Skill — Mechanism Map</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --ink:#e6edf3; --muted:#8b949e; --line:#30363d;
+    --nollm:#1f6feb;      /* deterministic / no-LLM  */
+    --nollm-bg:#0d2a4d;
+    --llm:#a371f7;        /* LLM (proxy / credits)   */
+    --llm-bg:#2b1a47;
+    --side:#3fb950;       /* side-path / informational */
+    --side-bg:#0f2e17;
+    --veto:#d29922;       /* verify / veto lens      */
+    --veto-bg:#3a2d0a;
+    --danger:#f85149;
+    --data:#8b949e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       padding:28px 20px 60px}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:13px}
+  .wrap{max-width:1180px;margin:0 auto}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 24px;font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;
+               border:1px solid var(--line);background:var(--panel)}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .stage{border:1px solid var(--line);border-radius:12px;background:var(--panel);
+         padding:14px 16px;margin:0 0 12px;position:relative}
+  .stage h2{margin:0 0 10px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .row{display:flex;flex-wrap:wrap;gap:10px}
+  .box{flex:1;min-width:150px;border-radius:10px;padding:10px 12px;border:1px solid var(--line);
+       background:#11161d}
+  .box b{display:block;font-size:13px;margin-bottom:3px}
+  .box small{color:var(--muted);font-size:11.5px;line-height:1.45;display:block}
+  .box code{color:#9fb4c7;font-size:10.5px}
+  .tag{display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;margin-top:6px;
+       border:1px solid transparent;font-weight:600}
+  .t-nollm{color:#9dc3ff;background:var(--nollm-bg);border-color:#1f4f87}
+  .t-llm{color:#d2b3ff;background:var(--llm-bg);border-color:#5a3f87}
+  .t-side{color:#8ce69b;background:var(--side-bg);border-color:#1f5c30}
+  .t-veto{color:#f0cf7a;background:var(--veto-bg);border-color:#7a5f16}
+  .b-nollm{border-left:3px solid var(--nollm)}
+  .b-llm{border-left:3px solid var(--llm)}
+  .b-side{border-left:3px solid var(--side)}
+  .b-veto{border-left:3px solid var(--veto)}
+  .b-data{border-left:3px solid var(--data)}
+  .arrow{text-align:center;color:var(--muted);font-size:18px;margin:2px 0;line-height:1}
+  .lane-note{font-size:11px;color:var(--muted);margin-top:8px;padding-left:2px}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+  .side-head{color:var(--side);font-weight:700}
+  .pill{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:8px;
+        padding:1px 6px;margin-left:6px}
+  .foot{margin-top:26px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:12px}
+  .foot b{color:var(--ink)}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:760px){.split{grid-template-columns:1fr}}
+  .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#9fb4c7;
+       background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:0 5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Wyckoff Skill — Mechanism Map</h1>
+  <p class="sub">The full pipeline as of 2026-07-16 · runs from the git checkout (<span class="kbd">~/hermes-skills/wyckoff</span>) via symlink · all LLM calls serialize through the local claude-proxy (Opus 4.8)</p>
+
+  <div class="legend">
+    <span><i class="dot" style="background:var(--nollm)"></i> Deterministic (no-LLM, free)</span>
+    <span><i class="dot" style="background:var(--llm)"></i> LLM read (proxy · credits)</span>
+    <span><i class="dot" style="background:var(--veto)"></i> Verify / veto lens (confluence-only)</span>
+    <span><i class="dot" style="background:var(--side)"></i> Side-path / informational</span>
+    <span><i class="dot" style="background:var(--data)"></i> Data / infra</span>
+  </div>
+
+  <!-- ============ ENTRY PIPELINE ============ -->
+  <div class="stage">
+    <h2>① Universe — widen the aperture <span class="pill">prescreener.py · _get_universe()</span></h2>
+    <div class="row">
+      <div class="box b-data"><b>S&amp;P 500 + NASDAQ 100</b><small>Wikipedia constituents. S&amp;P names carry a GICS→sector-ETF map (5th criterion input).</small><span class="tag t-nollm">index cohort</span></div>
+      <div class="box b-data"><b>Sector ETFs</b><small>XLK, XLI, XLV… — both universe members and sector-relative-strength benchmarks.</small><span class="tag t-nollm">index cohort</span></div>
+      <div class="box b-side"><b>ADR sleeve</b><small>Curated liquid foreign names the index can't see (BABA, TSM, MELI…). Config-editable list.</small><span class="tag t-side">sleeve cohort</span></div>
+      <div class="box b-side"><b>Russell small-cap sleeve</b><small>Top-300 by $-volume from <code>russell_universe.txt</code> (Nasdaq screener seed, $20M ADV floor). No sector map → scored on 4 of 5 criteria.</small><span class="tag t-side">sleeve cohort</span></div>
+    </div>
+    <div class="lane-note">→ 836 tickers this run (503 S&amp;P + 12 ADR + 300 Russell + ETFs). Data via <code>data.py</code> (Yahoo OHLCV, IPv4-forced).</div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="stage">
+    <h2>② Deterministic prescreen — 3 admission lanes <span class="pill">no-LLM</span></h2>
+    <div class="lane-note" style="margin-top:0;margin-bottom:10px">SPY context sets <code>required_pct_off_high</code>. Each ticker scored on 5 criteria (off-high · &gt;MA200 · ATR contraction · volume contraction · BB squeeze) + a $20M avg-dollar-volume liquidity floor. Three lanes admit differently:</div>
+    <div class="row">
+      <div class="box b-nollm"><b>Accumulation lane</b><small>Classic base: score ≥ MIN_SCORE, full rel-perf &amp; sector disqualifiers. The strict path.</small><span class="tag t-nollm">events.py</span></div>
+      <div class="box b-nollm"><b>Markup-pullback lane</b><small>Confirmed breakout pulling back to its LPS — bypasses the off-high floor. Ranked quietest-rally-first. Capped.</small><span class="tag t-nollm">MP_PRESCREEN_CAP</span></div>
+      <div class="box b-nollm"><b>Early-accumulation lane</b><small>Markdown→base transition: Selling-Climax → Automatic-Rally → Secondary-Test. A &gt;30pp underperformer is admitted <i>only</i> with the full SC→AR→ST sequence (the falling-knife guard). Ranked freshest-ST-first. Capped.</small><span class="tag t-nollm">EA_PRESCREEN_CAP</span></div>
+    </div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="stage">
+    <h2>③ Cohort quota — sleeve augments, never displaces <span class="pill">2026-07-16</span></h2>
+    <div class="row">
+      <div class="box b-nollm"><b>Index cohort — 20 slots</b><small>Top index-origin survivors, lane-priority ordered (markup-pullback → early-accum → accumulation).</small><span class="tag t-nollm">entry.cohort_size</span></div>
+      <div class="box b-side"><b>Sleeve cohort — 10 reserved slots</b><small>ADR + Russell survivors get their OWN slots, so a noisy 4-of-5-criteria sleeve name can't crowd out a cleaner index name.</small><span class="tag t-side">entry.sleeve_cohort_size</span></div>
+    </div>
+    <div class="lane-note">→ 30 names to the LLM stage. <span class="kbd">--cohort N</span> overrides the index cap on demand.</div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="stage">
+    <h2>④ Earnings gate + LLM Wyckoff read <span class="pill">entry.py · analysis.py</span></h2>
+    <div class="row">
+      <div class="box b-nollm"><b>Earnings exclusion</b><small>Names with imminent earnings dropped before spending credits.</small><span class="tag t-nollm">finnhub.py</span></div>
+      <div class="box b-llm"><b>Per-name Wyckoff read</b><small>Phase (accumulation/markup/distribution/markdown), 9-criteria accumulation scorecard, recommendation. Tolerant parser (JSON or prose).</small><span class="tag t-llm">serialized · Opus 4.8</span></div>
+    </div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="stage">
+    <h2>⑤ News-less tiering → then verify/veto lenses <span class="pill">the 2026-07-16 gate fix</span></h2>
+    <div class="row">
+      <div class="box b-llm"><b>STRONG</b><small>3 structure gates only: rec ∈ buy/add · criteria ≥ 7 · confirmed SOS→LPS. <i>News no longer gates</i> (was dead-code before).</small><span class="tag t-llm">gates A·B·D</span></div>
+      <div class="box b-llm"><b>Markup-pullback</b><small>Structurally intact breakout-pullback; confirm before acting.</small></div>
+      <div class="box b-llm"><b>Borderline</b><small>Structure present, criteria/rec short of STRONG. Surfaced, flagged.</small></div>
+    </div>
+    <div class="arrow" style="margin:10px 0 8px">▼ downstream lenses (confluence-only — never a trigger)</div>
+    <div class="row">
+      <div class="box b-veto"><b>News lens</b><small>Runs on the shortlist only (after tiering). Adverse news <b>demotes</b> STRONG→Borderline; absence never blocks.</small><span class="tag t-veto">news.py</span></div>
+      <div class="box b-veto"><b>Fibonacci lens</b><small>Deterministic retracement/extension grid at a named swing → confluence at decision levels. Feeds watchlist levels by hand.</small><span class="tag t-veto">fib.py (no-LLM)</span></div>
+      <div class="box b-veto"><b>Elliott/structure lens</b><small>Opt-in <span class="kbd">--ew-lens</span>. Impulsive-vs-corrective for conviction/size; must cite an invalidation price. No auto wave-counting.</small><span class="tag t-veto">opt-in · credits</span></div>
+    </div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="stage" style="border-color:#2d5a37">
+    <h2>⑥ Output <span class="pill">Telegram · notifier.py (IPv4-forced)</span></h2>
+    <div class="row">
+      <div class="box b-llm"><b>Entry digest</b><small>STRONG / Markup-pullback / Borderline tiers. DEGRADED banner if any call fell off Claude onto a fallback (X-Proxy-Backend).</small></div>
+      <div class="box b-side"><b>📡 Reddit Radar</b><small>ApeWisdom mention-velocity movers — <i>direction-blind</i>, a side-path, NOT a trigger. Bundled with the entry run.</small><span class="tag t-side">reddit.py</span></div>
+    </div>
+  </div>
+
+  <!-- ============ PARALLEL SYSTEMS ============ -->
+  <div class="stage" style="margin-top:28px;border-color:#2d5a37">
+    <h2 style="color:var(--side)">Parallel systems — holdings &amp; watch (run on their own crons)</h2>
+    <div class="cols">
+      <div class="box b-llm"><b>Exit watch <span class="pill">weekly</span></b><small>exit.py --section all: holdings + watchlist full Wyckoff read + scale-out ladder. Close-based, may lag the daily stop.</small><span class="tag t-llm">exit.py · ladder.py</span></div>
+      <div class="box b-nollm"><b>Stop check <span class="pill">daily</span></b><small>Trailing stop = tighter of chandelier (3×ATR) &amp; structure (20d-low), anchored <i>entry-onward</i>. Bonds (asset_class:bond) exempt. Close-through = hard exit; intraday touch = heads-up.</small><span class="tag t-nollm">stop_check.py · risk.py</span></div>
+      <div class="box b-nollm"><b>Watchlist tripwire <span class="pill">daily</span></b><small>Fires when price enters a ±1% band around a hand-seeded support/resistance in <code>watchlist_levels</code>. Reply-to-verify → full LLM read. Level-less names stay silent.</small><span class="tag t-nollm">watchlist_scan.py</span></div>
+      <div class="box b-nollm"><b>Parked watch <span class="pill">weekly</span></b><small>Thesis-watch for names not yet entry-ready. Deterioration score (0–9); a name that stops deteriorating → promote to watchlist &amp; seed levels.</small><span class="tag t-nollm">parked_scan.py · deterioration.py</span></div>
+      <div class="box b-llm"><b>Bond review <span class="pill">monthly</span></b><small>Rate/duration thesis read for the bond sleeve (exempt from the trailing stop). Exit = thesis change, not a price stop.</small><span class="tag t-llm">bond_review.py</span></div>
+      <div class="box b-nollm"><b>Portfolio value <span class="pill">daily</span></b><small>Mark-to-market P/L; open_date-aware (same-day fills measured from buy price, not period-start).</small><span class="tag t-nollm">portfolio_value.py</span></div>
+      <div class="box b-nollm"><b>Trade ledger</b><small>Append-only fills log for go-forward entry/exit performance review.</small><span class="tag t-nollm">trade_log.py</span></div>
+      <div class="box b-nollm"><b>Ad-hoc explain</b><small>Free deterministic Wyckoff narrative for any ticker — no credits. Use before re-burning an LLM read.</small><span class="tag t-nollm">explain.py</span></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="split">
+      <div>
+        <b>Shared engine.</b> <code>events.py</code> (SC/AR/ST, spring, SOS, LPS, upthrust/UTAD, SOW/LPSY) and <code>deterioration.py</code> (0–9) feed both the deterministic prescreen/stops and the LLM prompts, so the mechanical and interpretive layers speak the same Wyckoff vocabulary. Glossary: <code>references/wyckoff-events-glossary.md</code>.
+      </div>
+      <div>
+        <b>Infra &amp; guardrails.</b> All LLM calls serialize behind one claude-proxy lock (concurrency was the old degradation cause). Every new lens is <b>deterministic-first, LLM only on survivors, confluence-only (never a standalone trigger), and cites invalidation</b>. Nothing auto-trades. <b>PII stays runtime-only</b> — holdings, positions, and the (now-gitignored) <code>config.yaml</code> watchlist never enter git; this diagram is neutral architecture.
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
