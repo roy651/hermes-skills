@@ -103,8 +103,9 @@ def _russell_subset(top_n: int) -> list[str]:
     return subset
 
 
-def _get_universe() -> tuple[list[str], dict[str, str]]:
-    """Return (tickers, sector_map) where sector_map maps an S&P ticker to its sector ETF."""
+def _get_universe() -> tuple[list[str], dict[str, str], set[str]]:
+    """Return (tickers, sector_map, sleeve_set) where sector_map maps an S&P ticker to its
+    sector ETF, and sleeve_set is the ADR + Russell tickers (origin tag for the cohort quota)."""
     tickers: list[str] = []
     sector_map: dict[str, str] = {}
 
@@ -141,15 +142,18 @@ def _get_universe() -> tuple[list[str], dict[str, str]]:
     # Both flow through the SAME funnel (ADV floor, 5-criterion score, all lanes). ADRs/small-caps
     # have no GICS→sector-ETF mapping, which is None-safe downstream (sector-relative check skipped).
     ucfg = _load_universe_cfg()
+    sleeve_tickers: list[str] = []
     adr_sleeve = ucfg.get("adr_sleeve") or []
     if adr_sleeve:
-        tickers.extend(str(t).strip().upper() for t in adr_sleeve if str(t).strip())
+        sleeve_tickers.extend(str(t).strip().upper() for t in adr_sleeve if str(t).strip())
         print(f"[prescreener] ADR sleeve: +{len(adr_sleeve)} tickers", file=sys.stderr)
     if ucfg.get("include_russell"):
-        tickers.extend(_russell_subset(int(ucfg.get("russell_top_n") or 300)))
+        sleeve_tickers.extend(_russell_subset(int(ucfg.get("russell_top_n") or 300)))
+    tickers.extend(sleeve_tickers)
 
     cleaned = [t.replace(".", "-") for t in tickers]
-    return list(dict.fromkeys(cleaned)), sector_map
+    sleeve_set = {t.replace(".", "-") for t in sleeve_tickers}
+    return list(dict.fromkeys(cleaned)), sector_map, sleeve_set
 
 
 def _get_sector_context(etfs: set[str]) -> dict[str, float]:
@@ -350,11 +354,13 @@ def _factor_warnings(candidates: list[dict], tags: dict[str, list[str]]) -> list
     return warnings
 
 
-def screen_universe(top_n: int = TOP_N) -> tuple[list[dict], dict]:
+def screen_universe(top_n: int = TOP_N, sleeve_top_n: int = 0) -> tuple[list[dict], dict]:
     """Scan the full universe and return (top candidates, spy_ctx). Saves to CANDIDATES_FILE.
-    `top_n` caps the cohort handed to the LLM stage (callers pass the configured/override size)."""
+    `top_n` caps the INDEX (S&P/NDX) cohort handed to the LLM stage; `sleeve_top_n` reserves
+    additional slots for ADR/Russell sleeve names so they augment rather than displace the index
+    cohort (callers pass the configured/override sizes)."""
     spy_ctx = _get_spy_context()
-    universe, sector_map = _get_universe()
+    universe, sector_map, sleeve_set = _get_universe()
     sector_ctx = _get_sector_context(set(sector_map.values()))
     print(f"[prescreener] scanning {len(universe)} tickers…", file=sys.stderr)
 
@@ -379,6 +385,8 @@ def screen_universe(top_n: int = TOP_N) -> tuple[list[dict], dict]:
             if i % 100 == 0:
                 print(f"[prescreener] {i}/{len(universe)} fetched", file=sys.stderr)
 
+    for r in results:
+        r["is_sleeve"] = r["ticker"] in sleeve_set
     results.sort(key=lambda x: (-x["score"], x["pct_off_52w_high"]))
     # Markup-pullback candidates bypass the MIN_SCORE accumulation-shape gate, but are capped and
     # ranked by QUALITY — quietest rally first (largest effort-filter margin), then most bars
@@ -400,7 +408,17 @@ def screen_universe(top_n: int = TOP_N) -> tuple[list[dict], dict]:
     ea_cands = ea_cands[:EA_PRESCREEN_CAP]
     acc_cands = [r for r in results if r.get("lane") == "accumulation" and r["score"] >= MIN_SCORE]
     acc_cands.sort(key=lambda x: (-x["score"], x["pct_off_52w_high"]))
-    top = (mp_cands + ea_cands + acc_cands)[:top_n]
+    # Cohort quota: index-origin names fill up to `top_n` slots; sleeve names (ADR/Russell) get
+    # their OWN `sleeve_top_n` reserved slots so they augment, never displace, the index cohort.
+    # Both buckets preserve lane priority (markup-pullback → early-accum → accumulation).
+    ordered = mp_cands + ea_cands + acc_cands
+    index_top = [r for r in ordered if not r.get("is_sleeve")][:top_n]
+    sleeve_top = [r for r in ordered if r.get("is_sleeve")][:sleeve_top_n] if sleeve_top_n else []
+    top = index_top + sleeve_top
+    if sleeve_top:
+        print(f"[prescreener] sleeve cohort: admitting {len(sleeve_top)} of "
+              f"{sum(1 for r in ordered if r.get('is_sleeve'))} sleeve candidate(s): "
+              f"{', '.join(r['ticker'] for r in sleeve_top)}", file=sys.stderr)
     if mp_total:
         print(f"[prescreener] {mp_total} markup-pullback candidate(s); admitting top {len(mp_cands)}: "
               f"{', '.join(r['ticker'] for r in mp_cands)}", file=sys.stderr)

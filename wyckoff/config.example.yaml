@@ -34,6 +34,10 @@ entry:
   # Lowered from the prescreener's 30 to ease the per-run Claude load. Pass `entry.py --cohort N`
   # on demand to override (lower = cheaper/faster, fewer picks; raise for a fuller sweep).
   cohort_size: 20
+  # Sleeve cohort (ADR + Russell sleeves) gets its OWN reserved slots on top of the index cohort,
+  # so a noisy sleeve name (scored on 4 of 5 criteria — no sector map) can never displace a
+  # cleaner S&P/NDX name. 20 index + 10 sleeve = 30 LLM reads. Set 0 to disable the sleeve cohort.
+  sleeve_cohort_size: 10
 
 reddit:
   pages: 2                      # ApeWisdom pages to fetch (25 tickers per page)

@@ -365,17 +365,20 @@ def _start_watchdog(seconds: int) -> None:
     threading.Thread(target=_kill, daemon=True).start()
 
 
-def _resolve_cohort(override: int | None) -> int:
-    """Cohort = how many top prescreen survivors get the LLM read. `--cohort` wins; else
-    config.yaml entry.cohort_size; else the prescreener default (TOP_N)."""
-    if override:
-        return override
+def _resolve_cohort(override: int | None) -> tuple[int, int]:
+    """Return (index_cohort, sleeve_cohort) — how many top prescreen survivors get the LLM read.
+    Index: `--cohort` wins; else config.yaml entry.cohort_size; else the prescreener default
+    (TOP_N). Sleeve (ADR/Russell) reserves its own slots from entry.sleeve_cohort_size (0 if
+    unset), augmenting rather than displacing the index cohort."""
     try:
         import yaml
         cfg = yaml.safe_load((Path(__file__).parent.parent / "config.yaml").read_text()) or {}
-        return int((cfg.get("entry") or {}).get("cohort_size") or TOP_N)
+        entry_cfg = cfg.get("entry") or {}
+        index_n = override or int(entry_cfg.get("cohort_size") or TOP_N)
+        sleeve_n = int(entry_cfg.get("sleeve_cohort_size") or 0)
+        return index_n, sleeve_n
     except Exception:
-        return TOP_N
+        return (override or TOP_N), 0
 
 
 def run(dry_run: bool = False, cohort: int | None = None) -> None:
@@ -386,11 +389,11 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
         _start_watchdog(MAX_RUNTIME_SEC)
     date_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     factor_tags = _load_factor_tags()
-    cohort_n = _resolve_cohort(cohort)
+    cohort_n, sleeve_n = _resolve_cohort(cohort)
 
     # Stage 1: quantitative prescreen
-    print(f"[weekly] running prescreener... (cohort cap {cohort_n})", file=sys.stderr)
-    candidates, spy_ctx = screen_universe(top_n=cohort_n)
+    print(f"[weekly] running prescreener... (cohort cap {cohort_n} index + {sleeve_n} sleeve)", file=sys.stderr)
+    candidates, spy_ctx = screen_universe(top_n=cohort_n, sleeve_top_n=sleeve_n)
     print(f"[weekly] {len(candidates)} candidates from prescreen", file=sys.stderr)
 
     # Stage 2: drop candidates reporting earnings within 14 days (signal unreliable across earnings)
@@ -507,8 +510,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Print digest instead of sending")
     parser.add_argument("--cohort", type=int, default=None,
-                        help="How many top prescreen survivors to LLM-analyze "
-                             "(overrides config entry.cohort_size; default 30). Lower = cheaper/faster.")
+                        help="How many top INDEX prescreen survivors to LLM-analyze "
+                             "(overrides config entry.cohort_size; the sleeve cohort from "
+                             "entry.sleeve_cohort_size is added on top). Lower = cheaper/faster.")
     args = parser.parse_args()
     try:
         run(dry_run=args.dry_run, cohort=args.cohort)
