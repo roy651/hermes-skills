@@ -1,0 +1,3 @@
+[submodule "finance-assistant/importer/moneyman-repo"]
+	path = finance-assistant/importer/moneyman-repo
+	url = https://github.com/daniel-hauser/moneyman
