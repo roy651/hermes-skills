@@ -40,7 +40,8 @@ RUSSELL_FILE = Path(__file__).parent.parent / "data" / "russell_universe.txt"
 TOP_N = 30
 MIN_SCORE = 3
 MP_PRESCREEN_CAP = 10  # max markup-pullback candidates admitted, so they don't crowd out accumulation
-EA_PRESCREEN_CAP = 8   # max early-accumulation (markdown→base transition) candidates admitted
+EA_PRESCREEN_CAP = 3   # max early-accumulation candidates — the weakest lane (never STRONG, scores 0
+                       # on the accumulation card), so it's a small garnish, not a budget sink
 # The funnel targets BOTH accumulation AND markup-pullback (e.g. a leader basing on an LPS).
 # The regime-aware off-high floor already requires the name to have pulled back, so the
 # rel-perf CAP only needs to exclude *parabolic* momentum still ripping at the highs — hence
@@ -332,8 +333,7 @@ def _fetch_and_score(
             "mp_depth_pct": round((mp["peak"] - price) / mp["peak"] * 100, 1) if mp else None,
             "mp_effort_ratio": mp["effort_ratio"] if mp else None,
             "mp_bars_holding": mp["bars_holding"] if mp else None,
-            "ea_st_date": ea["st"]["date"] if ea else None,
-            "ea_sc_low": ea["sc"]["low"] if ea else None,
+            "ea_st_date": ea["st"]["date"] if ea else None,   # used for the freshest-ST prescreen sort
         }
     except Exception as e:
         print(f"[prescreener] skip {ticker}: {e}", file=sys.stderr)
@@ -352,6 +352,18 @@ def _factor_warnings(candidates: list[dict], tags: dict[str, list[str]]) -> list
         if len(tickers) >= 3:
             warnings.append(f"⚠️ Factor concentration: <b>{tag}</b> — {', '.join(tickers)}")
     return warnings
+
+
+def _assemble_cohort(mp: list[dict], ea: list[dict], acc: list[dict], n: int) -> list[dict]:
+    """Fill up to `n` LLM slots for one origin (index or sleeve). The MIN_SCORE-gated accumulation
+    lane keeps the MAJORITY; the two bypass lanes (markup-pullback + early-accum, which skip the
+    MIN_SCORE gate) share only a bounded minority (≤ half of `n`) so they augment — never crowd out —
+    the core scored lane. Within the bypass share, markup-pullback (a confirmed breakout) outranks
+    early-accum (base forming). Inputs are pre-sorted by their own quality keys."""
+    if n <= 0:
+        return []
+    bypass = (mp + ea)[: n // 2]
+    return (acc[: n - len(bypass)] + bypass)[:n]
 
 
 def screen_universe(top_n: int = TOP_N, sleeve_top_n: int = 0) -> tuple[list[dict], dict]:
@@ -408,17 +420,22 @@ def screen_universe(top_n: int = TOP_N, sleeve_top_n: int = 0) -> tuple[list[dic
     ea_cands = ea_cands[:EA_PRESCREEN_CAP]
     acc_cands = [r for r in results if r.get("lane") == "accumulation" and r["score"] >= MIN_SCORE]
     acc_cands.sort(key=lambda x: (-x["score"], x["pct_off_52w_high"]))
-    # Cohort quota: index-origin names fill up to `top_n` slots; sleeve names (ADR/Russell) get
-    # their OWN `sleeve_top_n` reserved slots so they augment, never displace, the index cohort.
-    # Both buckets preserve lane priority (markup-pullback → early-accum → accumulation).
-    ordered = mp_cands + ea_cands + acc_cands
-    index_top = [r for r in ordered if not r.get("is_sleeve")][:top_n]
-    sleeve_top = [r for r in ordered if r.get("is_sleeve")][:sleeve_top_n] if sleeve_top_n else []
+    # Cohort quota. Two independent budgets: index-origin names fill up to `top_n`; sleeve names
+    # (ADR/Russell) get their OWN `sleeve_top_n` reserved slots so they augment, never displace, the
+    # index cohort. Inside EACH budget _assemble_cohort keeps the MIN_SCORE-gated accumulation lane
+    # in the majority and caps the bypass lanes (which skip MIN_SCORE) at half — so neither a wall of
+    # markup-pullbacks nor a batch of low-score sleeve names can starve the core scored lane.
+    def _by_origin(cands, sleeve):
+        return [r for r in cands if bool(r.get("is_sleeve")) == sleeve]
+    index_top = _assemble_cohort(_by_origin(mp_cands, False), _by_origin(ea_cands, False),
+                                 _by_origin(acc_cands, False), top_n)
+    sleeve_top = _assemble_cohort(_by_origin(mp_cands, True), _by_origin(ea_cands, True),
+                                  _by_origin(acc_cands, True), sleeve_top_n) if sleeve_top_n else []
     top = index_top + sleeve_top
     if sleeve_top:
-        print(f"[prescreener] sleeve cohort: admitting {len(sleeve_top)} of "
-              f"{sum(1 for r in ordered if r.get('is_sleeve'))} sleeve candidate(s): "
-              f"{', '.join(r['ticker'] for r in sleeve_top)}", file=sys.stderr)
+        sleeve_pool = sum(1 for r in (mp_cands + ea_cands + acc_cands) if r.get("is_sleeve"))
+        print(f"[prescreener] sleeve cohort: admitting {len(sleeve_top)} of {sleeve_pool} "
+              f"sleeve candidate(s): {', '.join(r['ticker'] for r in sleeve_top)}", file=sys.stderr)
     if mp_total:
         print(f"[prescreener] {mp_total} markup-pullback candidate(s); admitting top {len(mp_cands)}: "
               f"{', '.join(r['ticker'] for r in mp_cands)}", file=sys.stderr)

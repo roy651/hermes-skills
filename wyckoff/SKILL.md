@@ -96,7 +96,7 @@ Key events detected recently. Common signals:
 
 ## Hermes Tool: Run Weekly Entry Funnel On-Demand
 
-The weekly funnel is the main entry-signal generator: prescreen ~600 tickers → Wyckoff LLM on survivors → news-validate the top cut → up to 5 tiered picks (STRONG / BORDERLINE).
+The weekly funnel is the main entry-signal generator: prescreen the universe → Wyckoff LLM on survivors → tier a **news-less** shortlist → verify news on the shortlist → tiered picks. Four tiers: 🟢 **STRONG** (confirmed accumulation SOS/LPS), 🟣 **MARKUP-PULLBACK** (leader pullback, confirm before acting), 🔵 **EARLY-ACCUM** (base forming — watch only, never an entry), 🟡 **BORDERLINE** (near-miss). STRONG is decided on Wyckoff structure alone; news is a downstream verify/veto lens (adverse news *demotes* STRONG→BORDERLINE, absence never blocks).
 
 ```bash
 cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/entry.py >> logs/weekly.log 2>&1
@@ -115,6 +115,19 @@ Examples of what the user might say → what to run:
 - "what are this week's buys" → `entry.py`
 - "run a quick/light entry scan" / "do a smaller scan, ~15 names" → `entry.py --cohort 15`
 
+### Prescreen lanes & the universe sleeves
+
+The prescreener admits candidates through parallel **lanes**, each capped so no single lane starves the core one:
+- **accumulation** (the core, MIN_SCORE-gated 5-criterion scorecard) keeps the **majority** of every cohort.
+- **markup-pullback** — a confirmed breakout that pulled back and holds above the breakout on contracting volume (bypasses the off-high floor).
+- **early-accum** — the markdown→base *transition*: a Selling-Climax → Automatic-Rally → Secondary-Test stopping sequence that the accumulation lane structurally excludes (a basing name is below its MA200 and a big underperformer). It scores 0 on the accumulation card and can **never** be STRONG (no confirmed SOS/LPS); it surfaces to the 🔵 EARLY-ACCUM **watch tier** with an explicit invalidation price (a close below the SC low voids the base). The detector enforces that invalidation — a base whose price has since closed below the SC low is discarded.
+
+The bypass lanes (markup-pullback + early-accum) together take at most **half** of each cohort; accumulation keeps the rest.
+
+**Universe sleeves** (optional, `config.yaml` `universe:` — gitignored PII) widen the aperture beyond the default S&P 500 + NASDAQ 100 + sector ETFs. Both flow through the SAME funnel and get their **own** reserved `entry.sleeve_cohort_size` LLM slots (default 10) so they augment, never displace, the index cohort:
+- `adr_sleeve: [...]` — curated liquid non-index/ADR names (e.g. BABA-class). No sector-ETF map (None-safe). Cheap.
+- `include_russell: true` + `russell_top_n` — opt-in small-cap sleeve read from `data/russell_universe.txt` (gitignored, most-liquid-first, pre-gated to `russell_top_n`). **Adds Yahoo fetch load** (the universe roughly doubles); the $20M ADV floor + 5-criterion score still do the real cull. Off by default.
+
 ## Hermes Tool: Run Daily Exit-Watch On-Demand
 
 The daily job reviews **held positions only** for distribution/exit risk (default `--section portfolio`, exit-tuned prompt).
@@ -129,12 +142,16 @@ cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/exit.py --section all
 
 # Preview without sending:
 cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/exit.py --dry-run
+
+# Opt-in structure/Elliott-Fibonacci confluence lens on the LLM read (reply-to-verify only):
+cd ~/.hermes/skills/wyckoff && .venv/bin/python scripts/exit.py --section watchlist --ew-lens --dry-run
 ```
 
 Examples of what the user might say → what to run:
 - "analyze my portfolio" / "תנתח את הפורטפוליו" → `exit.py` (portfolio exit-watch)
 - "any exit signals?" / "יש סימני מכירה?" → `exit.py`
 - "check the watchlist" / "תבדוק את רשימת המעקב" → `exit.py --section watchlist`
+- "check the fib/structure on X" / "verify with Elliott/fibs" → `exit.py --section watchlist --ew-lens` (injects a **deterministic** Fibonacci grid into the read as **confluence only** — it can confirm or temper the Wyckoff verdict, never trigger one, and every read must cite an invalidation price). Opt-in: **off** on the scheduled scan; costs extra credits + one extra data fetch per name — use it on a manual reply-to-verify, not the cron.
 
 ## Hermes Tool: Raw Candidate Scan On-Demand
 
@@ -526,7 +543,7 @@ wyckoff **runs from the git checkout** (`~/.hermes/skills/wyckoff` is a symlink 
 - Prescreener: pure Python/math, no LLM — fetches concurrently (10 workers), takes ~2-3 min for ~600 tickers. Filters: regime-aware off-high floor, two-sided rel-perf vs SPY, sector-relative strength, liquidity (ADV), 5 accumulation-shape criteria
 - LLM analysis: via the local claude-proxy on 120 days OHLCV (entry vs exit prompt) — not algorithmic signal detection
 - News/fundamentals: Finnhub (earnings calendar, market cap, company news, analyst consensus) + local claude-proxy reasoning
-- Event detection: `events.py` programmatically detects the trading range, Spring, SOS, and LPS and feeds them to the LLM as ground truth (so criteria 3–8 aren't eyeballed). It also has a **markup-pullback lane** (a confirmed breakout that pulled back and holds above the breakout level on contracting volume) — these candidates bypass the off-high floor, so the funnel can surface leaders near their highs (digest label: `Markup-pullback LPS …`). Calibrate/inspect with `python scripts/events.py TICKER [days]`; ground-truth tests in `tests/validate_events.py` (synthetic) and `tests/validate_events_tier2.py` (real snapshots). Thresholds in `references/wyckoff-events-glossary.md`
+- Event detection: `events.py` programmatically detects the trading range, Spring, SOS, and LPS and feeds them to the LLM as ground truth (so criteria 3–8 aren't eyeballed). It also has a **markup-pullback lane** (a confirmed breakout that pulled back and holds above the breakout level on contracting volume — bypasses the off-high floor, digest label `Markup-pullback LPS …`) and an **early-accumulation lane** (`detect_early_accumulation`: a Selling-Climax → Automatic-Rally → Secondary-Test stopping sequence — the AR is the *first* rally leg, not the global post-SC high, and a base is discarded once price closes back below the SC low; digest label `Early-accum SC … → AR → ST …`). Calibrate/inspect with `python scripts/events.py TICKER [days]`; ground-truth tests in `tests/validate_events.py` + `tests/validate_events_tier2.py` (range/Spring/SOS/LPS) and `tests/test_early_accum.py` (the early-accum lane). Thresholds in `references/wyckoff-events-glossary.md`
 - Wyckoff is a swing/position methodology; daily candles are the appropriate timeframe
 - Treat recommendations as a second opinion, not automated trading signals
 - Prescreener candidates in `data/watchlist_candidates.json` are suggestions only; you decide what goes in `config.yaml`

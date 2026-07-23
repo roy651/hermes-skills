@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sunday Wyckoff weekly run: prescreen → LLM Wyckoff on candidates → tier a NEWS-LESS shortlist
-(accumulation STRONG / MARKUP-PULLBACK / BORDERLINE) → verify news on the shortlisted picks
-(adverse news demotes STRONG → BORDERLINE; absence never blocks) → emit to Telegram.
+(accumulation STRONG / MARKUP-PULLBACK / EARLY-ACCUM watch / BORDERLINE) → verify news on the
+shortlisted picks (adverse news demotes STRONG → BORDERLINE; absence never blocks) → emit to Telegram.
 
 The weekly digest IS the entry signal. Portfolio exit-watch is the separate daily job.
 """
@@ -37,6 +37,7 @@ TZ = ZoneInfo("Asia/Jerusalem")
 LOOKBACK_DAYS = 120
 
 MAX_PICKS = 5               # total picks emitted (STRONG + BORDERLINE)
+EARLY_ACCUM_MAX = 3         # base-forming (early-accum) watch names shown in their own tier
 NEWS_CUT = 8                # cap on news calls; verify only the top-N shortlisted picks (saves API calls)
 ANALYZE_WORKERS = 4         # concurrent LLM analyses — keep low; the local proxy chokes at 10
 STRONG_MIN_CRITERIA = 7     # Gate B threshold
@@ -105,6 +106,10 @@ def _analyze_candidate(c: dict, spy_ctx: dict) -> dict:
         "has_event": has_event,
         # entry came from the markup-pullback lane (not a range SOS/LPS) → confirm-before-acting tier
         "is_markup": ev["markup_pullback"] is not None and not (ev["sos"] or ev["lps"]),
+        # early-accumulation base-forming watch (never a confirmed entry) → its own watch tier;
+        # ea_sc_low is the stated invalidation price (a close below it voids the base)
+        "is_early_accum": ev["early_accum"] is not None,
+        "ea_sc_low": ev["early_accum"]["sc"]["low"] if ev["early_accum"] else None,
         "news_info": None,
     }
 
@@ -263,7 +268,9 @@ def _build_weekly_digest(
     errors: list[str],
     reddit_data: dict | None = None,
     rd_threshold: float = 2.0,
+    early_accum: list[dict] | None = None,
 ) -> str:
+    early_accum = early_accum or []
     spy_off = spy_ctx.get("spy_pct_off_high", 0) * 100
     r6 = spy_ctx.get("spy_ret_6m", 0) * 100
     r12 = spy_ctx.get("spy_ret_12m", 0) * 100
@@ -305,6 +312,24 @@ def _build_weekly_digest(
         lines.append("<i>None.</i>")
         lines.append("")
 
+    lines.append(f"<b>— EARLY-ACCUM · base forming, watch only ({len(early_accum)}) —</b>")
+    if early_accum:
+        lines.append("<i>Stopping action (Selling-Climax → Automatic-Rally → Secondary-Test) — supply "
+                     "drying up, NOT a confirmed entry. Watch only; the base is void on a close below "
+                     "the SC low shown. Wait for a Spring/SOS before acting.</i>")
+        for b in early_accum:
+            lines.extend(_pick_block(b, "🔵", with_size=False))
+            if b.get("ea_sc_low") is not None:
+                sym = {"USD": "$", "ILS": "₪"}.get(b["currency"], b["currency"] + " ")
+                lines.append(f"  <i>Invalidation: close below SC low {sym}{b['ea_sc_low']:.2f}</i>")
+            ann = reddit.annotation_line(reddit_data.get(b["ticker"]) if reddit_data else None, rd_threshold)
+            if ann:
+                lines.append(ann)
+            lines.append("")
+    else:
+        lines.append("<i>None.</i>")
+        lines.append("")
+
     lines.append(f"<b>— BORDERLINE ({len(borderline)}) —</b>")
     if borderline:
         for b in borderline:
@@ -320,7 +345,7 @@ def _build_weekly_digest(
         lines.append("<i>None.</i>")
         lines.append("")
 
-    warnings = _factor_warnings(strong + markup + borderline, factor_tags)
+    warnings = _factor_warnings(strong + markup + early_accum + borderline, factor_tags)
     if warnings:
         lines.extend(warnings)
         lines.append("")
@@ -427,6 +452,16 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
     strong = sorted([b for b in gated if not b.get("is_markup")], key=_composite, reverse=True)[:MAX_PICKS]
     markup = sorted([b for b in gated if b.get("is_markup")], key=_composite, reverse=True)[:MAX_PICKS]
     picked = {b["ticker"] for b in strong + markup}
+    # Early-accumulation watch tier: base-forming names (an SC→AR→ST stopping sequence) can NEVER
+    # gate STRONG (no confirmed SOS/LPS) and score ~0 on the accumulation card, so by composite they
+    # would be truncated out of the picks entirely — wasting the read the lane paid for. Give them
+    # their OWN small watch tier so the deliberate exploratory output actually surfaces. Watch-only,
+    # not an entry; each carries an explicit invalidation price (a close below the SC low).
+    early_accum = sorted(
+        [b for b in bundles if b.get("is_early_accum") and b["ticker"] not in picked],
+        key=_composite, reverse=True,
+    )[:EARLY_ACCUM_MAX]
+    picked |= {b["ticker"] for b in early_accum}
     borderline = sorted(
         [b for b in bundles if b["ticker"] not in picked], key=_composite, reverse=True
     )[: max(0, MAX_PICKS - len(strong) - len(markup))]
@@ -434,8 +469,8 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
     # Stage 5: verify news on the SHORTLIST only (the emitted picks, composite-ordered, capped at
     # NEWS_CUT) — not a pre-gate composite cut. News is a verify/veto lens: adverse news (clean=False)
     # DEMOTES a STRONG accumulation pick to BORDERLINE (kept visible, flagged); absence of news never
-    # blocks a pick. Markup/borderline already carry a manual-confirm caveat, so news there annotates.
-    shortlist = sorted(strong + markup + borderline, key=_composite, reverse=True)[:NEWS_CUT]
+    # blocks a pick. Markup/borderline/early-accum already carry a manual-confirm caveat → news annotates.
+    shortlist = sorted(strong + markup + early_accum + borderline, key=_composite, reverse=True)[:NEWS_CUT]
     for b in shortlist:
         rec = b["result"].get("recommendation", "")
         if rec in NEWS_RECS:
@@ -453,7 +488,7 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
                   f"{b['news_info'].get('flag') or 'flagged'}", file=sys.stderr)
 
     # Enrich the final picks with market cap (cheap — only a few lookups)
-    for b in strong + markup + borderline:
+    for b in strong + markup + early_accum + borderline:
         try:
             b["market_cap"] = finnhub.market_cap(b["ticker"])
         except Exception as e:
@@ -478,7 +513,7 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
 
     msg = _build_weekly_digest(
         spy_ctx, strong, markup, borderline, factor_tags, date_str, errors,
-        reddit_data=reddit_data, rd_threshold=rd_threshold,
+        reddit_data=reddit_data, rd_threshold=rd_threshold, early_accum=early_accum,
     )
     if dry_run:
         print(msg)
@@ -501,7 +536,8 @@ def run(dry_run: bool = False, cohort: int | None = None) -> None:
 
     print(
         f"[weekly] {'(dry-run) ' if dry_run else ''}done — "
-        f"{len(strong)} STRONG, {len(markup)} MARKUP-PULLBACK, {len(borderline)} BORDERLINE",
+        f"{len(strong)} STRONG, {len(markup)} MARKUP-PULLBACK, "
+        f"{len(early_accum)} EARLY-ACCUM, {len(borderline)} BORDERLINE",
         file=sys.stderr,
     )
 

@@ -183,9 +183,11 @@ def detect_early_accumulation(df: pd.DataFrame) -> dict | None:
       low on LIGHTER volume and HOLDS above it (supply drying up).
 
     This is stopping ACTION — supply exhausting — NOT a confirmed entry: it is a base-FORMING
-    watch (confluence only, surfaces to BORDERLINE for manual verify), invalidated by a close
-    back below the SC low. Deliberately conservative; the SC→AR→ST completion is itself the
-    falling-knife guard. Returns the FRESHEST completed sequence (latest ST), or None."""
+    watch (confluence only, surfaces to a dedicated watch tier for manual verify), invalidated by
+    a close back below the SC low — which this detector ENFORCES: a sequence whose price has since
+    closed below the SC low is discarded, not returned. Deliberately conservative; the SC→AR→ST
+    completion plus the still-holding guard is the falling-knife screen. Returns the FRESHEST
+    still-valid sequence (latest ST), or None."""
     n = len(df)
     if n < 40:
         return None
@@ -223,19 +225,31 @@ def detect_early_accumulation(df: pd.DataFrame) -> dict | None:
         if prior_high < sc_low * (1 + EA_MARKDOWN_MIN):
             continue                                    # no real markdown into the climax
 
-        # Automatic rally — the highest high after the SC must clear the SC low by EA_AR_MIN
-        ar_i = sc + 1 + int(high[sc + 1:n].argmax())
-        if float(high[ar_i]) < sc_low * (1 + EA_AR_MIN):
-            continue
-
-        # Secondary test — first bar after the AR that returns near the SC low on lighter
-        # volume than the SC and holds (may dip a touch below, but closes back above the SC low)
+        # Automatic Rally + Secondary Test. The AR is the FIRST rally leg — the running high over
+        # the (sc, st) window — NOT the global post-SC maximum. A global argmax let a later markup
+        # retro-move the AR forward past a valid test, which both suppressed names that had begun to
+        # recover and made the read flicker run-to-run (fixed). ST = first bar after a genuine AR
+        # that returns near the SC low on lighter volume and closes back above it.
         sc_vol = float(vol[sc])
-        for st in range(ar_i + 1, n):
+        ar_high = 0.0
+        ar_i = sc + 1
+        for st in range(sc + 2, n):
+            rally_bar = st - 1                           # newest bar now inside the window (sc+1 … st-1)
+            if high[rally_bar] > ar_high:
+                ar_high = float(high[rally_bar])
+                ar_i = rally_bar
+            if ar_high < sc_low * (1 + EA_AR_MIN):
+                continue                                 # no genuine automatic rally yet
             if (low[st] <= sc_low * (1 + EA_ST_NEAR)
                     and vol[st] < EA_ST_VOL_X * sc_vol
                     and low[st] >= sc_low * (1 - EA_ST_HOLD_TOL)
                     and close[st] > sc_low):
+                # Invalidation guard (the stated contract): void the base once price has CLOSED
+                # back below the SC low after the test — otherwise the lane readmits the very
+                # falling knife the SC→AR→ST sequence is meant to screen out.
+                post = close[st + 1:n]
+                if len(post) and float(post.min()) < sc_low:
+                    break                                # broke down after the test — discard this SC
                 seq = {
                     "sc": {"date": str(idx[sc]), "low": round(sc_low, 2),
                            "vol_x": round(vol[sc] / v20[sc], 1)},
