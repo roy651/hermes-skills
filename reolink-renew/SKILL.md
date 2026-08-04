@@ -1,160 +1,174 @@
 ---
 name: reolink-renew
-description: Check and renew the free Reolink Cloud subscription (Basic Plan — 1GB/7-day/1-cam). Runs a direct API flow against apis.reolink.com — no browser required. After each run, maintains a rolling buffer of 3 forward monthly reminders (topping the queue back up to 3 every run) so a single missed run self-heals instead of silently lapsing. Renews only when the plan is expired or within 2 days of expiry; buffered reminders that fire early are harmless no-ops. Sends a notification on every run, and a loud high-priority alert on any failure.
-version: 3.1.0
+description: Check and renew the free Reolink Cloud subscription (Basic Plan — 1GB/7-day/1-cam). Runs a direct API flow against apis.reolink.com. The account now enforces email MFA, so renewal is a human-in-the-loop flow: it pings you when renewal is due, waits (nudging every 2h) until you say "ready", logs in (which emails an 8-digit code), asks you to paste the code, then renews. A ~30-day "trusted token" is cached so most months renew silently with no code at all. Maintains a rolling buffer of 3 forward monthly reminders so a missed run self-heals.
+version: 4.0.0
 author: Hermes Agent
 license: MIT
 metadata:
   hermes:
-    tags: [reolink, cloud, subscription, renewal, automation, monthly]
-    related_skills: []
+    tags: [reolink, cloud, subscription, renewal, automation, monthly, mfa, human-in-the-loop]
+    related_skills: [reminders]
 ---
 
 # Reolink Cloud Subscription Renewal
 
-Automates renewal of the free Reolink Cloud Basic Plan (1GB storage, 7-day retention, 1 camera, $0). The plan expires monthly and requires manual re-activation — this skill handles that automatically.
+Automates renewal of the free Reolink Cloud Basic Plan (1GB storage, 7-day retention, 1 camera, $0). The plan expires monthly and must be re-activated.
+
+**The account enforces email MFA (8-digit code).** A fully-headless login is impossible, so renewal is a **human-in-the-loop state machine**: the skill pings you when renewal is due, waits until you're ready, triggers the code email, and completes login with the code you paste back. A **~30-day trusted token** is cached after each MFA login, so in most months the next run authenticates silently and **no code is needed at all**.
 
 ## Triggers
 
 Run this skill when:
-- User says "renew reolink cloud", "check reolink subscription", "is my reolink cloud active"
-- A scheduled reminder fires (one of the rolling 3-reminder buffer — see Scheduling below)
+- A scheduled `reolink-renew-*` reminder fires (the monthly buffer — see Scheduling).
+- The user replies **"ready"**, **"stop"**, or **pastes an 8-digit code** while a renewal is mid-flow.
+- The user says "renew reolink", "check reolink subscription", "is my reolink cloud active".
 
-## How to Invoke
+## How to invoke the script
 
-The skill runs from the git checkout (there is **no** `~/.hermes/skills/reolink-renew` copy on this box — `run.sh` is relocatable via `dirname "$0"`):
+Runs from the git checkout (no `~/.hermes/skills/reolink-renew` copy; `run.sh` is relocatable):
 
 ```bash
-bash ~/hermes-skills/reolink-renew/scripts/run.sh
+bash ~/hermes-skills/reolink-renew/scripts/run.sh <mode>
 ```
 
-Flags:
-- `--check-only` — report status without renewing (a true no-op — the **only** safe way to inspect)
-- `--verbose`    — print API debug info to stderr
+| Mode | What it does | Emails a code? |
+|------|--------------|----------------|
+| `--check-only` | Try the cached trusted token; report status. Never renews. | **No** |
+| `--login-init` (or no flag) | Try trusted token → renew if due. If MFA is needed, **email the code** and wait. | Only if trust expired |
+| `--login-complete --code 12345678` | Submit the code, then renew if due. | No |
+| `--status` | Print the persisted flow state (no network). | No |
+| `--force` | (with init/complete) renew even if >2 days remain. | — |
 
-## Renewal Decision (check first, then renew only if needed)
-
-⚠️ **Renew-mode (`run.sh` with no flag) ALWAYS places a renewal order — even when the plan is currently active.** So never blindly renew from a buffered reminder, or you'll stack redundant orders. Always decide first:
-
-1. Run `run.sh --check-only` and read `STATUS` / `EXPIRY`.
-2. **Renew** (run `run.sh` with no flag) only if:
-   - `STATUS: expired`, **or**
-   - `STATUS: active` **and** `EXPIRY` is **≤ 2 days** away.
-3. Otherwise (active with more than 2 days left) → **do not renew**. This run is just a buffer heartbeat; go straight to topping up the schedule.
-
-This makes every buffered reminder idempotent: only the one that fires near expiry actually renews; the earlier buffer reminders are harmless no-ops.
-
-## Output Format
-
-The script prints structured lines to stdout. Parse these exactly:
+**Output** is machine-parseable `STATUS:` lines — parse these exactly:
 
 ```
-STATUS: active|renewed|expired|error
-EXPIRY: YYYY-MM-DD          (present on active/renewed/expired)
-STEP:   <step-name>          (present on error only)
-MESSAGE: <human description>
+STATUS: active | renewed | expired | code_sent | mfa_required | error
+EXPIRY: YYYY-MM-DD      (on active/renewed/expired)
+STEP:   <step>          (on error)
+MESSAGE: <text>
 ```
 
-## Notification (Mandatory After Every Run)
+## Renewal decision (built into the script)
 
-**You MUST send the user a message** after every execution of this skill, whether the run succeeds or fails. Include all the information below.
+The script only places an order when the plan is **expired or within 2 days of expiry**; otherwise it reports `active` and does nothing. So every buffered reminder is idempotent — an early one is a harmless no-op, only the one near expiry actually renews. You never need to gate this yourself (but `--force` overrides it).
 
-### On successful renewal (STATUS: renewed)
+---
 
+## The interactive flow (state machine)
+
+State is persisted in `data/flow.json` (`--status` prints it). Drive it as follows.
+
+### A) A monthly reminder fires (renewal is due)
+
+1. Run `run.sh --check-only`.
+2. Branch on `STATUS`:
+   - **`active`** with EXPIRY > ~2 days away → not actually due yet (early buffer slot). Report briefly, then **top up the buffer** (below) and stop.
+   - **`active`/`expired` and the trusted token worked** but you *are* within the window → run `run.sh` (login-init). It renews **silently** (no code). Go to **Success**.
+   - **`mfa_required`** → the trusted token has expired; a code is needed. **Do not send it yet.** Ping the user and wait:
+
+     > 🔔 Time to renew Reolink Cloud (expires {EXPIRY}). Ready to grab the email code?
+     > Reply **ready** and I'll trigger it, or **stop** to skip this cycle.
+
+     Set flow to *awaiting-ready*, schedule a **2-hour nudge** (below), and stop. **Do not proceed until the user replies.**
+
+### B) User replies "ready"
+
+1. Run `run.sh --login-init`. This emails an 8-digit code and returns `STATUS: code_sent` (or renews silently → **Success** if the trust token happens to still work).
+2. **Cancel the ready-nudge.** Ping the user and wait:
+
+   > 📧 I've triggered the login — Reolink just emailed you an 8-digit code (valid ~15 min).
+   > Paste it here and I'll finish the renewal. (Say **stop** to abort.)
+
+3. Set flow to *awaiting-code*, schedule a **2-hour code-nudge**, and stop.
+
+### C) User pastes an 8-digit code
+
+1. Run `run.sh --login-complete --code <the 8 digits>`.
+2. Branch:
+   - **`renewed`/`active`** → cancel any nudge. Go to **Success**.
+   - **`error`** with "rejected (wrong or expired)" → the code lapsed. Tell the user, then treat it like "ready" again (go to **B**) to send a fresh one.
+
+### D) User says "stop"
+
+Cancel all `reolink-renew-nudge*` reminders, leave the monthly buffer intact, confirm: "Okay — I'll leave Reolink for now and remind you at the next monthly check." (A skipped cycle self-heals: the plan simply lapses until the next reminder, then renews from expired.)
+
+### Success (STATUS: renewed or active after acting)
+
+1. Send the user the appropriate message (below).
+2. **Re-anchor + top up the buffer** off the fresh EXPIRY (below).
+3. Reset flow (the script already sets it to `idle`).
+
+---
+
+## Notifications (mandatory after every run)
+
+**On silent/successful renewal (`renewed`):**
 ```
-Reolink Cloud Renewed [SUCCESS]
+Reolink Cloud Renewed ✅
 
 Plan: Basic Plan (Monthly) — $0.00
-Storage: 1GB, Retention: 7 days, Cameras: 1
 New expiry: {EXPIRY}
-Country: Israel
-Device: will auto-associate if unlinked
-
-Next reminders: 3-deep buffer queued (~monthly), earliest {EXPIRY minus 1 day} at 09:00
-
-This was a free-tier renewal — no payment was charged.
+{"Renewed silently via the trusted token — no code needed." OR "Completed with your email code."}
+A rolling 3-reminder buffer is queued; next check ~{EXPIRY minus 2 days}.
 ```
 
-### On already-active (STATUS: active)
-
+**On already-active (`active`, nothing to do):**
 ```
-Reolink Cloud Status [ACTIVE]
-
-Your subscription is active until {EXPIRY}.
-No renewal needed right now.
-
-A rolling 3-reminder buffer is queued (~monthly), so renewal can't be silently missed.
+Reolink Cloud ✅ active until {EXPIRY}. No renewal needed. Buffer re-queued.
 ```
 
-### On expired, check-only mode (STATUS: expired)
-
+**On error (`error`) — loud, high-priority (prefix 🚨 REOLINK RENEWAL FAILED):**
 ```
-Reolink Cloud [EXPIRED]
-
-Your last subscription expired on {EXPIRY}.
-Run without --check-only to renew immediately.
-```
-
-### On error (STATUS: error)
-
-```
-Reolink Cloud [ERROR]
-
-Renewal failed at step: {STEP}
+🚨 REOLINK RENEWAL FAILED at step: {STEP}
 Details: {MESSAGE}
 
 Troubleshooting:
-- Check that credentials in the .env file are correct
-- Make sure 2FA is disabled on the account
-- If login fails, the server-side API may be blocked by Cloudflare
+- If STEP is login/mfa: the trusted token likely expired and the code was wrong/stale — reply "ready" to retry with a fresh code.
+- Check credentials in the .env file.
+- If the API rejects everything, Reolink may have changed the MFA flow (see Technical Notes).
 ```
+Never let an error shrink the buffer — still run the top-up so 3 reminders stay queued.
 
-## Scheduling: Rolling 3-Reminder Buffer
+## The 2-hour nudge (readiness / code prompts)
 
-**Mandatory on every run** — renewal, active heartbeat, **and even after an error** (see Failure Alerting). Instead of one fragile one-shot that dies silently if a single run is missed, there must always be **3 future one-time reminders queued**, spaced ~1 month apart. If any run is missed, the next buffered reminder catches it and self-heals; worst case is a bounded lapse, never an indefinite silent one.
+Use the `reminders` mechanism. When you need to nudge until the user acts:
+```bash
+hermes cron create "2h" \
+  "Your ENTIRE output is the reminder: ⏰ Reolink renewal is waiting on you — reply 'ready' (or 'stop'). Expiry {EXPIRY}." \
+  --name reolink-renew-nudge --deliver telegram --repeat 1
+```
+- Recreate it (same `--name`) each time you re-ping, so at most one nudge is pending.
+- **Cancel it** (`hermes cron list` → `hermes cron remove <id>`) the moment the user says "ready", pastes a code, or says "stop".
+- The nudge just re-pings; it does not itself run the script.
 
-### Reminder naming (makes top-up idempotent)
-Name each reminder `reolink-renew-YYYY-MM-DD` after the date it fires. A slot then either exists by name or it doesn't — so topping up never creates duplicates and needs no "remove-first" dance.
+## Scheduling: rolling 3-reminder buffer
 
-### Top-up algorithm (run this every time)
-1. `hermes cron list` → collect jobs whose name starts with `reolink-renew-` **and** whose next run is in the future. Sort by date. Let `N` = count, `L` = latest date.
-2. If `N == 0` (first run / empty buffer): create the earliest slot at **EXPIRY − 1 day**; that becomes `L`, `N = 1`.
-3. While `N < 3`: create one more one-time reminder at **`L` + 1 month** (09:00); that becomes the new `L`; `N += 1`. Repeat until `N == 3`.
-4. **Only add the missing later slots — never touch reminders that already exist.** Re-running just tops the queue back to 3 and stops. That's the whole idempotency guarantee.
-5. **Clean up stale slots:** delete any `reolink-renew-*` job whose date is already **in the past** (left over from an outage where reminders went past-due without firing). They're excluded from the future-count so they don't cause duplicates, but they clutter the list and can fire late on catch-up.
+Keep **3 future one-time reminders** queued, spaced ~1 month apart, each firing at **EXPIRY − 2 days** at 09:00 (2 days of lead for the human-in-the-loop exchange). If a run is missed, the next buffered reminder catches it.
 
-Each reminder is a **one-time** job (`--repeat 1`) that re-invokes this skill. When it fires it renews-if-needed (per the Renewal Decision) and re-runs this top-up, extending the buffer by one — so the 3-deep queue rolls forward on its own.
+### Naming (idempotent top-up)
+Name each `reolink-renew-YYYY-MM-DD` after its fire date. A slot then exists by name or not — topping up never duplicates.
 
-### Cron expression
-For target `YYYY-MM-DD` at 09:00 use `0 9 <D> <M> *`. Full command shape:
+### Top-up algorithm (run on every Success, and after errors)
+1. `hermes cron list` → future jobs named `reolink-renew-YYYY-MM-DD`. Sort by date; `N` = count, `L` = latest.
+2. If `N == 0`: create the lead at **EXPIRY − 2 days**; that's `L`, `N = 1`.
+3. While `N < 3`: create one at **`L` + 1 month** (09:00); it becomes `L`; `N += 1`.
+4. **Only add missing later slots — never touch existing ones.**
+5. Delete any `reolink-renew-*` slot whose date is already **past**.
+
+### Re-anchor the lead after every renewal
+The plan cycle is **stack-from-expiry** (confirmed 2026-08-04: renewing Aug-4 while expiry was Aug-5 produced Sep-5, i.e. expiry + 1 month, *not* reset-to-today). So expiry stays on a fixed day-of-month and the `+1 month` chain stays aligned. Still, after a renewal, recompute the lead = new EXPIRY − 2 days; if the earliest future slot differs by ≥1 day, delete **all** future `reolink-renew-*` and reseed from step 2.
+
+### Cron command shape
+For target `YYYY-MM-DD` at 09:00 use `0 9 <D> <M> *`:
 ```bash
 hermes cron create '0 9 <D> <M> *' \
-  'Run the reolink-renew skill: bash ~/hermes-skills/reolink-renew/scripts/run.sh' \
+  'Run the reolink-renew skill (monthly renewal — see SKILL.md interactive flow).' \
   --name reolink-renew-YYYY-MM-DD --skill reolink-renew --deliver origin --repeat 1
 ```
-Example (EXPIRY 2026-08-05) → the 3 buffer slots are:
-- `reolink-renew-2026-08-04` → `0 9 4 8 *`
-- `reolink-renew-2026-09-04` → `0 9 4 9 *`
-- `reolink-renew-2026-10-04` → `0 9 4 10 *`
-
-### Re-anchor the lead slot after every renewal (margin fix — do NOT skip)
-The `+1 month` chain keeps a fixed day-of-month, but the **lead** reminder erodes its 1-day safety margin if you trust the chain for the front of the queue: seed the lead at EXPIRY−1 (e.g. Aug-4 for expiry Aug-5), it fires and renews Aug-4 → new expiry Sep-4, but the next chained slot is Sep-4 = expiry *day*, not Sep-3 → the margin is gone and it converges to firing **on** expiry day. See `references/scheduling-semantics.md` for the full cycle-by-cycle trace.
-
-So after **every renewal** (STATUS: renewed), re-derive the lead from reality rather than the chain:
-- Recompute the target lead date = new `EXPIRY − 1 day`.
-- If the earliest future `reolink-renew-*` slot differs from it by **≥ 1 day**, delete **all** future `reolink-renew-*` jobs and reseed from step 2 off the fresh EXPIRY (the delete-first reseed is why this never creates a duplicate same-month slot). If it already matches, leave the buffer alone.
-
-This keeps the "renew a day early" margin every cycle. NB: whether the drift even occurs depends on Reolink's active-renewal semantics (stack-from-expiry vs reset-from-renewal-date) — an **open question**, see the reference. Re-anchoring is correct either way.
-
-## Failure Alerting (loud — mandatory)
-
-If STATUS is `error`, or the script cannot run at all:
-- **Alert loudly, not quietly.** Send the user a high-priority message prefixed `🚨 REOLINK RENEWAL FAILED` via Telegram (and a push notification if available). Include the failing `STEP`, `MESSAGE`, and the troubleshooting list from the error notification above. This must not be a silent log line — the user has to notice.
-- **Never let a failure shrink the buffer.** Still run the top-up so 3 future reminders stay queued — the next buffered reminder becomes the automatic retry. An error must never leave the queue empty.
 
 ## Credentials
 
-Required in environment or `~/.hermes/skills/reolink-renew/.env`:
+In `~/.hermes/.env` or the skill `.env`:
 ```
 REOLINK_EMAIL=your@email.com
 REOLINK_PASSWORD=your_password_here
@@ -162,11 +176,13 @@ REOLINK_PASSWORD=your_password_here
 
 ## Technical Notes
 
-- API base: `https://apis.reolink.com` (not cloud.reolink.com)
-- Auth: OAuth2 password grant — token valid 30 minutes, no browser/Cloudflare challenge needed
-- Plan is genuinely $0.00 — no payment flow, no payment method required
-- Cameras are in Israel, cloud storage is in Italy (`reolink_cloud_it` region)
-- Device re-association is handled automatically if the camera becomes unlinked on renewal
-- The `.venv` is created automatically on first run via `run.sh`
-- **Renewal cycle is calendar-monthly on a fixed day-of-month, NOT a rolling 30 days** — renew on the Nth → expires the Nth next month (evidence: Jul-5 → Aug-5; a 30-day cycle would give Aug-4). This is why the `+1 month` buffer chain stays aligned. Whether an *early* (still-active) renewal stacks onto the current expiry or resets from the renewal date is still unconfirmed — see `references/scheduling-semantics.md` and verify on the next active-state renewal.
-- **Deploy:** this skill is kind-A but **runs from the git checkout** (`~/hermes-skills/reolink-renew/`, no `~/.hermes/skills/` copy), so a git commit is the deploy — no file-copy/restart. The mini-PC host is **pull-only**; a deliberate push from there needs `HERMES_ALLOW_PUSH=1 git push`.
+- **API base:** `https://apis.reolink.com`. Login is the my.reolink.com **account-center** OAuth2 password grant (`/v1.0/oauth2/token/`), token valid 30 min.
+- **MFA wire-format (reverse-engineered from my.reolink.com, verified live 2026-08-04):**
+  - Send code: `POST /v2/auth/mfa/codes` JSON `{clientId, scenario:"users.login_with_password", method:"email", data:{emailAddress}}` → `{id, expiringAt}` and emails an 8-digit code (~15 min TTL).
+  - Submit: re-POST the token endpoint with headers `x-verify-scenario: users.login_with_password`, `x-verify-id: <id>`, `x-verify-code: <code>` → `{access_token, mfa_trust_token}`.
+  - **Trusted token:** the `mfa_trust_token` is cached in `data/trusted.json` and replayed as the `mfa_trust_token` form field to **skip MFA for ~30 days**. The monthly cycle is ~31 days, so it often *just* lapses each cycle → expect an occasional real code, silent otherwise.
+  - If Reolink changes any of this, the single patch-points are `MFA_SEND_URL`, `MFA_SCENARIO`, and `_post_login()` in `scripts/renew-reolink.py`.
+- Plan is genuinely $0.00 — no payment flow. Camera re-association is automatic on renewal.
+- **Renewal cycle** is calendar-monthly, fixed day-of-month, **stack-from-expiry** (see above).
+- **Runtime state** (`data/`, gitignored): `flow.json` (state machine), `trusted.json` (MFA trust token — sensitive).
+- **Deploy:** kind-A skill that **runs from the git checkout** — a `git commit` is the deploy; no file-copy/restart. The mini-PC is pull-only; a deliberate push needs `HERMES_ALLOW_PUSH=1 git push`.

@@ -10,19 +10,19 @@ month. A 30-day cycle would have landed on **Aug-4**, so 30-day is ruled out. Mo
 "renew on the Nth → expires the Nth of next month." The `+1 month` (fixed-DOM) buffer chain matches
 this, which is why the buffer stays aligned.
 
-## OPEN QUESTION — does an early (still-active) renewal stack or reset?
+## RESOLVED (2026-08-04) — an early (still-active) renewal STACKS from expiry
 
-The only renewal we've *measured* was from an **expired** state (lapsed Jul-4, renewed Jul-5 → Aug-5).
-When expired there's nothing to stack onto, so it necessarily anchored to the renewal date. We have
-**not** observed a renewal while the plan is still active. Two possible semantics:
+Measured on the Aug-4 active-state renewal: plan was **active with expiry Aug-5**; renewed on **Aug-4**
+→ new expiry **Sep-5**. That is `old_expiry + 1 month` (**stack-from-expiry**), NOT `renewal_date + 1 month`
+(reset-from-today would have given Sep-4). So:
 
-- **Stack-from-expiry** (common): renewing while active *adds* a month to the current expiry
-  (keep remaining days) → expiry moves to next-month-same-DOM, DOM stays put. Buffer stays perfectly aligned.
-- **Reset-from-renewal-date**: new expiry = renewal_date + 1 month; the sliver of remaining days is lost.
+- **Stack-from-expiry CONFIRMED.** Renewing while active keeps the remaining sliver and adds a month to
+  the *current expiry*. Expiry stays on a fixed day-of-month; the `+1 month` fixed-DOM buffer chain stays
+  perfectly aligned and the lead margin does **not** erode. The margin-erosion drift below is therefore
+  **not a real risk** under Reolink's actual semantics — the lead re-anchor is kept only as a cheap
+  belt-and-suspenders (it's a no-op when already aligned).
 
-**Confirm empirically on the next active-state renewal** (the Aug-4 run): note the reported EXPIRY vs.
-what each model predicts, and record the answer here. It decides whether the buffer needs the
-lead-realign fix below or can trust the +1-month chain.
+Data points so far: Jul-5 (from expired) → Aug-5; Aug-4 (from active, expiry Aug-5) → Sep-5.
 
 ## The margin-erosion drift (why the lead slot must realign to EXPIRY−1)
 
