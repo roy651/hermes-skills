@@ -69,34 +69,33 @@ State is persisted in `data/flow.json` (`--status` prints it). Drive it as follo
      > 🔔 Time to renew Reolink Cloud (expires {EXPIRY}). Ready to grab the email code?
      > Reply **ready** and I'll trigger it, or **stop** to skip this cycle.
 
-     Set flow to *awaiting-ready*, schedule a **2-hour nudge** (below), and stop. **Do not proceed until the user replies.**
+     Set flow to *awaiting-ready*, **arm the recurring 2-hour nudge** (see below — this one nudge persists across the whole exchange), and stop. **Do not proceed until the user replies.**
 
 ### B) User replies "ready"
 
 1. Run `run.sh --login-init`. This emails an 8-digit code and returns `STATUS: code_sent` (or renews silently → **Success** if the trust token happens to still work).
-2. **Cancel the ready-nudge.** Ping the user and wait:
+2. Set flow to *awaiting-code*. **Leave the nudge running** (do not cancel it — a code can expire before the user acts; the nudge is what re-sends a fresh one every 2h). Ping the user and wait:
 
    > 📧 I've triggered the login — Reolink just emailed you an 8-digit code (valid ~15 min).
    > Paste it here and I'll finish the renewal. (Say **stop** to abort.)
-
-3. Set flow to *awaiting-code*, schedule a **2-hour code-nudge**, and stop.
 
 ### C) User pastes an 8-digit code
 
 1. Run `run.sh --login-complete --code <the 8 digits>`.
 2. Branch:
-   - **`renewed`/`active`** → cancel any nudge. Go to **Success**.
-   - **`error`** with "rejected (wrong or expired)" → the code lapsed. Tell the user, then treat it like "ready" again (go to **B**) to send a fresh one.
+   - **`renewed`/`active`** → **now** remove the nudge. Go to **Success**.
+   - **`error`** with "rejected (wrong or expired)" → the code lapsed. Run `run.sh --login-init` to send a **fresh** code, tell the user, and keep waiting (nudge stays armed). Stay in *awaiting-code*.
 
 ### D) User says "stop"
 
-Cancel all `reolink-renew-nudge*` reminders, leave the monthly buffer intact, confirm: "Okay — I'll leave Reolink for now and remind you at the next monthly check." (A skipped cycle self-heals: the plan simply lapses until the next reminder, then renews from expired.)
+Remove the `reolink-renew-nudge` job, set flow to *idle*, leave the monthly buffer intact, confirm: "Okay — I'll stop nudging and leave Reolink for now; I'll check again at the next monthly reminder." (A skipped cycle self-heals: the plan lapses until the next buffer reminder, then renews from expired.)
 
 ### Success (STATUS: renewed or active after acting)
 
-1. Send the user the appropriate message (below).
-2. **Re-anchor + top up the buffer** off the fresh EXPIRY (below).
-3. Reset flow (the script already sets it to `idle`).
+1. **Remove the `reolink-renew-nudge` job** if one exists (renewal is done — nudging must stop).
+2. Send the user the appropriate message (below).
+3. **Re-anchor + top up the buffer** off the fresh EXPIRY (below).
+4. Reset flow (the script already sets it to `idle`).
 
 ---
 
@@ -129,17 +128,24 @@ Troubleshooting:
 ```
 Never let an error shrink the buffer — still run the top-up so 3 reminders stay queued.
 
-## The 2-hour nudge (readiness / code prompts)
+## The 2-hour nudge (persists until renewed or stopped)
 
-Use the `reminders` mechanism. When you need to nudge until the user acts:
+**Invariant: while a renewal is pending (flow state is `awaiting_ready` or `awaiting_code`), a 2-hour nudge is ALWAYS queued. It is removed only when the renewal completes (`STATUS: renewed`) or the user says "stop".** A code expiring, a missed ping, or hours passing must never end the nudging — only success or an explicit stop does.
+
+Arm it once, when you first enter a pending state (branch A or B). It is a **recurring** job that re-enters this skill every 2 hours:
 ```bash
-hermes cron create "2h" \
-  "Your ENTIRE output is the reminder: ⏰ Reolink renewal is waiting on you — reply 'ready' (or 'stop'). Expiry {EXPIRY}." \
-  --name reolink-renew-nudge --deliver telegram --repeat 1
+hermes cron create "every 2h" \
+  'Continue the pending reolink-renew flow: read data/flow.json state and re-prompt the user (see SKILL.md "On each nudge firing").' \
+  --name reolink-renew-nudge --skill reolink-renew --deliver origin
 ```
-- Recreate it (same `--name`) each time you re-ping, so at most one nudge is pending.
-- **Cancel it** (`hermes cron list` → `hermes cron remove <id>`) the moment the user says "ready", pastes a code, or says "stop".
-- The nudge just re-pings; it does not itself run the script.
+- Omit `--repeat` so it **recurs** — it keeps firing every 2h on its own until removed. Create it only if no `reolink-renew-nudge` job already exists (idempotent).
+- **Remove it** (`hermes cron list` → `hermes cron remove <id>`) the instant `STATUS: renewed` OR the user says "stop". Pasting a code does **not** remove it (the submit might fail/expire) — only a confirmed renewal does.
+
+### On each nudge firing
+Re-enter this skill and branch on `--status`:
+- **`awaiting_ready`** → re-ping: "⏰ Still need to renew Reolink Cloud (expires {EXPIRY}). Reply **ready** when you can grab the email code, or **stop**."
+- **`awaiting_code`** → the earlier code has expired (codes last ~15 min). Run `run.sh --login-init` to email a **fresh** code, then re-ping: "⏰ Reolink renewal still pending — I've sent a **fresh** 8-digit code (the previous one expired). Paste it, or say **stop**."
+- **`idle`** → nothing pending (already renewed or stopped): remove this nudge job and do nothing.
 
 ## Scheduling: rolling 3-reminder buffer
 
