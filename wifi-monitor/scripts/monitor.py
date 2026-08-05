@@ -527,6 +527,11 @@ def daily_report() -> None:
         idx = int(len(s) * p / 100)
         return s[min(idx, len(s) - 1)]
 
+    def lost_time(lost_samples: int) -> str:
+        """Wall-clock time behind a loss percentage — one missed sample is one INTERVAL offline.
+        A loss % alone hides scale: the same 0.1% is 85s on a full day and seconds on a short one."""
+        return f" | total {lost_samples * INTERVAL}s"
+
     wifi_loss_pct  = 100 * wifi_loss  / total
     wired_loss_pct = 100 * wired_loss / total
 
@@ -538,18 +543,20 @@ def daily_report() -> None:
             f"median {percentile(wifi_rtt, 50):.0f}ms | "
             f"p95 {percentile(wifi_rtt, 95):.0f}ms | "
             f"max {max(wifi_rtt):.0f}ms"
+            + lost_time(wifi_loss)
         )
     else:
-        lines.append(f"WiFi  — {wifi_loss_pct:.1f}% loss (no good samples)")
+        lines.append(f"WiFi  — {wifi_loss_pct:.1f}% loss (no good samples)" + lost_time(wifi_loss))
 
     if wired_rtt:
         lines.append(
             f"Wired — loss {wired_loss_pct:.1f}% | "
             f"median {percentile(wired_rtt, 50):.0f}ms | "
             f"max {max(wired_rtt):.0f}ms"
+            + lost_time(wired_loss)
         )
     else:
-        lines.append(f"Wired — {wired_loss_pct:.1f}% loss (offline / unreachable)")
+        lines.append(f"Wired — {wired_loss_pct:.1f}% loss (offline / unreachable)" + lost_time(wired_loss))
 
     modem_loss_pct = 100 * modem_loss / total if total else 0
     if modem_rtt:
@@ -557,9 +564,10 @@ def daily_report() -> None:
             f"Modem — loss {modem_loss_pct:.1f}% | "
             f"median {percentile(modem_rtt, 50):.0f}ms | "
             f"max {max(modem_rtt):.0f}ms"
+            + lost_time(modem_loss)
         )
     elif modem_loss > 0:
-        lines.append(f"Modem — {modem_loss_pct:.1f}% loss")
+        lines.append(f"Modem — {modem_loss_pct:.1f}% loss" + lost_time(modem_loss))
 
     wan_loss_pct = 100 * wan_loss / total if total else 0
     if wan_rtt:
@@ -567,9 +575,10 @@ def daily_report() -> None:
             f"WAN   — loss {wan_loss_pct:.1f}% | "
             f"median {percentile(wan_rtt, 50):.0f}ms | "
             f"max {max(wan_rtt):.0f}ms"
+            + lost_time(wan_loss)
         )
     elif total > 0:
-        lines.append(f"WAN   — {wan_loss_pct:.1f}% loss (internet down or no data)")
+        lines.append(f"WAN   — {wan_loss_pct:.1f}% loss (internet down or no data)" + lost_time(wan_loss))
 
     if degradation_events:
         durations = [e["duration"] for e in degradation_events if "duration" in e]
