@@ -208,6 +208,24 @@ def _structure_lens_block(ticker: str, df: pd.DataFrame, lookback: int = 504) ->
         return ""
 
 
+# Fields the JSON contract declares as scalars. The model occasionally wraps one in an object or a
+# single-item list (e.g. "recommendation": {"action": "watch", "rationale": "..."}); downstream code
+# treats them as plain strings, so `rec in ENTRY_RECS` raised "unhashable type: dict" and killed a
+# whole weekly run over one malformed field. Flattened here, at the single boundary where LLM output
+# enters the pipeline, so every consumer sees the declared type.
+_SCALAR_FIELDS = ("phase", "phase_confidence", "recommendation", "entry_zone", "stop", "note")
+_INNER_KEYS = ("value", "action", "recommendation", "text", "label")
+
+
+def _flatten_scalar(v):
+    if isinstance(v, list):
+        v = v[0] if v else None
+    if isinstance(v, dict):
+        named = next((v[k] for k in _INNER_KEYS if isinstance(v.get(k), str)), None)
+        v = named if named is not None else next((x for x in v.values() if isinstance(x, str)), None)
+    return v
+
+
 def analyze(
     ticker: str,
     df: pd.DataFrame,
@@ -239,6 +257,11 @@ def analyze(
             user_parts.append("\n" + block)
     user_parts.append(f"\nOHLCV (last {len(df)} trading days):\n{csv}")
     result = _call_llm(system, user_parts)
+    for field in _SCALAR_FIELDS:
+        if field in result:
+            result[field] = _flatten_scalar(result[field])
+    if not isinstance(result.get("recommendation"), str):
+        result["recommendation"] = ""      # unusable rec → fails Gate A, never crashes the run
     result["ticker"] = ticker
     return result
 
