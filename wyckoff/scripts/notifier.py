@@ -1,6 +1,9 @@
 from __future__ import annotations
 import os
+import re
 import socket
+import sys
+from datetime import datetime
 from pathlib import Path
 import requests
 import urllib3.util.connection as _urllib3_conn
@@ -27,7 +30,24 @@ def _post(token: str, chat_id: int, text: str) -> None:
     resp.raise_for_status()
 
 
+# Digests otherwise exist only inside Telegram, so a later review has nothing to read back. Archive
+# every outbound message here — the one choke point every digest passes through. Gitignored (data/).
+_ARCHIVE = Path(__file__).parent.parent / "data" / "reports"
+
+
+def _archive(text: str) -> None:
+    try:
+        _ARCHIVE.mkdir(parents=True, exist_ok=True)
+        headline = re.sub(r"<[^>]+>", "", text.split("\n")[0])
+        slug = re.sub(r"[^a-z0-9]+", "-", headline.lower()).strip("-")[:40] or "digest"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        (_ARCHIVE / f"{stamp}-{slug}.txt").write_text(text)
+    except OSError as e:                      # a full/read-only disk must never block the alert itself
+        print(f"[notifier] archive failed: {e}", file=sys.stderr)
+
+
 def send(text: str) -> None:
+    _archive(text)
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ["TELEGRAM_TOKEN"]
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "391626535"))
     if len(text) <= _MAX:
