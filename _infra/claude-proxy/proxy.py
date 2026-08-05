@@ -220,13 +220,22 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
             text = stdout.strip()
         session_id = data.get("session_id")
         # The CLI reports every model it touched under modelUsage — the main model
-        # (e.g. claude-opus-4-8) AND, intermittently, a tiny background/housekeeping model
-        # (claude-haiku-*, for topic classification etc.). Pick the model with the most
-        # INPUT tokens: the main model always ingests the full system prompt + conversation,
-        # while the background model gets a tiny sub-prompt. (Output tokens would misfire on
-        # a short reply, where a housekeeping call can out-token the actual answer.)
+        # (e.g. claude-opus-5) AND, intermittently, a tiny background/housekeeping model
+        # (claude-haiku-*, for topic classification etc.). Pick the model that ingested the most
+        # prompt: the main model always takes the full system prompt + conversation, while the
+        # background model gets a tiny sub-prompt. (Output tokens would misfire on a short reply,
+        # where a housekeeping call can out-token the actual answer.)
+        # Cached tokens MUST be counted: `inputTokens` excludes cache reads, so on a warm cache the
+        # main model reports inputTokens=2 against cacheRead=32761 and loses to the uncached haiku
+        # call — which silently mislabelled every batch run as haiku and blinded the DEGRADED banner.
         mu = data.get("modelUsage") or {}
-        model_used = max(mu, key=lambda m: (mu[m] or {}).get("inputTokens", 0), default=None)
+
+        def _prompt_size(m: str) -> int:
+            u = mu[m] or {}
+            return (u.get("inputTokens", 0) + u.get("cacheReadInputTokens", 0)
+                    + u.get("cacheCreationInputTokens", 0))
+
+        model_used = max(mu, key=_prompt_size, default=None)
     except (json.JSONDecodeError, AttributeError):
         text = stdout.strip()
         session_id = None
