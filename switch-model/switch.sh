@@ -57,7 +57,7 @@ case "$profile" in
     case "$tier" in
       haiku)  model_id="claude-haiku-4-5-20251001" ;;
       sonnet) model_id="claude-sonnet-4-6" ;;
-      opus)   model_id="claude-opus-4-8" ;;
+      opus)   model_id="claude-opus-5" ;;
       *)      echo "Unknown tier: $tier. Use haiku, sonnet, or opus."; exit 1 ;;
     esac
     python3 - "$model_id" <<'EOF'
