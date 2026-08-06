@@ -622,13 +622,19 @@ def daily_report() -> None:
                 "degraded — sustained failures")
 
     attribution = attribute(samples)
-    if attribution:
-        worst, (worst_s, _) = max(attribution.items(), key=lambda kv: kv[1][0])
-        lost_total = sum(s for s, _ in attribution.values())
-        verdict = f"{'🟢' if lost_total < 300 else '🟠' if lost_total < 1800 else '🔴'} " \
-                  f"{lost_total}s lost · dominant cause: {worst}"
+    # Judge the day on UNPLANNED loss only — a known nightly AP restart is not a fault, and letting
+    # it win "dominant cause" every single day would bury the thing actually worth looking at.
+    unplanned = {b: v for b, v in attribution.items() if b != "Scheduled"}
+    scheduled_s = attribution.get("Scheduled", (0, 0))[0]
+    if unplanned:
+        lost = sum(s for s, _ in unplanned.values())
+        worst = max(unplanned, key=lambda b: unplanned[b][0])
+        verdict = (f"{'🟢' if lost < 300 else '🟠' if lost < 1800 else '🔴'} "
+                   f"{lost}s unplanned · dominant: {worst}")
     else:
-        verdict = "🟢 clean — no loss on any link"
+        verdict = "🟢 clean — no unplanned loss"
+    if scheduled_s:
+        verdict += f" · +{scheduled_s}s scheduled"
 
     lines = [
         f"📶 Network daily report — {yesterday}",
