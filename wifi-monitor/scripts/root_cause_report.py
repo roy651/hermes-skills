@@ -49,18 +49,34 @@ PALETTE = {
 }
 
 
-def collect(days: int) -> dict[str, dict[str, tuple[int, int]]]:
-    """-> {date: {bucket: (seconds, episodes)}} for the last `days` complete days."""
-    start = (datetime.now(tz=timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+def collect(since: str, until: str) -> dict[str, dict[str, tuple[int, int]]]:
+    """-> {date: {bucket: (seconds, episodes)}} for dates in [since, until] (inclusive, ISO)."""
     per_day: dict[str, list] = defaultdict(list)
     if not _CSV.exists():
         return {}
     with open(_CSV) as f:
         for row in csv.reader(f):
-            if len(row) < 5 or row[0][:10] < start or not row[0][:4].isdigit():
+            if len(row) < 5 or not row[0][:4].isdigit():
                 continue
-            per_day[row[0][:10]].append(tuple(c.strip().upper() == "LOSS" for c in row[1:5]))
+            day = row[0][:10]
+            if day < since or day > until:
+                continue
+            per_day[day].append(tuple(c.strip().upper() == "LOSS" for c in row[1:5]))
     return {day: _monitor.attribute(samples) for day, samples in sorted(per_day.items())}
+
+
+def resolve_window(args) -> tuple[str, str, str]:
+    """-> (since, until, label). --month wins over --since/--until, which win over --days."""
+    if args.month:
+        start = datetime.strptime(args.month, "%Y-%m").replace(tzinfo=timezone.utc)
+        nxt = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        return start.strftime("%Y-%m-%d"), (nxt - timedelta(days=1)).strftime("%Y-%m-%d"), \
+            start.strftime("%B %Y")
+    until = args.until or datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    if args.since:
+        return args.since, until, f"{args.since} → {until}"
+    since = (datetime.strptime(until, "%Y-%m-%d") - timedelta(days=args.days - 1)).strftime("%Y-%m-%d")
+    return since, until, f"last {args.days} days"
 
 
 def _svg(data: dict, days: list[str], idx: int, title: str, unit: str) -> str:
@@ -110,7 +126,7 @@ def _slug(name: str) -> str:
     return name.lower().replace("/", "-").replace(" ", "-")
 
 
-def render(data: dict, days_n: int) -> str:
+def render(data: dict, label: str) -> str:
     days = list(data)
     totals = {b: (sum(data[d].get(b, (0, 0))[0] for d in days),
                   sum(data[d].get(b, (0, 0))[1] for d in days)) for b in BUCKETS}
@@ -151,7 +167,7 @@ font:14px/1.5 ui-sans-serif,system-ui,sans-serif;background:var(--s1);color:var(
 padding:6px 9px;font-size:12px;opacity:0;box-shadow:0 2px 10px rgba(0,0,0,.14);white-space:nowrap}}
 </style>
 <div class="viz">
-<h1>Network root-cause — last {days_n} days</h1>
+<h1>Network root-cause — {label}</h1>
 <p class="sub">{grand}s of loss attributed across {len(days)} days · dominant cause: <b>{worst}</b>.
 Each sample is assigned to exactly one bucket, most-upstream first.</p>
 <div>{legend}</div>
@@ -193,23 +209,27 @@ def send_document(path: Path, caption: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--days", type=int, default=30, help="rolling window ending today (default 30)")
+    ap.add_argument("--month", help="a specific calendar month, e.g. 2026-07")
+    ap.add_argument("--since", help="start date YYYY-MM-DD")
+    ap.add_argument("--until", help="end date YYYY-MM-DD (default today)")
     ap.add_argument("--send", action="store_true", help="post the HTML to Telegram")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    data = collect(args.days)
+    since, until, label = resolve_window(args)
+    data = collect(since, until)
     if not data:
-        print("[root_cause] no data in window", file=sys.stderr)
+        print(f"[root_cause] no data between {since} and {until}", file=sys.stderr)
         return 1
 
-    out = Path(args.out) if args.out else _LOGS / f"root-cause-{datetime.now():%Y%m%d}.html"
-    out.write_text(render(data, args.days), encoding="utf-8")
-    print(f"[root_cause] {len(data)} days -> {out}")
+    out = Path(args.out) if args.out else _LOGS / f"root-cause-{since}_{until}.html"
+    out.write_text(render(data, label), encoding="utf-8")
+    print(f"[root_cause] {len(data)} days ({label}) -> {out}")
 
     if args.send:
         total = sum(v[0] for d in data.values() for v in d.values())
-        send_document(out, f"📊 Network root-cause — last {args.days} days · {total}s attributed")
+        send_document(out, f"📊 Network root-cause — {label} · {total}s attributed")
         print("[root_cause] sent to Telegram")
     return 0
 

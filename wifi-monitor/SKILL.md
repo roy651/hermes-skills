@@ -64,6 +64,64 @@ Before recommending any fix when "a few dozen drops" arrive, work three question
 - Appends every sample to `logs/wifi_monitor.csv` for offline analysis
 - Logs events to `logs/wifi_events.log`
 
+## Root-cause attribution — read the daily report correctly
+
+The four probes are **nested path segments**, so one fault lights up several rows and the raw
+per-link totals double-count it:
+
+```
+WiFi   ping -I wlp1s0 → 192.168.1.1    you → AP → pfSense
+Wired  ping -I eno1   → 192.168.1.1    you → cable → pfSense
+Modem  ping           → 192.168.3.1    ...→ pfSense → modem      (unbound: uses the default route)
+WAN    ping           → 8.8.8.8        ...→ modem → ISP
+```
+
+The digest therefore assigns each failing sample to **exactly one** bucket, testing most-upstream
+first (an upstream fault darkens everything below it, so it must be ruled out before blaming the
+radio). Buckets carry seconds **and episode counts** — 10s in `1×` is one outage, in `2×` it is two.
+
+| Test order | Condition | Bucket |
+|---|---|---|
+| 1 | wifi ✗ **and** wired ✗ **and** modem ✗ | 🏠 pfSense / host |
+| 2 | modem ✗ | 🔌 Modem link |
+| 3 | wan ✗ (modem ✓) | 🌐 Provider |
+| 4 | wifi ✗, wired ✓ | 📡 WiFi hop |
+| 5 | wired ✗, wifi ✓ | 🧵 Wired hop |
+
+**A provider outage does not cascade downward here** — WiFi/Wired/Modem probes all terminate at or
+before the modem, so only the WAN row can see the ISP. A *modem* failure is usually the local link
+or the box itself, not the provider; the true provider signature is WAN failing while the modem
+still answers.
+
+Coverage self-labels (≥98% normal drift · 90–98% elevated · <90% degraded): the loop sleeps 5s
+*after* doing its work, so a healthy day drifts ~1%, and a timed-out ping costs up to 2s — which
+makes low coverage a symptom rather than bookkeeping.
+
+## Hermes Tool: Root-Cause Report (on demand)
+
+`root_cause_report.py` charts the same buckets over time — one line per bucket, one chart for
+seconds lost and one for episodes — as a **self-contained HTML file** (inline SVG, no libraries).
+Runs monthly on cron; use these for anything on demand:
+
+```bash
+cd ~/.hermes/skills/wifi-monitor
+
+python3 scripts/root_cause_report.py --days 7            # last week
+python3 scripts/root_cause_report.py --days 30           # last month (rolling)
+python3 scripts/root_cause_report.py --month 2026-07     # a specific calendar month
+python3 scripts/root_cause_report.py --since 2026-07-06 --until 2026-07-10
+python3 scripts/root_cause_report.py --days 30 --send    # ...and post it to Telegram
+```
+
+Without `--send` it only writes the file and prints the path — nothing is posted. Output lands in
+`logs/root-cause-<since>_<until>.html`. Attach the file when the user asks to see it.
+
+Examples → what to run:
+- "network report for last week" / "דוח רשת לשבוע האחרון" → `--days 7 --send`
+- "what broke in July?" → `--month 2026-07 --send`
+- "why was the internet bad on the 7th?" → `--since 2026-07-06 --until 2026-07-08`, then read the
+  table and name the dominant bucket
+
 ## Deploy
 
 This is a **kind-B** skill — git is the source, but the service runs from `~/.hermes/skills/wifi-monitor/`.
