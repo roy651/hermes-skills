@@ -32,6 +32,7 @@ _CSV = _LOGS / "wifi_monitor.csv"
 _spec = importlib.util.spec_from_file_location("monitor", _HERE / "monitor.py")
 _monitor = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_monitor)
+_monitor._load_dotenv()          # same .env the daemon uses — that is where the Telegram token lives
 BUCKETS = [name for name, _ in _monitor._BUCKETS]
 
 # Categorical slots 1-5 of the validated default palette, in fixed order — colour follows the
