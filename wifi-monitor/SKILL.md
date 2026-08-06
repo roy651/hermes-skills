@@ -108,17 +108,21 @@ Runs monthly on cron; use these for anything on demand:
 > file path is not delivery. Omit `--send` only when reading numbers to answer a narrow question the
 > user asked, where no report was requested.
 
+**Use `.venv/bin/python`, not `python3`** — the chart image needs matplotlib, which lives in the
+skill venv. (Under bare `python3` it still works but silently degrades to HTML-only.)
+
 ```bash
 cd ~/.hermes/skills/wifi-monitor
 
-python3 scripts/root_cause_report.py --days 7  --send                 # last week
-python3 scripts/root_cause_report.py --days 30 --send                 # last month (rolling)
-python3 scripts/root_cause_report.py --month 2026-07 --send           # a calendar month
-python3 scripts/root_cause_report.py --since 2026-07-06 --until 2026-07-10 --send
+.venv/bin/python scripts/root_cause_report.py --days 7  --send                 # last week
+.venv/bin/python scripts/root_cause_report.py --days 30 --send                 # rolling month
+.venv/bin/python scripts/root_cause_report.py --month 2026-07 --send           # a calendar month
+.venv/bin/python scripts/root_cause_report.py --since 2026-07-06 --until 2026-07-10 --send
 ```
 
-`--send` posts the HTML to Telegram as a document (`sendDocument`); the file also lands in
-`logs/root-cause-<since>_<until>.html`. Add a short written summary **alongside** the attachment —
+`--send` posts **two** things: the charts as a **PNG** (`sendPhoto`, renders inline — this is what
+the user actually looks at) and the HTML as a document (hover + table, for detail). A path on disk
+is not a deliverable; the user cannot open it from Telegram. Add a short written summary alongside —
 dominant bucket, notable episodes, what changed versus the previous period.
 
 Examples → what to run:
@@ -160,6 +164,20 @@ TELEGRAM_CHAT_ID=<your-chat-id>
 | `INTERVAL`    | `5`           | Seconds between samples                |
 | `BAD_MS`      | `150`         | RTT threshold for a "bad" sample       |
 | `BAD_CONFIRM` | `2`           | Consecutive bad samples before alert   |
+| `MAINTENANCE_WINDOWS` | `01:05-01:20,13:05-13:20` | **UTC** windows re-labelled 🔧 Scheduled |
+
+⚠️ `MAINTENANCE_WINDOWS` is **UTC**, but the household thinks in local time (Asia/Jerusalem = UTC+3
+in summer). Subtract 3 hours when adding one — a 16:11 *local* event is `13:05-13:20`, and entering
+`16:10-16:15` would silently suppress 19:10 local instead. The two defaults are:
+
+- `01:05-01:20` UTC = **04:05–04:20 local** — the Tenda's nightly restart (~60–90s, one episode)
+- `13:05-13:20` UTC = **16:05–16:20 local** — the mesh steers the client to another node exactly 12h
+  later (~11–15s; a roam, not a restart — the journal shows a BSSID change and an AP-initiated
+  disassociation with reason 1)
+
+Loss inside a window is **re-labelled, never dropped**, and the daily verdict line reports unplanned
+loss separately (`15s unplanned · +85s scheduled`). So a restart that grows from 80s to 200s — as
+2026-08-03 did — is still plainly visible.
 
 ## Systemd Unit
 
