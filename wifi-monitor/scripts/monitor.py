@@ -469,8 +469,23 @@ _BUCKETS = [                      # display order = climbing the stack, local fi
     ("pfSense/host", "🏠"),
     ("Modem link",   "🔌"),
     ("Provider",     "🌐"),
+    ("Scheduled",    "🔧"),
     ("Unattributed", "❓"),
 ]
+
+# UTC HH:MM-HH:MM windows for known scheduled outages (the Tenda's nightly restart). Loss inside a
+# window is RE-LABELLED "Scheduled", never dropped — so the time still shows up honestly, and a
+# restart that grows from 60s to 5 minutes is still visible, but a known nightly event stops
+# swamping the WiFi-hop signal. Comma-separated, e.g. "01:05-01:20,03:00-03:05".
+MAINTENANCE_WINDOWS = [
+    tuple(part.split("-", 1))
+    for part in os.environ.get("MAINTENANCE_WINDOWS", "01:05-01:20").split(",")
+    if "-" in part
+]
+
+
+def in_maintenance(hhmm: str) -> bool:
+    return any(lo <= hhmm <= hi for lo, hi in MAINTENANCE_WINDOWS)
 
 
 def root_cause(wifi: bool, wired: bool, modem: bool, wan: bool) -> str | None:
@@ -495,14 +510,19 @@ def root_cause(wifi: bool, wired: bool, modem: bool, wan: bool) -> str | None:
     return "Unattributed"
 
 
-def attribute(samples: list[tuple[bool, bool, bool, bool]]) -> dict[str, tuple[int, int]]:
+def attribute(samples: list[tuple]) -> dict[str, tuple[int, int]]:
     """-> {bucket: (seconds_lost, episodes)}. An episode is a run of consecutive samples sharing a
-    cause, which separates one 10s outage from two unrelated 5s ones."""
+    cause, which separates one 10s outage from two unrelated 5s ones.
+
+    Samples are (hhmm, wifi, wired, modem, wan); the leading "HH:MM" (UTC) lets a known scheduled
+    outage be re-labelled rather than blamed on the radio."""
     secs: dict[str, int] = {}
     eps: dict[str, int] = {}
     previous = None
-    for s in samples:
-        cause = root_cause(*s)
+    for hhmm, *flags in samples:
+        cause = root_cause(*flags)
+        if cause and in_maintenance(hhmm):
+            cause = "Scheduled"
         if cause:
             secs[cause] = secs.get(cause, 0) + INTERVAL
             if cause != previous:
@@ -523,7 +543,7 @@ def daily_report() -> None:
     modem_rtt: list[float] = []
     wan_rtt:   list[float] = []
     wifi_loss = wired_loss = modem_loss = wan_loss = total = 0
-    samples: list[tuple[bool, bool, bool, bool]] = []   # per-sample loss flags, for attribution
+    samples: list[tuple] = []      # (hhmm, wifi, wired, modem, wan) loss flags, for attribution
 
     def _parse_col(parts: list[str], idx: int, rtt_list: list, loss_ref: list) -> None:
         if idx >= len(parts):
@@ -552,7 +572,8 @@ def daily_report() -> None:
                 _parse_col(parts, 4, wan_rtt,   wanl)
                 wifi_loss  += wl[0]; wired_loss += wrl[0]
                 modem_loss += ml[0]; wan_loss   += wanl[0]
-                samples.append((bool(wl[0]), bool(wrl[0]), bool(ml[0]), bool(wanl[0])))
+                samples.append((parts[0][11:16],
+                                bool(wl[0]), bool(wrl[0]), bool(ml[0]), bool(wanl[0])))
 
     degradation_events: list[dict] = []
     if LOG_EVENTS.exists():

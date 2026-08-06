@@ -103,24 +103,29 @@ makes low coverage a symptom rather than bookkeeping.
 seconds lost and one for episodes — as a **self-contained HTML file** (inline SVG, no libraries).
 Runs monthly on cron; use these for anything on demand:
 
+> **ALWAYS pass `--send`.** The charts ARE the deliverable. Without it the script only writes an HTML
+> file to disk that the user never sees, and a text table in chat is **not** the report — quoting the
+> file path is not delivery. Omit `--send` only when reading numbers to answer a narrow question the
+> user asked, where no report was requested.
+
 ```bash
 cd ~/.hermes/skills/wifi-monitor
 
-python3 scripts/root_cause_report.py --days 7            # last week
-python3 scripts/root_cause_report.py --days 30           # last month (rolling)
-python3 scripts/root_cause_report.py --month 2026-07     # a specific calendar month
-python3 scripts/root_cause_report.py --since 2026-07-06 --until 2026-07-10
-python3 scripts/root_cause_report.py --days 30 --send    # ...and post it to Telegram
+python3 scripts/root_cause_report.py --days 7  --send                 # last week
+python3 scripts/root_cause_report.py --days 30 --send                 # last month (rolling)
+python3 scripts/root_cause_report.py --month 2026-07 --send           # a calendar month
+python3 scripts/root_cause_report.py --since 2026-07-06 --until 2026-07-10 --send
 ```
 
-Without `--send` it only writes the file and prints the path — nothing is posted. Output lands in
-`logs/root-cause-<since>_<until>.html`. Attach the file when the user asks to see it.
+`--send` posts the HTML to Telegram as a document (`sendDocument`); the file also lands in
+`logs/root-cause-<since>_<until>.html`. Add a short written summary **alongside** the attachment —
+dominant bucket, notable episodes, what changed versus the previous period.
 
 Examples → what to run:
 - "network report for last week" / "דוח רשת לשבוע האחרון" → `--days 7 --send`
 - "what broke in July?" → `--month 2026-07 --send`
-- "why was the internet bad on the 7th?" → `--since 2026-07-06 --until 2026-07-08`, then read the
-  table and name the dominant bucket
+- "why was the internet bad on the 7th?" → `--since 2026-07-06 --until 2026-07-08 --send`, then read
+  the table and name the dominant bucket
 
 ## Deploy
 

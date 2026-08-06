@@ -45,7 +45,8 @@ PALETTE = {
     "pfSense/host": ("#1baf7a", "#199e70"),
     "Modem link":   ("#eda100", "#c98500"),
     "Provider":     ("#e87ba4", "#d55181"),
-    "Unattributed": ("#8a8a85", "#9a9a95"),
+    "Scheduled":    ("#8a8a85", "#9a9a95"),   # known maintenance — deliberately recessive grey
+    "Unattributed": ("#6f6f6a", "#7f7f7a"),
 }
 
 
@@ -61,7 +62,8 @@ def collect(since: str, until: str) -> dict[str, dict[str, tuple[int, int]]]:
             day = row[0][:10]
             if day < since or day > until:
                 continue
-            per_day[day].append(tuple(c.strip().upper() == "LOSS" for c in row[1:5]))
+            per_day[day].append((row[0][11:16],
+                                 *(c.strip().upper() == "LOSS" for c in row[1:5])))
     return {day: _monitor.attribute(samples) for day, samples in sorted(per_day.items())}
 
 
