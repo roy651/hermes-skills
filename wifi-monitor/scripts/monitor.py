@@ -457,6 +457,60 @@ def duration_s(start_ts: str, end_ts: str) -> int:
 
 # ── daily report ─────────────────────────────────────────────────────────────
 
+# ── root-cause attribution ────────────────────────────────────────────────────
+# The four probes are nested path segments — WiFi and Wired both end at pfSense, Modem at the WAN
+# gateway, WAN beyond it — so a single fault lights up several rows at once and the raw per-link
+# totals count it more than once. Attribute each failing sample to exactly ONE bucket: the most
+# upstream cause consistent with what failed. Then "85s on the WiFi hop" means the radio, not a
+# router outage that happened to darken WiFi too.
+_BUCKETS = [                      # display order = climbing the stack, local first
+    ("WiFi hop",     "📡"),
+    ("Wired hop",    "🧵"),
+    ("pfSense/host", "🏠"),
+    ("Modem link",   "🔌"),
+    ("Provider",     "🌐"),
+    ("Unattributed", "❓"),
+]
+
+
+def root_cause(wifi: bool, wired: bool, modem: bool, wan: bool) -> str | None:
+    """The single component that best explains this sample. None = nothing failed.
+
+    Ordered most-upstream first, because an upstream fault darkens everything below it: a dead
+    router must be tested before the WiFi-only rule or it would be misfiled as a radio problem.
+    Note a *provider* outage does NOT cascade downward here — WiFi/Wired/Modem probes all terminate
+    at or before the modem, so only the WAN row can see it."""
+    if not (wifi or wired or modem or wan):
+        return None
+    if wifi and wired and modem:
+        return "pfSense/host"     # every local path dark → the router or this host
+    if modem:
+        return "Modem link"       # pfSense cannot reach the WAN gateway
+    if wan:
+        return "Provider"         # the modem answers, the internet does not
+    if wifi and not wired:
+        return "WiFi hop"         # same target as Wired; only the radio path failed
+    if wired and not wifi:
+        return "Wired hop"
+    return "Unattributed"
+
+
+def attribute(samples: list[tuple[bool, bool, bool, bool]]) -> dict[str, tuple[int, int]]:
+    """-> {bucket: (seconds_lost, episodes)}. An episode is a run of consecutive samples sharing a
+    cause, which separates one 10s outage from two unrelated 5s ones."""
+    secs: dict[str, int] = {}
+    eps: dict[str, int] = {}
+    previous = None
+    for s in samples:
+        cause = root_cause(*s)
+        if cause:
+            secs[cause] = secs.get(cause, 0) + INTERVAL
+            if cause != previous:
+                eps[cause] = eps.get(cause, 0) + 1
+        previous = cause
+    return {name: (secs[name], eps[name]) for name, _ in _BUCKETS if name in secs}
+
+
 def daily_report() -> None:
     """
     Read yesterday's CSV + events log and send a Telegram digest.
@@ -469,6 +523,7 @@ def daily_report() -> None:
     modem_rtt: list[float] = []
     wan_rtt:   list[float] = []
     wifi_loss = wired_loss = modem_loss = wan_loss = total = 0
+    samples: list[tuple[bool, bool, bool, bool]] = []   # per-sample loss flags, for attribution
 
     def _parse_col(parts: list[str], idx: int, rtt_list: list, loss_ref: list) -> None:
         if idx >= len(parts):
@@ -497,6 +552,7 @@ def daily_report() -> None:
                 _parse_col(parts, 4, wan_rtt,   wanl)
                 wifi_loss  += wl[0]; wired_loss += wrl[0]
                 modem_loss += ml[0]; wan_loss   += wanl[0]
+                samples.append((bool(wl[0]), bool(wrl[0]), bool(ml[0]), bool(wanl[0])))
 
     degradation_events: list[dict] = []
     if LOG_EVENTS.exists():
@@ -535,7 +591,42 @@ def daily_report() -> None:
     wifi_loss_pct  = 100 * wifi_loss  / total
     wired_loss_pct = 100 * wired_loss / total
 
-    lines = [f"📶 WiFi daily report — {yesterday}", f"Samples: {total}  ({total * INTERVAL // 60} min coverage)"]
+    # Coverage self-labels: the loop sleeps INTERVAL *after* doing the work, so a healthy day drifts
+    # ~1%. A timed-out ping costs up to 2s, so a genuinely bad day shows visibly lower coverage —
+    # which makes the number a symptom in its own right, not just bookkeeping.
+    cov_min = total * INTERVAL // 60
+    cov_pct = 100 * cov_min / 1440
+    cov_note = ("normal drift" if cov_pct >= 98 else
+                "elevated — timeouts eating the loop" if cov_pct >= 90 else
+                "degraded — sustained failures")
+
+    attribution = attribute(samples)
+    if attribution:
+        worst, (worst_s, _) = max(attribution.items(), key=lambda kv: kv[1][0])
+        lost_total = sum(s for s, _ in attribution.values())
+        verdict = f"{'🟢' if lost_total < 300 else '🟠' if lost_total < 1800 else '🔴'} " \
+                  f"{lost_total}s lost · dominant cause: {worst}"
+    else:
+        verdict = "🟢 clean — no loss on any link"
+
+    lines = [
+        f"📶 Network daily report — {yesterday}",
+        verdict,
+        f"Coverage {cov_min}/1440 min ({cov_pct:.1f}% · {cov_note}) · {total} samples @{INTERVAL}s",
+    ]
+
+    if attribution:
+        peak = max(s for s, _ in attribution.values())
+        lines.append("")
+        lines.append("━━ ROOT CAUSE ━━ <i>one bucket per sample, most-upstream wins</i>")
+        for name, icon in _BUCKETS:
+            if name not in attribution:
+                continue
+            secs, episodes = attribution[name]
+            bar = "█" * max(1, round(10 * secs / peak))
+            lines.append(f"{icon} {name:13s} {secs:4d}s  {episodes}×  {bar}")
+        lines.append("")
+        lines.append("━━ RAW ━━ <i>per-link, unattributed</i>")
 
     if wifi_rtt:
         lines.append(
