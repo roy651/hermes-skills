@@ -14,6 +14,7 @@ load_dotenv(Path.home() / ".hermes" / ".env")
 
 import data as market_data
 import holdings as portfolio
+import israeli_fund
 import notifier
 
 TZ = ZoneInfo("Asia/Jerusalem")
@@ -52,7 +53,11 @@ def run():
 
     # Fetch all tickers + USD/ILS rate in parallel
     tickers = list(holdings_map.keys())
-    all_fetch = tickers + ["USDILS=X"]
+    # Israeli mutual funds (kaspit / money-market) are not on Yahoo at all. A holding that declares a
+    # fund_id / globes_id is priced from its published NAV instead — otherwise a cash-like sleeve
+    # silently vanishes from the total and every concentration figure is overstated.
+    fund_tickers = {t for t, h in holdings_map.items() if h.get("fund_id") or h.get("globes_id")}
+    all_fetch = [t for t in tickers if t not in fund_tickers] + ["USDILS=X"]
     raw: dict[str, market_data.TickerData] = {}
 
     with ThreadPoolExecutor(max_workers=12) as pool:
@@ -63,6 +68,13 @@ def run():
                 raw[t] = fut.result()
             except Exception as e:
                 print(f"[portfolio_value] skip {t}: {e}", file=sys.stderr)
+
+    for t in fund_tickers:
+        h = holdings_map[t]
+        try:
+            raw[t] = israeli_fund.as_ticker_data(h.get("fund_id"), h.get("globes_id"), name=t)
+        except Exception as e:
+            print(f"[portfolio_value] fund NAV lookup failed for {t}: {e}", file=sys.stderr)
 
     usdils_rate: float
     if "USDILS=X" in raw:

@@ -18,6 +18,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 
 import requests
 
@@ -43,6 +44,33 @@ def nav_history(fund_id: str | int) -> list[tuple[str, float]]:
     if not points:
         raise ValueError(f"funder: no NAV series found for fund {fund_id}")
     return sorted((d, float(p)) for d, p in points)
+
+
+def as_ticker_data(fund_id: str | int | None, globes_id: str | int | None, name: str = ""):
+    """Adapt a fund's published NAV into the same TickerData shape data.py returns for Yahoo, so a
+    holding in one flows through the existing pipeline untouched.
+
+    NAV is quoted in agorot, exactly like a .TA listing — normalise to ILS (÷100) to match how
+    data.py already handles TASE prices, so avg_cost (also stored in agorot) lines up downstream."""
+    import pandas as pd
+    from data import TickerData
+
+    if fund_id:
+        series = nav_history(fund_id)
+    elif globes_id:
+        today = datetime.now(timezone.utc).date().isoformat()
+        series = [(today, nav_from_globes(globes_id))]
+    else:
+        raise ValueError("need fund_id or globes_id")
+
+    df = pd.DataFrame(
+        {"Date": [datetime.fromisoformat(d).date() for d, _ in series],
+         "close": [nav / 100.0 for _, nav in series]}
+    ).set_index("Date")
+    for col in ("open", "high", "low"):          # a NAV has no intraday range; mirror the close
+        df[col] = df["close"]
+    df["volume"] = 0
+    return TickerData(df=df, name=name or f"fund {fund_id or globes_id}", currency="ILS")
 
 
 def main() -> int:
