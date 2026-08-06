@@ -82,11 +82,26 @@ radio). Buckets carry seconds **and episode counts** — 10s in `1×` is one out
 
 | Test order | Condition | Bucket |
 |---|---|---|
-| 1 | wifi ✗ **and** wired ✗ **and** modem ✗ | 🏠 pfSense / host |
+| 0 | modem ✗ **and** alt ✓ | 🏠 pfSense — **proven** |
+| 1 | wifi ✗ **and** wired ✗ **and** modem ✗ | 🏠 pfSense / host (inferred) |
 | 2 | modem ✗ | 🔌 Modem link |
 | 3 | wan ✗ (modem ✓) | 🌐 Provider |
 | 4 | wifi ✗, wired ✓ | 📡 WiFi hop |
 | 5 | wired ✗, wifi ✓ | 🧵 Wired hop |
+
+**The bypass probe (`alt`)** is a fifth path: a USB dongle joined to the *modem's own SSID*
+(`sandy-wanda-backup`), pinging the same `192.168.3.1` as the Modem row but **without crossing
+pfSense**. That converts rule 1 from an inference into a measurement:
+
+- modem dark via pfSense but alive on the bypass → **pfSense is the fault, proven**
+- *everything* dark including a probe on a separate radio **and** separate subnet → **this host**
+- LAN fine, modem dark on **both** paths → the modem itself
+
+It holds **no default route and no DNS** (`/etc/netplan/60-wifi-bypass.yaml`, `use-routes: false`),
+so it can never carry real traffic or hijack the default path — it exists only to be pinged *from*.
+Remove the dongle and `ALT_IFACE` resolves empty, the probe disables itself, and attribution falls
+back to the inference. CSV rows before 2026-08-06 have 5 columns; a missing 6th is read as *not
+measured*, never as a loss.
 
 **A provider outage does not cascade downward here** — WiFi/Wired/Modem probes all terminate at or
 before the modem, so only the WAN row can see the ISP. A *modem* failure is usually the local link
@@ -165,6 +180,24 @@ TELEGRAM_CHAT_ID=<your-chat-id>
 | `BAD_MS`      | `150`         | RTT threshold for a "bad" sample       |
 | `BAD_CONFIRM` | `2`           | Consecutive bad samples before alert   |
 | `MAINTENANCE_WINDOWS` | `01:05-01:20,13:05-13:20` | **UTC** windows re-labelled 🔧 Scheduled |
+| `ALT_IFACE`   | *(first `wlx*`)* | Bypass-probe interface; empty = probe disabled |
+| `ALT_TARGET`  | = `MODEM_TARGET` | What the bypass pings (the modem, reached directly) |
+
+### The dongle (UGREEN AX900 / CM762, AIC8800D80)
+
+Hard-won, so it is written down. **The label says `5.0V ⎓ 0.9A Max` — 900 mA. A USB 2.0 port supplies
+only 500 mA.** On an underpowered port the adapter enumerates perfectly (descriptors are low-draw)
+and then stalls on the first vendor command with `cmd timed-out` / `rd fail: -32` / `chip_id=0`,
+identically across replugs, reboots and two different driver families. **It only works in a
+high-current port.** Data rate is a red herring: it is `bcdUSB 2.00`, so USB 3.0 buys no speed —
+only current.
+
+Driver: `shenmintao/aic8800d80` branch **`legacy-mcu1`**, installed via DKMS (rebuilds across kernel
+updates — survived 6.8.0-124 → 6.8.0-137). Requires **Secure Boot disabled**; an unsigned
+out-of-tree module will not load otherwise. On success the device re-enumerates `a69c:8d80` →
+`a69c:8d81` and a `wlx*` interface appears.
+
+**Lesson worth generalising: on a USB peripheral, check the current rating before the data rate.**
 
 ⚠️ `MAINTENANCE_WINDOWS` is **UTC**, but the household thinks in local time (Asia/Jerusalem = UTC+3
 in summer). Subtract 3 hours when adding one — a 16:11 *local* event is `13:05-13:20`, and entering
