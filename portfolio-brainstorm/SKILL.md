@@ -110,21 +110,47 @@ idle cash with no productive home.
 State the counter-case for every proposal. If nothing clears the bar, say "nothing this week" — that is a
 respectable and frequent outcome in a tape with no risk premium.
 
-## Step 6 — Write the session record
+## Step 6 — Write the session record, in two passes
 
-Every review ends by writing `~/.hermes/skills/wyckoff/data/reviews/YYYY-MM-DD.md`
-(**gitignored — it holds positions**). Capture:
+The record lives at `~/.hermes/skills/wyckoff/data/reviews/YYYY-MM-DD.md`
+(**gitignored — it holds positions**). Write it in **two passes**, never one.
+
+### Pass 1 — the raw review, BEFORE the conversation
+
+The moment your own analysis is done and *before* you post the report, write the file with:
 
 - Regime at the time (index, rates, risk premium, breadth)
-- Every decision with its **reason class**, and the numbers behind it
-- **Explicit strategic intent with its horizon** — the "not now, revisit in N years" calls that no
-  mechanism will otherwise remember
-- What was missed vs. correctly skipped, with the reason
-- Where your read was wrong and Roy's was right
-- Open questions and anything deferred
+- The engine's verdicts and your reading of each holding, with the numbers
+- Entries surfaced, and what was missed vs. correctly skipped
+- Open questions you are about to put to Roy
 
-The next session reads this first. Most of the value is in the deltas and in not relitigating settled
-decisions.
+If today's file already exists, **append a new `## Session N — HH:MM` section** rather than
+overwriting it — two reviews in one day must both survive.
+
+### Pass 2 — append the conversation, as it happens
+
+**Do not wait for the conversation to end.** After each substantive exchange — a decision, a
+correction, a piece of context you did not have — append it under `## Discussion` in the same file.
+Keep it current, so an interrupted session loses nothing.
+
+Record specifically:
+
+- Decisions taken and their **reason class** (technical / economic / strategic)
+- **Strategic intent with its horizon** — "not now, revisit in N years" calls no mechanism remembers
+- Context Roy supplied that the engine cannot see (cash, other accounts, tax, currency, conviction)
+- **Where your read was wrong and his was right** — record it plainly, it is the most useful line
+  in the file for the next session
+- Anything deferred, and what would reopen it
+
+### Closing
+
+Do **not** nag for a "we're done" signal on every reply — the incremental append already means nothing
+is lost. Instead, offer **once**, at the end of your opening report: *"say the word when you want me to
+wrap up and I'll write a closing synthesis."* On that signal (or on a natural end), append a short
+`## Closing synthesis` — the through-line, what changed, and what to watch before the next review.
+
+The next session reads this file first. Most of its value is in the deltas and in not relitigating
+settled decisions.
 
 ## Guardrails
 
