@@ -199,6 +199,63 @@ document.querySelectorAll('.cap').forEach(cap=>{{
 </script>"""
 
 
+def render_png(data: dict, label: str, out: Path) -> Path | None:
+    """Same two charts as a PNG. Telegram renders an image inline; an .html attachment only offers a
+    download, which on a phone is effectively unreadable. Returns None if matplotlib is unavailable
+    (the report still ships as HTML) — the daemon's own interpreter does not need the dependency."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    days = list(data)
+    series = {b: ([data[d].get(b, (0, 0))[0] for d in days],
+                  [data[d].get(b, (0, 0))[1] for d in days]) for b in BUCKETS}
+    series = {b: v for b, v in series.items() if any(v[0])}
+    if not series:
+        return None
+
+    fig, axes = plt.subplots(2, 1, figsize=(11, 7.5), sharex=True, facecolor="#fcfcfb")
+    for ax, idx, title in ((axes[0], 0, "Seconds lost per day"), (axes[1], 1, "Episodes per day")):
+        ax.set_facecolor("#fcfcfb")
+        for b, vals in series.items():
+            ax.plot(days, vals[idx], linewidth=2, color=PALETTE[b][0], label=b,
+                    solid_capstyle="round", solid_joinstyle="round")
+        ax.set_title(title, fontsize=11, fontweight="600", color="#0b0b0b", loc="left")
+        ax.grid(True, color="#e6e5e2", linewidth=1)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color("#e6e5e2")
+        ax.tick_params(colors="#52514e", labelsize=9)
+
+    step = max(1, len(days) // 10)
+    axes[1].set_xticks(range(0, len(days), step))
+    axes[1].set_xticklabels([days[i][5:] for i in range(0, len(days), step)], rotation=45, ha="right")
+    axes[0].legend(loc="upper left", frameon=False, fontsize=9, ncol=min(len(series), 4),
+                   labelcolor="#52514e")
+    fig.suptitle(f"Network root-cause — {label}", fontsize=13, fontweight="600",
+                 color="#0b0b0b", x=0.02, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    png = out.with_suffix(".png")
+    fig.savefig(png, dpi=140, facecolor="#fcfcfb")
+    plt.close(fig)
+    return png
+
+
+def send_photo(path: Path, caption: str) -> None:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ["TELEGRAM_TOKEN"]
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "391626535")
+    with open(path, "rb") as fh:
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendPhoto",
+                          data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                          files={"photo": (path.name, fh, "image/png")}, timeout=30)
+    r.raise_for_status()
+
+
 def send_document(path: Path, caption: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ["TELEGRAM_TOKEN"]
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "391626535")
@@ -229,9 +286,26 @@ def main() -> int:
     out.write_text(render(data, label), encoding="utf-8")
     print(f"[root_cause] {len(data)} days ({label}) -> {out}")
 
+    png = render_png(data, label, out)
+    if png:
+        print(f"[root_cause] chart image -> {png}")
+
     if args.send:
-        total = sum(v[0] for d in data.values() for v in d.values())
-        send_document(out, f"📊 Network root-cause — {label} · {total}s attributed")
+        # Rank the buckets in the caption: the PNG's light palette trips the <3:1 contrast warn, so
+        # the numbers must be legible without relying on colour alone (and it reads fine on a phone).
+        totals: dict[str, int] = {}
+        for day in data.values():
+            for bucket, (secs, _) in day.items():
+                totals[bucket] = totals.get(bucket, 0) + secs
+        ranked = sorted(totals.items(), key=lambda kv: -kv[1])
+        summary = " · ".join(f"{b} {s}s" for b, s in ranked[:4])
+        caption = f"📊 <b>Network root-cause — {label}</b>\n{sum(totals.values())}s attributed\n{summary}"
+
+        if png:
+            send_photo(png, caption)                                  # renders inline
+            send_document(out, "Interactive version (hover + table)")  # for the detail
+        else:
+            send_document(out, caption)
         print("[root_cause] sent to Telegram")
     return 0
 

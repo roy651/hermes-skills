@@ -473,13 +473,17 @@ _BUCKETS = [                      # display order = climbing the stack, local fi
     ("Unattributed", "❓"),
 ]
 
-# UTC HH:MM-HH:MM windows for known scheduled outages (the Tenda's nightly restart). Loss inside a
-# window is RE-LABELLED "Scheduled", never dropped — so the time still shows up honestly, and a
-# restart that grows from 60s to 5 minutes is still visible, but a known nightly event stops
-# swamping the WiFi-hop signal. Comma-separated, e.g. "01:05-01:20,03:00-03:05".
+# Known recurring outages, as UTC HH:MM-HH:MM windows. Loss inside a window is RE-LABELLED
+# "Scheduled", never dropped — the time still shows up honestly, so a restart that grows from 60s to
+# 5 minutes stays visible, but a known nightly event stops swamping the WiFi-hop signal.
+#
+# ⚠️ THESE ARE UTC, while the household thinks in local time (Asia/Jerusalem = UTC+3 in summer):
+#   01:05-01:20 UTC = 04:05-04:20 local — the Tenda's nightly restart (~60s, one episode)
+#   13:05-13:20 UTC = 16:05-16:20 local — the mesh re-steers the client to another node exactly 12h
+#                                          later (~11-15s; a roam, not a restart)
 MAINTENANCE_WINDOWS = [
     tuple(part.split("-", 1))
-    for part in os.environ.get("MAINTENANCE_WINDOWS", "01:05-01:20").split(",")
+    for part in os.environ.get("MAINTENANCE_WINDOWS", "01:05-01:20,13:05-13:20").split(",")
     if "-" in part
 ]
 
