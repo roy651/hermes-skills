@@ -41,6 +41,23 @@ BAD_MS           = float(os.environ.get("BAD_MS",         "150"))
 BAD_CONFIRM      = int(os.environ.get("BAD_CONFIRM",      "2"))
 MID_POLL_INTERVAL = int(os.environ.get("MID_POLL_INTERVAL", "30"))
 
+# Bypass probe: a USB dongle joined to the MODEM's own SSID, so it reaches the modem WITHOUT crossing
+# pfSense. That turns "pfSense/host" from an inference (three probes dark at once) into a direct
+# measurement, and separates a dead pfSense from this host's networking dying. It deliberately holds
+# no default route — see /etc/netplan/60-wifi-bypass.yaml — so it can never carry real traffic.
+# Empty/absent interface = probe disabled, and everything behaves exactly as before.
+def _autodetect_alt_iface() -> str:
+    """First wlx* interface (USB WiFi adapters get MAC-derived names). Import must never fail: this
+    module is also imported by the report tooling, which may run where /sys/class/net does not."""
+    try:
+        return next((n for n in sorted(os.listdir("/sys/class/net")) if n.startswith("wlx")), "")
+    except OSError:
+        return ""
+
+
+ALT_IFACE  = os.environ.get("ALT_IFACE") or _autodetect_alt_iface()
+ALT_TARGET = os.environ.get("ALT_TARGET", MODEM_TARGET)
+
 _HERE = Path(__file__).resolve().parent
 _LOGS = _HERE.parent / "logs"
 _LOGS.mkdir(exist_ok=True)
@@ -435,9 +452,14 @@ def _ping_target(target: str, timeout: int = 2) -> float | None:
 
 
 def append_csv(ts: str, wifi_ms: float | None, wired_ms: float | None,
-               modem_ms: float | None, wan_ms: float | None) -> None:
+               modem_ms: float | None, wan_ms: float | None,
+               alt_ms: float | None = None) -> None:
+    # alt_ms was appended as a 6th column on 2026-08-06. Rows written before that have 5 fields and
+    # every reader treats a missing 6th as "not measured" — NOT as a loss — so the month of history
+    # stays usable rather than being rotated away.
     with open(LOG_CSV, "a") as f:
-        f.write(f"{ts},{_fmt(wifi_ms)},{_fmt(wired_ms)},{_fmt(modem_ms)},{_fmt(wan_ms)}\n")
+        f.write(f"{ts},{_fmt(wifi_ms)},{_fmt(wired_ms)},{_fmt(modem_ms)},{_fmt(wan_ms)},"
+                f"{_fmt(alt_ms) if ALT_IFACE else ''}\n")
 
 
 def append_event(text: str) -> None:
@@ -492,17 +514,25 @@ def in_maintenance(hhmm: str) -> bool:
     return any(lo <= hhmm <= hi for lo, hi in MAINTENANCE_WINDOWS)
 
 
-def root_cause(wifi: bool, wired: bool, modem: bool, wan: bool) -> str | None:
+def root_cause(wifi: bool, wired: bool, modem: bool, wan: bool,
+               alt: bool | None = None) -> str | None:
     """The single component that best explains this sample. None = nothing failed.
 
     Ordered most-upstream first, because an upstream fault darkens everything below it: a dead
     router must be tested before the WiFi-only rule or it would be misfiled as a radio problem.
     Note a *provider* outage does NOT cascade downward here — WiFi/Wired/Modem probes all terminate
-    at or before the modem, so only the WAN row can see it."""
+    at or before the modem, so only the WAN row can see it.
+
+    `alt` is the bypass probe: the USB dongle sits on the modem's own SSID, so it reaches the modem
+    WITHOUT crossing pfSense. None = not measured (no dongle). When the modem is unreachable the
+    normal way but answers over the bypass, pfSense is the fault by direct measurement rather than
+    by inference — and unlike the all-dark rule below, that also rules out this host's networking."""
     if not (wifi or wired or modem or wan):
         return None
+    if modem and alt is False:
+        return "pfSense/host"     # PROVEN: modem dark via pfSense, alive on the bypass
     if wifi and wired and modem:
-        return "pfSense/host"     # every local path dark → the router or this host
+        return "pfSense/host"     # inferred: every local path dark → the router or this host
     if modem:
         return "Modem link"       # pfSense cannot reach the WAN gateway
     if wan:
@@ -524,7 +554,7 @@ def attribute(samples: list[tuple]) -> dict[str, tuple[int, int]]:
     eps: dict[str, int] = {}
     previous = None
     for hhmm, *flags in samples:
-        cause = root_cause(*flags)
+        cause = root_cause(*flags)      # flags = wifi, wired, modem, wan[, alt]
         if cause and in_maintenance(hhmm):
             cause = "Scheduled"
         if cause:
@@ -576,8 +606,12 @@ def daily_report() -> None:
                 _parse_col(parts, 4, wan_rtt,   wanl)
                 wifi_loss  += wl[0]; wired_loss += wrl[0]
                 modem_loss += ml[0]; wan_loss   += wanl[0]
+                # 6th column (alt) may be absent on rows predating 2026-08-06, or empty when no
+                # dongle is fitted. Either way it is "not measured" (None), never a loss.
+                alt_raw = parts[5].strip() if len(parts) > 5 else ""
+                alt_flag = None if alt_raw == "" else (alt_raw == "LOSS")
                 samples.append((parts[0][11:16],
-                                bool(wl[0]), bool(wrl[0]), bool(ml[0]), bool(wanl[0])))
+                                bool(wl[0]), bool(wrl[0]), bool(ml[0]), bool(wanl[0]), alt_flag))
 
     degradation_events: list[dict] = []
     if LOG_EVENTS.exists():
@@ -765,7 +799,10 @@ def main() -> None:
         wired_ms  = ping_one(WIRED_IFACE, TARGET) if wired_up else None
         modem_ms  = _ping_target(MODEM_TARGET) if modem_enabled else None
         wan_ms    = ping_one(None, WAN_TARGET)
-        append_csv(ts, wifi_ms, wired_ms, modem_ms, wan_ms)
+        # Same target as modem_ms, but bound to the dongle so it reaches the modem directly instead
+        # of via pfSense. The two together are what prove (rather than infer) a pfSense fault.
+        alt_ms    = ping_one(ALT_IFACE, ALT_TARGET) if (ALT_IFACE and iface_ipv4(ALT_IFACE)) else None
+        append_csv(ts, wifi_ms, wired_ms, modem_ms, wan_ms, alt_ms)
 
         wifi_bad   = wifi_ms is None or wifi_ms > BAD_MS
         bad_streak = bad_streak + 1 if wifi_bad else 0

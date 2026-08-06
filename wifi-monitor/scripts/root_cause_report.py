@@ -63,8 +63,11 @@ def collect(since: str, until: str) -> dict[str, dict[str, tuple[int, int]]]:
             day = row[0][:10]
             if day < since or day > until:
                 continue
+            # 6th column (alt / bypass probe) added 2026-08-06; absent or empty = not measured.
+            alt_raw = row[5].strip() if len(row) > 5 else ""
             per_day[day].append((row[0][11:16],
-                                 *(c.strip().upper() == "LOSS" for c in row[1:5])))
+                                 *(c.strip().upper() == "LOSS" for c in row[1:5]),
+                                 None if alt_raw == "" else alt_raw.upper() == "LOSS"))
     return {day: _monitor.attribute(samples) for day, samples in sorted(per_day.items())}
 
 
