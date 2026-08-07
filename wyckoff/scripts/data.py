@@ -63,11 +63,23 @@ def fetch_ohlcv(ticker: str, days: int = 120, start: str | None = None, end: str
     scale = 0.01 if currency == "ILA" else 1.0
     display_currency = "ILS" if currency == "ILA" else currency
 
+    # Yahoo dividend-adjusts ONLY adjclose; open/high/low come back raw. Taking close from
+    # adjclose and the rest raw puts two different price scales in one bar — on a dividend
+    # payer the "close" then sits below the bar's own low (KO: 80% of bars, PG: 86%), which
+    # silently breaks every intrabar test: the Spring pierce, the LPS, and markup_pullback's
+    # "did the pullback hold above the breakout level". Apply the same per-bar adjustment
+    # factor to the whole bar so it stays internally consistent.
+    raw_close = q["close"]
+    factor = [(a / c if (a is not None and c) else 1.0) for a, c in zip(adj, raw_close)]
+
+    def adjusted(series):
+        return [v * fct * scale if v is not None else None for v, fct in zip(series, factor)]
+
     df = pd.DataFrame({
         "Date": [datetime.fromtimestamp(ts, tz=timezone.utc).date() for ts in timestamps],
-        "open": [v * scale if v is not None else None for v in q["open"]],
-        "high": [v * scale if v is not None else None for v in q["high"]],
-        "low": [v * scale if v is not None else None for v in q["low"]],
+        "open": adjusted(q["open"]),
+        "high": adjusted(q["high"]),
+        "low": adjusted(q["low"]),
         "close": [v * scale if v is not None else None for v in adj],
         "volume": q["volume"],
     }).set_index("Date").dropna()
