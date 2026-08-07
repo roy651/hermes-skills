@@ -39,5 +39,8 @@ haaretz-puzzler/output/
 
 # wyckoff portfolio-ticker reference doc (PII); config.yaml handled above, holdings/secnum via data/
 wyckoff/references/roy-portfolio-tickers.md
+# research bench price/observation caches (~1GB, regenerable, no PII but huge)
+wyckoff/research/cache/
+
 # finance-assistant encrypted bank config (age) — never in git
 finance-assistant/importer/config.enc
