@@ -34,11 +34,13 @@ from pathlib import Path
 TARGET           = "192.168.1.1"    # LAN gateway  — tests WiFi/Tenda hop
 MODEM_TARGET     = os.environ.get("MODEM_TARGET", "192.168.3.1")  # WAN gateway — tests pfSense→modem; "" to disable
 WAN_TARGET       = os.environ.get("WAN_TARGET",   "8.8.8.8")      # internet    — tests full ISP path
+WAN_TARGET_ALT   = os.environ.get("WAN_TARGET_ALT", "1.1.1.1")    # second opinion before calling it loss
 WIFI_IFACE       = os.environ.get("WIFI_IFACE",           "wlp1s0")
 WIRED_IFACE      = os.environ.get("WIRED_IFACE",          "eno1")
 INTERVAL         = int(os.environ.get("INTERVAL",         "5"))
 BAD_MS           = float(os.environ.get("BAD_MS",         "150"))
 BAD_CONFIRM      = int(os.environ.get("BAD_CONFIRM",      "2"))
+WAN_CONFIRM      = int(os.environ.get("WAN_CONFIRM",      "3"))
 MID_POLL_INTERVAL = int(os.environ.get("MID_POLL_INTERVAL", "30"))
 
 # Bypass probe: a USB dongle joined to the MODEM's own SSID, so it reaches the modem WITHOUT crossing
@@ -124,6 +126,23 @@ def ping_one(bind: str | None, target: str = TARGET, timeout: int = 2) -> float 
         return None
     except Exception:
         return None
+
+
+def ping_wan(timeout: int = 2) -> float | None:
+    """Is the public internet reachable — not "did 8.8.8.8 answer".
+
+    A single anycast target cannot separate a real WAN outage from that one operator
+    dropping us, and a miss was previously recorded as loss either way.  So a miss is
+    retried against a second operator before it counts.  The fallback only runs after
+    a failure, so a healthy sample still costs exactly one ping.
+    """
+    for target in (WAN_TARGET, WAN_TARGET_ALT):
+        if not target:
+            continue
+        ms = ping_one(None, target, timeout)
+        if ms is not None:
+            return ms
+    return None
 
 
 # ── WiFi state helpers — iw preferred, wpa_cli + /proc fallback ───────────────
@@ -775,15 +794,19 @@ def main() -> None:
 
     modem_enabled = bool(MODEM_TARGET)
     log.info(
-        f"wifi-monitor starting — target={TARGET}  modem={MODEM_TARGET or 'disabled'}  wan={WAN_TARGET}  "
+        f"wifi-monitor starting — target={TARGET}  modem={MODEM_TARGET or 'disabled'}  "
+        f"wan={WAN_TARGET}+{WAN_TARGET_ALT or 'none'}  "
         f"wifi={WIFI_IFACE}  wired={WIRED_IFACE}  "
-        f"interval={INTERVAL}s  bad_threshold={BAD_MS}ms×{BAD_CONFIRM}  "
+        f"interval={INTERVAL}s  bad_threshold={BAD_MS}ms×{BAD_CONFIRM}  wan_confirm=×{WAN_CONFIRM}  "
         f"mid_poll={MID_POLL_INTERVAL}s"
     )
 
     degraded       = False
     wan_down       = False
     bad_streak     = 0
+    wan_bad_streak = 0
+    wan_ok_streak  = 0
+    wan_window: list[tuple[float | None, float | None]] = []   # last WAN_CONFIRM (modem, bypass) samples
     event_start_ts: str | None = None
     event_peak     = 0.0
     next_mid_poll  = 0.0
@@ -798,10 +821,13 @@ def main() -> None:
         wifi_ms   = ping_one(WIFI_IFACE,  TARGET) if wifi_up  else None
         wired_ms  = ping_one(WIRED_IFACE, TARGET) if wired_up else None
         modem_ms  = _ping_target(MODEM_TARGET) if modem_enabled else None
-        wan_ms    = ping_one(None, WAN_TARGET)
+        wan_ms    = ping_wan()
         # Same target as modem_ms, but bound to the dongle so it reaches the modem directly instead
         # of via pfSense. The two together are what prove (rather than infer) a pfSense fault.
-        alt_ms    = ping_one(ALT_IFACE, ALT_TARGET) if (ALT_IFACE and iface_ipv4(ALT_IFACE)) else None
+        # alt_live distinguishes "the bypass was measured and failed" from "there is no bypass" —
+        # only the first licenses a verdict about pfSense.
+        alt_live  = bool(ALT_IFACE and iface_ipv4(ALT_IFACE))
+        alt_ms    = ping_one(ALT_IFACE, ALT_TARGET) if alt_live else None
         append_csv(ts, wifi_ms, wired_ms, modem_ms, wan_ms, alt_ms)
 
         wifi_bad   = wifi_ms is None or wifi_ms > BAD_MS
@@ -811,22 +837,49 @@ def main() -> None:
             event_peak = max(event_peak, wifi_ms)
 
         # ── WAN up/down transitions ────────────────────────────────────────────
-        wan_bad_now = wan_ms is None
-        if not wan_down and wan_bad_now:
+        # Debounced in BOTH directions. A lossy-but-alive WAN (2026-08-08: ~20% loss for
+        # three hours) otherwise flips state on every dropped packet — that incident alone
+        # sent 320 messages. The state only moves once WAN_CONFIRM samples agree.
+        if wan_ms is None:
+            wan_bad_streak += 1
+            wan_ok_streak   = 0
+        else:
+            wan_ok_streak  += 1
+            wan_bad_streak  = 0
+
+        wan_window.append((modem_ms, alt_ms))
+        del wan_window[:-WAN_CONFIRM]
+
+        if not wan_down and wan_bad_streak >= WAN_CONFIRM:
             wan_down = True
-            # Isolate: modem reachable = ISP fault; modem also down = pfSense/modem fault
-            if modem_enabled:
-                if modem_ms is not None:
-                    cause = f"modem OK ({modem_ms:.0f}ms) → Bezeq/ISP fault"
-                else:
-                    cause = f"modem also LOSS → pfSense WAN or modem fault"
-            else:
+            # Isolate the fault to one hop, judged over the whole confirming window rather
+            # than the one triggering sample: during patchy loss a single sample flips the
+            # verdict at random, so "did this hop EVER answer while the WAN was dark" is the
+            # stable question. The bypass reaches the modem without crossing pfSense, so
+            # modem-dark + bypass-alive is the one combination that implicates pfSense.
+            modem_ever_up = any(m is not None for m, _ in wan_window)
+            alt_ever_up   = any(a is not None for _, a in wan_window)
+
+            fix = "if it persists, power-cycle the modem"
+            if not modem_enabled:
                 cause = f"WiFi→pfSense: {_fmt_ms(wifi_ms)}"
-            msg = f"🌐 WAN down\n{cause}"
-            log.warning(f"WAN DOWN  modem={modem_ms} wan={wan_ms}")
+            elif modem_ever_up:
+                cause = f"modem still answering ({_fmt_ms(modem_ms)}) → upstream of the modem (Bezeq/ISP)"
+            elif alt_live and alt_ever_up:
+                cause = "modem answers the bypass but never via pfSense → pfSense suspected"
+                fix   = ""          # restarting the modem is the wrong lever here
+            elif alt_live:
+                cause = "modem dark on BOTH the pfSense path and the bypass → modem or ISP"
+            else:
+                cause = "modem also LOSS, no bypass probe → pfSense WAN or modem fault"
+
+            msg = f"🌐 WAN down ({wan_bad_streak} samples)\n{cause}"
+            if fix:
+                msg += f"\n→ {fix}"
+            log.warning(f"WAN DOWN  modem={modem_ms} wan={wan_ms} alt={alt_ms}")
             send_telegram(msg)
-            append_event(f"WAN_DOWN  modem={modem_ms} wan={wan_ms}")
-        elif wan_down and not wan_bad_now:
+            append_event(f"WAN_DOWN  modem={modem_ms} wan={wan_ms} alt={alt_ms}")
+        elif wan_down and wan_ok_streak >= WAN_CONFIRM:
             wan_down = False
             msg = f"🌐 WAN restored ({wan_ms:.0f}ms)"
             if modem_enabled:
