@@ -238,6 +238,7 @@ def run():
     t_llm = time.monotonic()
     _llm_calls = 0
     def _llm(t: str):
+        nonlocal _llm_calls
         td = data[t]
         if t in engines:
             e = engines[t]
@@ -256,12 +257,10 @@ def run():
                 catalyst["headlines"] = [n["headline"] for n in finnhub.company_news(t, days=21, limit=5)]
             except Exception:
                 pass
-            nonlocal _llm_calls
             _llm_calls += 1
             return t, _validate_voted(wyckoff.validate, t, td.df, td.name, verdict, market_ctx,
                                       catalyst=catalyst, ew_lens=args.ew_lens)
         try:
-            nonlocal _llm_calls
             _llm_calls += 1
             return t, wyckoff.analyze(t, td.df, held=False, name=td.name, mode="entry",
                                       market_ctx=market_ctx, ew_lens=args.ew_lens)
