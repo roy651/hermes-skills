@@ -37,11 +37,17 @@ The job runs on the machine where hermes-agent is installed and requires:
 
 After pulling upstream and restarting `hermes-gateway.service`, **also restart `claude-proxy.service`**:
 
+**Restart them in order — proxy first, gateway second — waiting for the proxy to serve in between:**
+
 ```bash
-systemctl --user restart claude-proxy hermes-gateway
+systemctl --user restart claude-proxy
+until curl -sf -m 3 http://localhost:8765/health >/dev/null; do sleep 3; done
+systemctl --user restart hermes-gateway
 ```
 
-Why: the proxy caches conversation session IDs in memory (for `claude --resume`). If the proxy runs for days without restart, its cached session IDs expire. When the gateway restarts and sends a fresh request, the proxy tries to resume a stale session → `claude exited 1` on every call → the gateway reports "model provider failed after retries" to the user.
+Restarting both in one command (`restart claude-proxy hermes-gateway`) kills the backend out from under whatever call the gateway has in flight, which surfaces as `httpx.RemoteProtocolError: Server disconnected without sending a response` and a retry storm in the gateway log. It recovers on its own, but it makes every restart look like a fault — that noise cost real debugging time on 2026-08-09. Ordering the restarts removes it entirely.
+
+Why restart the proxy at all: it caches conversation session IDs in memory (for `claude --resume`). If the proxy runs for days without restart, its cached session IDs expire. When the gateway restarts and sends a fresh request, the proxy tries to resume a stale session → `claude exited 1` on every call → the gateway reports "model provider failed after retries" to the user.
 
 Symptom: gateway is up, claude CLI works directly, but every API call returns `503 claude unavailable: claude exited 1`.
 Fix: `systemctl --user restart claude-proxy` — clears the in-memory session cache; next call opens a fresh session.
