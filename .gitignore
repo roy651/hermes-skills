@@ -30,6 +30,10 @@ data/
 # Personal/specific trading config (watchlist/parked/levels) — treated like holdings, kept
 # out of git. Runtime-only; copy config.example.yaml → config.yaml to bootstrap.
 wyckoff/config.yaml
+# ...and any timestamped backup of it — same PII, and the bare
+# filename pattern above does not cover them.
+wyckoff/config.yaml.bak-*
+wyckoff/data/holdings.bak-*
 logs/
 .claude/
 
