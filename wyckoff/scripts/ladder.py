@@ -6,6 +6,8 @@ exemption. Targets are absolute (shares of the baseline), so a repeated signal c
 """
 from __future__ import annotations
 
+import math
+
 from deterioration import score_to_stage
 
 DEFAULT_CAP = 0.20      # max single tactical position as a fraction of portfolio value
@@ -54,10 +56,14 @@ def recommend(*, qty: float, price: float, portfolio_value: float, is_core: bool
         why = "trailing stop hit" if stop_hit else "exit score ≥7"
         return _res("EXIT", 0, qty, f"{why} — exit fully", stage=stage, pos_pct=pos_pct)
 
-    if qty > ceiling * (1 + TRIM_TOL):
+    # Floor, never round: the ceiling is an upper limit, so rounding UP would name a target
+    # above it. And a trim worth less than one whole share is not an instruction anyone can
+    # act on — it used to render as "TRIM to 8 - sell 0" on an 8-share position.
+    target_sh = math.floor(ceiling)
+    if qty > ceiling * (1 + TRIM_TOL) and qty - target_sh >= 1:
         why = "deterioration" if det_ceiling <= cap_qty else "over concentration cap"
-        return _res(f"TRIM to {round(ceiling)}", ceiling, qty,
-                    f"{why}: reduce to {round(ceiling)} sh (stage {stage}, {cap*100:.0f}% cap)",
+        return _res(f"TRIM to {target_sh}", target_sh, qty,
+                    f"{why}: reduce to {target_sh} sh (stage {stage}, {cap*100:.0f}% cap)",
                     stage=stage, pos_pct=pos_pct)
 
     half_cap = cap_qty * 0.5   # build toward a HALF (~10%) position on a single setup, not the full cap
