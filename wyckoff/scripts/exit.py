@@ -28,6 +28,7 @@ import risk
 import deterioration
 import ladder
 import events
+import israeli_fund
 import finnhub
 import reddit
 from prescreener import _get_spy_context
@@ -145,9 +146,17 @@ def run():
             print(f"[daily] SPY window-return fetch failed: {e}", file=sys.stderr)
 
     # 1. Fetch OHLCV for everything in parallel (network-bound)
+    # Israeli mutual funds have no Yahoo listing — asking for one costs five retries with
+    # exponential backoff (~35s) and fails every run. portfolio_value.py already prices them
+    # from their published NAV; do the same here instead of burning watchdog budget.
+    t_fetch = time.monotonic()
+    fund_tickers = {t for t in all_tickers
+                    if (holdings.get(t) or {}).get("fund_id")
+                    or (holdings.get(t) or {}).get("globes_id")}
     data: dict = {}
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futs = {pool.submit(market_data.fetch_ohlcv, t, lookback): t for t in all_tickers}
+        futs = {pool.submit(market_data.fetch_ohlcv, t, lookback): t
+                for t in all_tickers if t not in fund_tickers}
         for fut in as_completed(futs):
             t = futs[fut]
             try:
@@ -155,6 +164,16 @@ def run():
             except Exception as e:
                 errors.append(f"{t}: {e}")
                 print(f"[daily] fetch failed for {t}: {e}", file=sys.stderr)
+
+    for t in fund_tickers:
+        h = holdings[t]
+        try:
+            data[t] = israeli_fund.as_ticker_data(h.get("fund_id"), h.get("globes_id"), name=t)
+        except Exception as e:
+            errors.append(f"{t}: {e}")
+            print(f"[daily] fund NAV lookup failed for {t}: {e}", file=sys.stderr)
+    print(f"[daily] fetch: {len(data)}/{len(all_tickers)} tickers in "
+          f"{time.monotonic() - t_fetch:.0f}s", file=sys.stderr)
 
     # USD/ILS rate to normalise ILS holdings for the portfolio-value + concentration math
     usdils = 3.7
@@ -214,12 +233,21 @@ def run():
         print(f"[daily] earnings calendar unavailable: {e}", file=sys.stderr)
 
     # 3. LLM in parallel: VALIDATE each held verdict; ENTRY-analyse each watchlist name
+    # Timing is logged per phase: when the watchdog fires, the log must say WHICH stage
+    # ran long, otherwise the next failure costs another investigation from scratch.
+    t_llm = time.monotonic()
+    _llm_calls = 0
     def _llm(t: str):
         td = data[t]
         if t in engines:
             e = engines[t]
             if e["ladder"]["action"] == "HOLD":      # skip LLM validation on holds — keeps the run well under the watchdog
                 return t, {"valid": None, "note": ""}
+            if holdings[t].get("strategic"):
+                # A deliberate long-term allocation is not sold on a technical read, so asking
+                # the LLM to validate a trim on it costs ~67s to produce advice we will ignore.
+                # The mechanical engine still runs, so stops and alerts are unaffected.
+                return t, {"valid": None, "note": "strategic holding — validation skipped"}
             verdict = {"action": e["ladder"]["action"], "score": e["det"]["score"],
                        "signals": e["det"]["signals"], "stop": e["risk"]["stop"],
                        "qty": holdings[t]["qty"], "price": round(float(td.df["close"].iloc[-1]), 2)}
@@ -228,9 +256,13 @@ def run():
                 catalyst["headlines"] = [n["headline"] for n in finnhub.company_news(t, days=21, limit=5)]
             except Exception:
                 pass
+            nonlocal _llm_calls
+            _llm_calls += 1
             return t, _validate_voted(wyckoff.validate, t, td.df, td.name, verdict, market_ctx,
                                       catalyst=catalyst, ew_lens=args.ew_lens)
         try:
+            nonlocal _llm_calls
+            _llm_calls += 1
             return t, wyckoff.analyze(t, td.df, held=False, name=td.name, mode="entry",
                                       market_ctx=market_ctx, ew_lens=args.ew_lens)
         except Exception as e:
@@ -255,6 +287,9 @@ def run():
             except Exception as e:
                 errors.append(f"{t}: {e}")
                 print(f"[daily] llm error on {t}: {e}", file=sys.stderr)
+
+    print(f"[daily] llm: {_llm_calls} call(s) over {len(all_tickers)} tickers in "
+          f"{time.monotonic() - t_llm:.0f}s  (watchdog {MAX_RUNTIME_SEC}s)", file=sys.stderr)
 
     # Reddit mention data — annotation layer only, fetched after LLM (non-blocking; failure is silent)
     rd_cfg = cfg.get("reddit") or {}

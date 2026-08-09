@@ -21,6 +21,7 @@ Hermes config to use this proxy:
 """
 import json
 import logging
+import contextlib
 import os
 import subprocess
 import sys
@@ -62,11 +63,42 @@ app = Flask(__name__)
 # stored session and so can't evict the agent's. Sessions deliberately survive a fallback — a transient
 # claude failure must not force the next turn into a full fresh re-send (the whole point of the cache).
 _sessions: dict[str, dict] = {}   # key -> {"id","model","msg_count"}
-_active_proc: subprocess.Popen | None = None  # currently running claude subprocess
-# Serialise Claude CLI calls. _call_claude kills the "previous" subprocess on entry (to clear a stuck
-# one) — but under CONCURRENT requests that means each call SIGKILLs (-9) the one before it, which then
-# falls back to qwen. Run claude one-at-a-time: concurrent requests queue here instead of killing.
-_claude_lock = threading.Lock()
+# Running claude subprocesses, keyed by pid -> start time. The original code kept ONE global
+# slot and killed it whenever a new request arrived, as stuck-process cleanup. That is
+# incompatible with concurrency by construction: two legitimate parallel calls would SIGKILL
+# each other. Track them all instead and reap only genuinely stuck ones by age.
+_procs: dict[int, tuple[subprocess.Popen, float]] = {}
+_procs_lock = threading.Lock()
+STUCK_AFTER_SEC = 330            # communicate() already times out at 300s; older than this is stuck
+
+# Bound concurrency rather than forbidding it. One-shot callers (wyckoff) are independent and
+# safe to run in parallel; a RESUMED session is not — it must never race itself — so those are
+# additionally serialised per conversation key below.
+MAX_CONCURRENT_CLAUDE = int(os.environ.get("MAX_CONCURRENT_CLAUDE", "3"))
+_claude_slots = threading.Semaphore(MAX_CONCURRENT_CLAUDE)
+_session_locks: dict[str, threading.Lock] = {}
+_session_locks_guard = threading.Lock()
+
+
+def _session_lock(key: str | None) -> threading.Lock | None:
+    """Per-conversation lock. None for one-shots — they hold no session state to corrupt."""
+    if not key:
+        return None
+    with _session_locks_guard:
+        return _session_locks.setdefault(key, threading.Lock())
+
+
+def _reap_stuck_procs() -> None:
+    now = time.monotonic()
+    with _procs_lock:
+        for pid, (proc, started) in list(_procs.items()):
+            if proc.poll() is not None:
+                _procs.pop(pid, None)
+            elif now - started > STUCK_AFTER_SEC:
+                log.warning(f"claude: reaping stuck subprocess pid={pid} "
+                            f"age={now - started:.0f}s")
+                proc.kill()
+                _procs.pop(pid, None)
 
 # Prepended to any reply NOT served by Claude Code (i.e. a paid API path: OpenRouter now, the Anthropic
 # API layer later) so the user can see at a glance when a message is burning metered tokens.
@@ -165,14 +197,7 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
     Kills any previously running claude subprocess before starting a new one,
     preventing pile-up when the gateway retries after a timeout.
     """
-    global _active_proc
-
-    # Kill any stuck subprocess from a previous request
-    if _active_proc is not None and _active_proc.poll() is None:
-        log.warning(f"claude: killing previous stuck subprocess (pid={_active_proc.pid})")
-        _active_proc.kill()
-        _active_proc.wait()
-    _active_proc = None
+    _reap_stuck_procs()
 
     # The prompt is passed on stdin, never as an argv element: a full reconstructed
     # conversation can be tens of KB and would blow past ARG_MAX, making the exec fail
@@ -191,7 +216,8 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
-    _active_proc = proc
+    with _procs_lock:
+        _procs[proc.pid] = (proc, time.monotonic())
 
     try:
         stdout, stderr = proc.communicate(input=prompt, timeout=300)
@@ -200,8 +226,8 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
         proc.wait()
         raise RuntimeError("claude timed out after 300s")
     finally:
-        if _active_proc is proc:
-            _active_proc = None
+        with _procs_lock:
+            _procs.pop(proc.pid, None)
 
     if proc.returncode != 0:
         raise RuntimeError(f"claude exited {proc.returncode}: {stderr[:300]}")
@@ -306,7 +332,11 @@ def chat_completions():
 
     if model.lower().startswith("claude"):
         key = _conv_key(data)
-        with _claude_lock:                               # serialise: concurrent claude calls must not kill each other
+        # Bound total concurrency; additionally serialise per conversation so a resumable
+        # session never overlaps itself (its --resume state is not concurrency-safe).
+        # One-shot callers such as wyckoff have key=None and only take the semaphore.
+        slock = _session_lock(key)
+        with _claude_slots, (slock or contextlib.nullcontext()):
             sess = _sessions.get(key) if key else None
             # Resume this conversation's session (ship only the new turn) when it grew by ≥1 message;
             # a shrink (msg_count drop) means a NEW conversation took the key → fall back to fresh.
