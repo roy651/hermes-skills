@@ -67,7 +67,7 @@ _sessions: dict[str, dict] = {}   # key -> {"id","model","msg_count"}
 # slot and killed it whenever a new request arrived, as stuck-process cleanup. That is
 # incompatible with concurrency by construction: two legitimate parallel calls would SIGKILL
 # each other. Track them all instead and reap only genuinely stuck ones by age.
-_procs: dict[int, tuple[subprocess.Popen, float]] = {}
+_procs = {}
 _procs_lock = threading.Lock()
 STUCK_AFTER_SEC = 330            # communicate() already times out at 300s; older than this is stuck
 
@@ -76,11 +76,11 @@ STUCK_AFTER_SEC = 330            # communicate() already times out at 300s; olde
 # additionally serialised per conversation key below.
 MAX_CONCURRENT_CLAUDE = int(os.environ.get("MAX_CONCURRENT_CLAUDE", "3"))
 _claude_slots = threading.Semaphore(MAX_CONCURRENT_CLAUDE)
-_session_locks: dict[str, threading.Lock] = {}
+_session_locks = {}
 _session_locks_guard = threading.Lock()
 
 
-def _session_lock(key: str | None) -> threading.Lock | None:
+def _session_lock(key):
     """Per-conversation lock. None for one-shots — they hold no session state to corrupt."""
     if not key:
         return None
