@@ -15,10 +15,11 @@ load_dotenv(Path.home() / ".hermes" / ".env")
 import data as market_data
 import holdings as portfolio
 import israeli_fund
+import fx_rate
 import notifier
 
 TZ = ZoneInfo("Asia/Jerusalem")
-USDILS_FALLBACK = 3.7
+# Fallback now lives in fx_rate, which persists the last good rate.
 
 
 def _period_price(df, ref_date: date, period: str) -> float | None:
@@ -80,8 +81,7 @@ def run():
     if "USDILS=X" in raw:
         usdils_rate = float(raw["USDILS=X"].df["close"].iloc[-1])
     else:
-        usdils_rate = USDILS_FALLBACK
-        print(f"[portfolio_value] USD/ILS fetch failed, using fallback {USDILS_FALLBACK}", file=sys.stderr)
+        usdils_rate = fx_rate.latest()
 
     rows = []
     total_value_usd = 0.0

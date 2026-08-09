@@ -29,6 +29,7 @@ import deterioration
 import ladder
 import events
 import israeli_fund
+import fx_rate
 import finnhub
 import reddit
 from prescreener import _get_spy_context
@@ -176,11 +177,7 @@ def run():
           f"{time.monotonic() - t_fetch:.0f}s", file=sys.stderr)
 
     # USD/ILS rate to normalise ILS holdings for the portfolio-value + concentration math
-    usdils = 3.7
-    try:
-        usdils = float(market_data.fetch_ohlcv("USDILS=X", days=5).df["close"].iloc[-1])
-    except Exception as e:
-        print(f"[daily] USDILS fetch failed, using {usdils}: {e}", file=sys.stderr)
+    usdils = fx_rate.latest()
 
     def _to_usd(cur: str) -> float:
         return (1.0 / usdils) if cur == "ILS" else 1.0
