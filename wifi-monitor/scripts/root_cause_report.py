@@ -45,6 +45,8 @@ PALETTE = {
     "Wired hop":    ("#eb6834", "#d95926"),
     "pfSense/host": ("#1baf7a", "#199e70"),
     "Modem link":   ("#eda100", "#c98500"),
+    # Not an outage — a muted tint of the Modem link hue, so it reads as related but recessive.
+    "Modem unresponsive": ("#c9a55c", "#a88b4e"),
     "Provider":     ("#e87ba4", "#d55181"),
     "Scheduled":    ("#8a8a85", "#9a9a95"),   # known maintenance — deliberately recessive grey
     "Unattributed": ("#6f6f6a", "#7f7f7a"),

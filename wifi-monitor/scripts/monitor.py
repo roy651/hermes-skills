@@ -41,6 +41,7 @@ INTERVAL         = int(os.environ.get("INTERVAL",         "5"))
 BAD_MS           = float(os.environ.get("BAD_MS",         "150"))
 BAD_CONFIRM      = int(os.environ.get("BAD_CONFIRM",      "2"))
 WAN_CONFIRM      = int(os.environ.get("WAN_CONFIRM",      "3"))
+PFSENSE_CONFIRM  = int(os.environ.get("PFSENSE_CONFIRM",  "3"))   # samples before the bypass convicts pfSense
 MID_POLL_INTERVAL = int(os.environ.get("MID_POLL_INTERVAL", "30"))
 
 # Bypass probe: a USB dongle joined to the MODEM's own SSID, so it reaches the modem WITHOUT crossing
@@ -509,10 +510,16 @@ _BUCKETS = [                      # display order = climbing the stack, local fi
     ("Wired hop",    "🧵"),
     ("pfSense/host", "🏠"),
     ("Modem link",   "🔌"),
+    ("Modem unresponsive", "🔍"),
     ("Provider",     "🌐"),
     ("Scheduled",    "🔧"),
     ("Unattributed", "❓"),
 ]
+
+# Kept out of the "unplanned loss" verdict: Scheduled is downtime we already know about, and
+# Modem unresponsive is not downtime at all. Letting either win "dominant cause" buries the
+# fault actually worth looking at.
+VERDICT_EXCLUDED = {"Scheduled", "Modem unresponsive"}
 
 # Known recurring outages, as UTC HH:MM-HH:MM windows. Loss inside a window is RE-LABELLED
 # "Scheduled", never dropped — the time still shows up honestly, so a restart that grows from 60s to
@@ -533,27 +540,31 @@ def in_maintenance(hhmm: str) -> bool:
     return any(lo <= hhmm <= hi for lo, hi in MAINTENANCE_WINDOWS)
 
 
-def root_cause(wifi: bool, wired: bool, modem: bool, wan: bool,
-               alt: bool | None = None) -> str | None:
+def root_cause(wifi: bool, wired: bool, modem: bool, wan: bool) -> str | None:
     """The single component that best explains this sample. None = nothing failed.
 
-    Ordered most-upstream first, because an upstream fault darkens everything below it: a dead
+    Ordered nearest-hop-first, because a break at one hop darkens everything beyond it: a dead
     router must be tested before the WiFi-only rule or it would be misfiled as a radio problem.
+    The probes are nested path prefixes (WiFi/Wired stop at pfSense, Modem at the WAN gateway, WAN
+    beyond it), so the nearest hop that is provably broken is the one that explains the rest.
     Note a *provider* outage does NOT cascade downward here — WiFi/Wired/Modem probes all terminate
     at or before the modem, so only the WAN row can see it.
 
-    `alt` is the bypass probe: the USB dongle sits on the modem's own SSID, so it reaches the modem
-    WITHOUT crossing pfSense. None = not measured (no dongle). When the modem is unreachable the
-    normal way but answers over the bypass, pfSense is the fault by direct measurement rather than
-    by inference — and unlike the all-dark rule below, that also rules out this host's networking."""
+    The bypass probe is deliberately NOT read here. On a single sample it cannot separate a pfSense
+    fault from one unlucky packet — see proven_pfsense_runs, which decides that over a run."""
     if not (wifi or wired or modem or wan):
         return None
-    if modem and alt is False:
-        return "pfSense/host"     # PROVEN: modem dark via pfSense, alive on the bypass
     if wifi and wired and modem:
         return "pfSense/host"     # inferred: every local path dark → the router or this host
+    if modem and not wan:
+        # The modem ignored us, yet 8.8.8.8 answered THROUGH it on the same pass — so the path
+        # across the modem was working and nobody lost connectivity. Modems routinely rate-limit
+        # ICMP aimed at their own management IP while the forwarding fast path runs untouched,
+        # and the modem probe's 2s timeout means the WAN ping lands ~2s later, past a brief blip.
+        # Real, worth watching as a health signal, but it is not an outage.
+        return "Modem unresponsive"
     if modem:
-        return "Modem link"       # pfSense cannot reach the WAN gateway
+        return "Modem link"       # the modem is dark AND nothing beyond it answers
     if wan:
         return "Provider"         # the modem answers, the internet does not
     if wifi and not wired:
@@ -563,17 +574,55 @@ def root_cause(wifi: bool, wired: bool, modem: bool, wan: bool,
     return "Unattributed"
 
 
+def proven_pfsense_runs(samples: list[tuple]) -> set[int]:
+    """Indices of samples where the bypass probe genuinely convicts pfSense.
+
+    The dongle reaches the modem without crossing pfSense, so "modem dark the routed way, alive on
+    the bypass" reads as proof. It is only proof if it HOLDS. Under partial loss both probes are
+    querying the same struggling modem and each drops packets independently, so that pairing turns
+    up by chance constantly: on 2026-08-08 it scored 2740s against a router that answered every
+    single LAN ping that day, and split one modem fault across two buckets in the exact ratio of
+    the bypass probe's own success rate.
+
+    A real router fault is sustained, so require the routed path to stay dark for PFSENSE_CONFIRM
+    consecutive samples while the bypass answers on every one of them. Any break — the modem
+    replying, or the bypass dropping a packet — ends the run and the samples fall through to the
+    ordinary per-sample verdict.
+
+    The WAN probe must be dark too. Both it and the modem probe cross pfSense, so a genuine pfSense
+    fault takes out both; if 8.8.8.8 answered, traffic was flowing through pfSense and the silent
+    modem is the "Modem unresponsive" case, not a router fault."""
+    proven: set[int] = set()
+    run: list[int] = []
+
+    for i, sample in enumerate(samples):
+        routed_dark = sample[3] and sample[4]       # modem AND wan — both cross pfSense
+        bypass      = sample[5] if len(sample) > 5 else None
+        if routed_dark and bypass is False:         # routed paths dark, bypass answered
+            run.append(i)
+            continue
+        if len(run) >= PFSENSE_CONFIRM:
+            proven.update(run)
+        run = []
+
+    if len(run) >= PFSENSE_CONFIRM:
+        proven.update(run)
+    return proven
+
+
 def attribute(samples: list[tuple]) -> dict[str, tuple[int, int]]:
     """-> {bucket: (seconds_lost, episodes)}. An episode is a run of consecutive samples sharing a
     cause, which separates one 10s outage from two unrelated 5s ones.
 
-    Samples are (hhmm, wifi, wired, modem, wan); the leading "HH:MM" (UTC) lets a known scheduled
-    outage be re-labelled rather than blamed on the radio."""
+    Samples are (hhmm, wifi, wired, modem, wan[, alt]); the leading "HH:MM" (UTC) lets a known
+    scheduled outage be re-labelled rather than blamed on the radio."""
     secs: dict[str, int] = {}
     eps: dict[str, int] = {}
     previous = None
-    for hhmm, *flags in samples:
-        cause = root_cause(*flags)      # flags = wifi, wired, modem, wan[, alt]
+    pfsense_proven = proven_pfsense_runs(samples)
+    for i, (hhmm, *flags) in enumerate(samples):
+        # The bypass verdict is decided over a run, so it overrides the per-sample reading.
+        cause = "pfSense/host" if i in pfsense_proven else root_cause(*flags[:4])
         if cause and in_maintenance(hhmm):
             cause = "Scheduled"
         if cause:
@@ -679,10 +728,10 @@ def daily_report() -> None:
                 "degraded — sustained failures")
 
     attribution = attribute(samples)
-    # Judge the day on UNPLANNED loss only — a known nightly AP restart is not a fault, and letting
-    # it win "dominant cause" every single day would bury the thing actually worth looking at.
-    unplanned = {b: v for b, v in attribution.items() if b != "Scheduled"}
+    # Judge the day on UNPLANNED loss only — see VERDICT_EXCLUDED.
+    unplanned = {b: v for b, v in attribution.items() if b not in VERDICT_EXCLUDED}
     scheduled_s = attribution.get("Scheduled", (0, 0))[0]
+    unresponsive_s = attribution.get("Modem unresponsive", (0, 0))[0]
     if unplanned:
         lost = sum(s for s, _ in unplanned.values())
         worst = max(unplanned, key=lambda b: unplanned[b][0])
@@ -692,6 +741,8 @@ def daily_report() -> None:
         verdict = "🟢 clean — no unplanned loss"
     if scheduled_s:
         verdict += f" · +{scheduled_s}s scheduled"
+    if unresponsive_s:
+        verdict += f" · +{unresponsive_s}s modem unresponsive (no outage)"
 
     lines = [
         f"📶 Network daily report — {yesterday}",
