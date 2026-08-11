@@ -28,6 +28,14 @@ def _post(token: str, chat_id: int, text: str) -> None:
         timeout=10,
     )
     resp.raise_for_status()
+    # Log the id Telegram assigned + which bot sent it. A digest arriving twice is otherwise
+    # unattributable: one id here but two messages in the chat means the second copy came from
+    # somewhere else (another host holding this token), not from a double send on this box.
+    try:
+        print(f"[notifier] sent message_id={resp.json()['result']['message_id']} "
+              f"chat={chat_id} bot={token.split(':')[0]}")
+    except (ValueError, KeyError):
+        pass
 
 
 # Digests otherwise exist only inside Telegram, so a later review has nothing to read back. Archive
