@@ -24,6 +24,9 @@ Everything below is detail. This is the standing summary as of 2026-08-07.
 | Is insider buying useful for entries? | **No.** No edge vs a size-matched control; more conviction predicted worse outcomes | §3 |
 | Should we buy deep drawdowns? | **No.** Monotonically punished, every year, worsening | §2 |
 | Biggest hazard found | **A production price-scale bug** that made three of four headline findings artifacts | §0 |
+| Does the deterioration score work? | **No — flat from score 0 to 8** at 6m. ⚠️ weekly horizon untested | §9.1 |
+| Does the trailing stop work? | **Yes — return-neutral, cuts both tails ~⅔.** Keep it | §9.2 |
+| Who wins when deterioration and events contradict? | **Events.** The contradiction bucket has the best win rate | §9.3 |
 
 **The meta-lesson, which matters more than any single number:** this work produced five
 "significant" findings and fixing one data bug killed three of them. Treat anything here that
@@ -333,3 +336,79 @@ The recommended path is shadow mode: run both, publish both, compare on live dat
   Fridays for `.TA` names. Not yet corrected for.
 - **Missing bars.** TEVA.TA had no bar for Thursday 2026-08-06, a trading day. Cause unknown;
   check the broker before acting on recent `.TA` price history.
+
+---
+
+## 9. The exit engine, validated (2026-08-13)
+
+First measurement of `risk → deterioration → ladder`. 112,716 observations, 1,906 tickers,
+61 month-ends, 6-month horizon. Peer-relative benchmark. No LLM.
+Reproduced on a second machine (Mac, pandas 3.0.5, freshly downloaded panel) — the three
+promoted entry detectors matched the mini-PC to three decimal places, so the bench is portable
+and the results are not machine artifacts.
+
+### 9.1 The deterioration score does NOT discriminate
+
+| score | n | mean excess | median | win % |
+|---|---|---|---|---|
+| 0 | 22,196 | −0.33 | −2.41 | 44.4 |
+| 1 | 28,292 | +0.18 | −2.42 | 44.4 |
+| 2 | 26,846 | +0.54 | −2.52 | 44.9 |
+| 3 | 21,318 | −0.02 | −2.80 | 44.3 |
+| 4 | 5,499 | −0.91 | −2.79 | 43.5 |
+| 5 | 4,128 | −0.69 | −2.72 | 44.2 |
+| 6 | 2,614 | −0.77 | −2.73 | 44.6 |
+| 7 | 1,524 | −1.34 | −3.14 | 44.2 |
+| 8 | 299 | +0.19 | −2.60 | 45.8 |
+
+**Score 0 and score 8 produce effectively identical outcomes.** Medians span a −2.4 to −3.1
+band with no monotonic trend; win rates are flat at ~44% throughout. The faint tilt at score 7
+reverses at 8. Note mean excess is ~0 by construction (the peer benchmark is a mean and returns
+are right-skewed) — **the median column is the honest read, and it is flat.**
+
+Consequence: the 0–9 score drives the ladder's trim staging, so the trims it issues are close
+to arbitrary at this horizon.
+
+### 9.2 The trailing stop is return-neutral and halves both tails — KEEP IT
+
+`stop = max(chandelier, structure)`, exit on close-through. Simulated day-by-day against a
+buy-and-hold leg, with the stopped leg **redeployed into SPY** for the remaining horizon
+(without that redeployment the stop looks catastrophic at −7.5pp; that version is wrong,
+because being stopped does not put you in cash).
+
+| bucket | hold | stop+redeploy | delta | p5 | p95 |
+|---|---|---|---|---|---|
+| ALL | 7.03 | 7.17 | **+0.15** | −29.8 → **−8.5** | 50.7 → **20.1** |
+| score 0–2 | 7.10 | 7.22 | +0.12 | −29.6 → −8.4 | 51.3 → 19.5 |
+| score 3–4 | 7.15 | 7.21 | +0.06 | −30.2 → −8.8 | 49.8 → 21.5 |
+| score 5+ | 5.96 | 6.62 | +0.66 | −29.6 → −8.1 | 47.9 → 21.2 |
+
+Same expected return, distribution cut by roughly two-thirds on both sides. That is what a stop
+is for. **99.8% of positions stop out within 6 months** — median gap to price ~3%, matching the
+live digests (0.07%, 0.27%, 1.49%, 1.96%, 2.41% observed on 2026-08-09). This is by design:
+`max()` takes the TIGHTER of the two stops, and 3×ATR on a low-volatility name is only ~4%.
+
+⚠️ A 60-ticker smoke test showed "helps on score 5+, hurts on 3–4". That **vanished on the full
+panel** — small-sample noise. Do not build on smoke tests.
+
+### 9.3 When deterioration and events contradict, deterioration is wrong
+
+| case | share | mean | median | win % |
+|---|---|---|---|---|
+| CONTRADICT (score≥5 AND entry event) | 1.6% | **+0.39** | −2.10 | **46.0** |
+| BEAR only (score≥5, no event) | 6.0% | **−1.11** | −2.97 | 43.97 |
+| BULL only (entry event, score<5) | 13.4% | −0.16 | −2.52 | 44.66 |
+| calm | 79.0% | +0.10 | −2.54 | 44.42 |
+
+The contradiction bucket has the **best** win rate of the four. The bearish read loses when
+challenged. The score carries mild information only uncontradicted (−1.11), and even that is
+~1pp. This is the TEVA/DD case from the 2026-08-09 digest, and it resolves against the trim.
+
+### ⚠️ Open objection — do not act on 9.1/9.3 yet
+
+Everything above is measured at a **6-month** horizon. The ladder acts on a **weekly** cadence.
+The score may predict 1–4 week weakness and simply have been tested at the wrong frame. Rerun
+Studies 1 and 3 at **21 and 63 days** before changing any live trim behaviour. "Your trim signal
+is noise" is too consequential to rest on a possible horizon mismatch.
+
+Reproduce: `python research/exits.py [--sample N]`

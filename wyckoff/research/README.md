@@ -167,3 +167,27 @@ trend detector flips sign when SPY is below its 200-day average, and the Wyckoff
    momentum + earnings revision beats momentum alone.
 6. **Universe variants.** TASE-only (no FX risk for an ILS holder), or sector-relative rather
    than region-relative benchmarking.
+
+---
+
+## Status log
+
+**2026-08-13 — exit engine validated (§9 of docs/signal-validation.md).**
+`research/exits.py` runs three studies on the exit half of the system. Verdict: the trailing
+stop earns its place (return-neutral, cuts both tails by ~⅔); the 0–9 deterioration score does
+not discriminate at a 6-month horizon; when deterioration and events contradict, events win.
+
+**Bench portability confirmed.** Rebuilt from scratch on a second machine (Mac, pandas 3.0.5,
+freshly downloaded panel, different network) and reproduced the promotion result to three
+decimal places. The mini-PC is not required for research — only for cron registration and
+anything touching runtime PII.
+
+### Next, in order
+1. **Short-horizon rerun of Studies 1 and 3 at 21 and 63 days.** The ladder acts weekly; the
+   6-month test may be the wrong frame. BLOCKING any change to live trim behaviour.
+2. **Plan B — costs + portfolio simulation** (`research/portfolio_sim.py`): monthly rebalance
+   on the promoted signal, top-N equal weight, 10bp round-trip base case with 0–30bp
+   sensitivity. Output equity curve, CAGR, max DD, Sharpe, turnover vs SPY/IWM.
+3. **Phase 2 — `scripts/scan.py`** + Thursday prompt. Needs the mini-PC only for cron.
+4. **`engine-health` monthly job** — the recurring hook: re-run the bench, report promotion
+   status changes, integrity failures and stat drift. Would have caught the §0 price bug.
