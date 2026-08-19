@@ -1,8 +1,19 @@
-"""ApeWisdom Reddit mention data — no API key, stdlib-only."""
+"""ApeWisdom Reddit mention data — no API key, stdlib-only.
+
+Every fetch is archived to data/reddit_history/. ApeWisdom serves only a live snapshot: the
+mention counts for a past date are not retrievable afterwards from any source we have. So a
+day not stored is a day of point-in-time text data permanently lost, and text is the one
+candidate signal family we currently cannot backtest at all for exactly that reason.
+Archiving costs nothing and is the only way the option stays open.""" 
 from __future__ import annotations
 import json
+import sys
 import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
 from html import escape as _esc
+
+_ARCHIVE = Path(__file__).parent.parent / "data" / "reddit_history"
 
 _URL = "https://apewisdom.io/api/v1.0/filter/all-stocks/page/{page}"
 _UA  = "wyckoff-monitor/1.0"
@@ -35,7 +46,23 @@ def fetch_mentions(pages: int = 2) -> dict[str, dict]:
                 }
         except Exception:
             pass
+    _archive(results)
     return results
+
+
+def _archive(results: dict) -> None:
+    """One file per UTC day; last write of the day wins. Never raises — archiving must not
+    be able to break a digest."""
+    if not results:
+        return
+    try:
+        _ARCHIVE.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        path = _ARCHIVE / f"{now:%Y-%m-%d}.json"
+        path.write_text(json.dumps(
+            {"fetched_at": now.isoformat(), "tickers": results}, separators=(",", ":")))
+    except OSError as e:
+        print(f"[reddit] archive failed: {e}", file=sys.stderr)
 
 
 def annotation_line(rd: dict | None, threshold: float = 2.0) -> str | None:
