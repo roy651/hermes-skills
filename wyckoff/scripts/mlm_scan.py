@@ -185,13 +185,18 @@ def main():
              f"<i>{len(cand)} names cleared the momentum primary; ranked by the meta-model. "
              f"Bars as of {asof} (completed sessions only).</i>",
              regime_line, ""]
-    for r in top.itertuples():
-        tag = " ⭐held" if r.ticker in held else ""
-        wy = "" if r.wyckoff == "—" else "  ·  wyckoff: entry-event ⚠️"
-        rank = top.index.get_loc(r.Index) + 1
-        lines.append(f"{rank}. <b>{r.ticker}</b>{tag} · {_fmt_price(r.ticker, r.price)} · "
-                     f"meta {r.meta_p*100:.0f} · mom {r.mom:+.0f}% · "
-                     f"{r.dd_pct:+.0f}% off high{wy}")
+    # Telegram renders regular messages in a proportional font, so an aligned table only
+    # survives inside a monospace block. Kept to ~40 chars so it does not wrap on a phone.
+    tbl = [" #  TICKER     PRICE  META   MOM  OFF-HI",
+           "----------------------------------------"]
+    for n, r in enumerate(top.itertuples(), 1):
+        mark = "*" if r.ticker in held else ("!" if r.wyckoff != "—" else " ")
+        px = r.price / 100 if r.ticker.endswith(".TA") else r.price
+        px_s = f"{px:,.0f}" if px >= 1000 else f"{px:,.2f}"
+        tbl.append(f"{n:>2}{mark} {r.ticker[:9]:<9} {px_s:>7} {r.meta_p*100:>5.0f} "
+                   f"{r.mom:>+5.0f}% {r.dd_pct:>+5.0f}%")
+    lines.append("<pre>" + "\n".join(tbl) + "</pre>")
+    lines.append("<i>* = already held   ! = wyckoff entry-event (treat as caution)</i>")
 
     forced = [t.strip().upper() for t in args.include.split(",") if t.strip()]
     if forced:
