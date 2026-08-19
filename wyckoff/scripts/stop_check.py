@@ -34,6 +34,7 @@ def run(dry_run: bool = False) -> None:
     breaches = []   # CLOSE through the stop — a hard exit signal
     touches = []    # intraday low dipped to/through the stop but recovered into the close — informational
     exempt = []     # rate/formula-driven holdings (bonds, etc.) — no trailing stop applies
+    adds = []       # price reclaimed a level we said we would ADD on (strategic sleeves)
     for ticker, h in held.items():
         if portfolio.no_trailing_stop(h):     # e.g. XFIV (5yr Treasury ETF) — exit is a rate/thesis call, not a stop
             exempt.append(ticker)
@@ -48,13 +49,19 @@ def run(dry_run: bool = False) -> None:
                 breaches.append((ticker, sym, rk["price"], rk["stop"]))
             elif low <= rk["stop"]:                                  # intraday dip that recovered by the close
                 touches.append((ticker, sym, round(low, 2), rk["stop"]))
+
+            # A sleeve we intend to BUILD needs the opposite of a stop: say when the trend has
+            # turned back in our favour so the add is deliberate rather than remembered.
+            add_at = h.get("add_above")
+            if add_at and rk["price"] >= float(add_at):
+                adds.append((ticker, sym, rk["price"], float(add_at)))
         except Exception as e:
             print(f"[stop_check] {ticker}: {e}", file=sys.stderr)
 
     if not dry_run:
         risk.save_state(state)                                       # keep the trail current day-to-day
 
-    if breaches or touches:
+    if breaches or touches or adds:
         lines = []
         if breaches:
             lines.append("🛑 <b>Wyckoff Stop Check</b> — stop breached on the close:")
@@ -66,10 +73,17 @@ def run(dry_run: bool = False) -> None:
             lines.append("⚠️ <b>Intraday stop touch</b> (recovered by the close — heads-up, not an exit):")
             for tk, sym, lo, st in touches:
                 lines.append(f"• <b>{tk}</b> — low {sym}{lo} ≤ stop {sym}{st}")
+        if adds:
+            if breaches or touches:
+                lines.append("")
+            lines.append("🟢 <b>Add level reclaimed</b> — the trigger you set to build this position:")
+            for tk, sym, px, lvl in adds:
+                lines.append(f"• <b>{tk}</b> — {sym}{px} ≥ add-above {sym}{lvl}")
         lines.append("\n<i>The close-through-stop is the hard exit; the weekly exit-watch is close-based and may lag.</i>")
         msg = "\n".join(lines)
         print(msg) if dry_run else notifier.send(msg)
-        print(f"[stop_check] {len(breaches)} breach(es), {len(touches)} touch(es)", file=sys.stderr)
+        print(f"[stop_check] {len(breaches)} breach(es), {len(touches)} touch(es), "
+              f"{len(adds)} add-level(s)", file=sys.stderr)
     else:
         print("[stop_check] no breaches", file=sys.stderr)
 
