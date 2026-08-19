@@ -88,7 +88,8 @@ def explain(ticker: str) -> None:
 
     if is_held:
         state = risk.load_state()                       # not saved -> read-only
-        rk = risk.assess(ticker, df, held[ticker]["qty"], state=state)
+        rk = risk.assess(ticker, df, held[ticker]["qty"], state=state,
+                         manual_stop=held[ticker].get("manual_stop"))
         out.append(f"\nTRAILING STOP: {sym}{rk['stop']} ({rk['stop_type']}) · {rk['distance_pct']}% below · stop_hit={rk['stop_hit']}")
         out.append(f"  ATR(14) {rk['atr']} · highest-high(since first-seen) {rk['highest_high']} · "
                    f"baseline {rk['baseline_qty']} sh · max_stage {rk['max_stage']}")
@@ -98,7 +99,8 @@ def explain(ticker: str) -> None:
         executed_stage = 2 if ratio <= 0.625 else 1 if ratio <= 0.875 else 0
         rec = ladder.recommend(
             qty=held[ticker]["qty"], price=price, portfolio_value=_BIG_PV,
-            is_core=(ticker == "DGRO"), det_score=ds["score"], stop_hit=rk["stop_hit"],
+            is_core=bool(held[ticker].get("strategic")) or portfolio.no_trailing_stop(held[ticker]),
+            det_score=ds["score"], stop_hit=rk["stop_hit"],
             max_stage=executed_stage, baseline_qty=baseline,
             has_entry_event=events.has_entry_event(evs), has_structural=ds["has_structural"],
             established_markdown=ds["established_markdown"],

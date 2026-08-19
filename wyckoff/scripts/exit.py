@@ -199,7 +199,7 @@ def run():
         h = holdings[t]
         cost_local = h["avg_cost"] / 100 if td.currency == "ILS" else h["avg_cost"]
         loss_pct = (price / cost_local - 1) if cost_local else None
-        rk = risk.assess(t, td.df, h["qty"], state=state)
+        rk = risk.assess(t, td.df, h["qty"], state=state, manual_stop=h.get("manual_stop"))
         ds = deterioration.deterioration_score(td.df, market_ctx, loss_pct=loss_pct)
         evs = events.detect_events(td.df)
         # Ratchet follows EXECUTION, not past advice: derive the scale-out stage from the actual holding
@@ -209,7 +209,8 @@ def run():
         executed_stage = 2 if ratio <= 0.625 else 1 if ratio <= 0.875 else 0
         rec = ladder.recommend(
             qty=h["qty"], price=price * _to_usd(td.currency), portfolio_value=total_value_usd,
-            is_core=(t == "DGRO"), det_score=ds["score"],
+            is_core=bool(h.get("strategic")) or portfolio.no_trailing_stop(h),
+            det_score=ds["score"],
             stop_hit=rk["stop_hit"] and not portfolio.no_trailing_stop(h),   # bonds/rate-driven: no trailing-stop scale-out
 
             max_stage=executed_stage, baseline_qty=baseline,

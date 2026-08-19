@@ -77,11 +77,17 @@ def structure_stop(df: pd.DataFrame, lookback: int = STRUCTURE_LOOKBACK,
 
 
 def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = None,
-           state: dict | None = None) -> dict:
+           state: dict | None = None, manual_stop: float | None = None) -> dict:
     """Risk overlay for one holding; updates its persistent state in place.
 
     Pass a shared ``state`` dict to batch many holdings (caller saves once);
     omit it to load/save the state file here.
+
+    ``manual_stop`` overrides the computed level outright. The mechanical stop is
+    max(chandelier, structure) — deliberately the TIGHTER of the two — which sits a median ~3%
+    below price and so trips on ordinary noise. When the decision is to give a position room
+    on purpose, that intent has to be recorded somewhere the engine reads, not just agreed in
+    conversation; otherwise the next run silently reverts to the tight level.
     """
     today = today or date.today()
     standalone = state is None
@@ -100,12 +106,15 @@ def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = No
         rec["max_stage"] = 0
     rec["highest_high"] = highest_high
 
-    chand = chandelier_stop(df, highest_high)
-    struct = structure_stop(df, entry_date=date.fromisoformat(rec["entry_date"]))
-    if struct is None or chand >= struct:        # no owned range yet, or chandelier is tighter (higher)
-        stop, stop_type = chand, "chandelier"
+    if manual_stop is not None:
+        stop, stop_type = float(manual_stop), "manual"
     else:
-        stop, stop_type = struct, "structure"
+        chand = chandelier_stop(df, highest_high)
+        struct = structure_stop(df, entry_date=date.fromisoformat(rec["entry_date"]))
+        if struct is None or chand >= struct:    # no owned range yet, or chandelier is tighter (higher)
+            stop, stop_type = chand, "chandelier"
+        else:
+            stop, stop_type = struct, "structure"
 
     if standalone:
         save_state(st)

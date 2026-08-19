@@ -40,7 +40,8 @@ def run(dry_run: bool = False) -> None:
             continue
         try:
             td = market_data.fetch_ohlcv(ticker, days=120)
-            rk = risk.assess(ticker, td.df, h["qty"], state=state)   # updates the trail (highest_high)
+            rk = risk.assess(ticker, td.df, h["qty"], state=state,   # updates the trail (highest_high)
+                             manual_stop=h.get("manual_stop"))
             sym = {"USD": "$", "ILS": "₪"}.get(td.currency, td.currency + " ")
             low = float(td.df["low"].iloc[-1])
             if rk["stop_hit"]:                                        # close through the stop — actionable
