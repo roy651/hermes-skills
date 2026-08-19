@@ -163,7 +163,13 @@ def main():
         for t in forced:
             row = cand[cand.ticker == t]
             if row.empty:
-                lines.append(f"• <b>{t}</b> — primary did NOT fire (momentum below +30%)")
+                # Absent from the panel is NOT the same as "signal did not fire" — one is a
+                # coverage gap, the other is information. Conflating them makes a silent
+                # data failure read as a verdict.
+                in_panel = panel.get(t) is not None and len(panel.get(t, [])) > 400
+                reason = ("momentum below +30%" if in_panel
+                          else "NOT IN PANEL — outside the S&P1500 + intl universe, no verdict")
+                lines.append(f"• <b>{t}</b> — {reason}")
             else:
                 r = row.iloc[0]
                 pos = int((cand.meta_p > r.meta_p).sum()) + 1
