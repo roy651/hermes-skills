@@ -25,6 +25,7 @@ import pickle
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -46,6 +47,7 @@ FEATURES = ["dd", "atr_pct", "rsi14", "vol_ratio", "bb_width", "close_pos",
             "ret21", "ret63", "ret126", "mom_12_1", "ma200_slope", "ma50_slope",
             "dist_days", "obv", "rng"]
 MOM_THRESHOLD = 0.30
+MIN_PRICE_USD = 5.0        # below this, spread and impact dominate any edge we could have
 
 
 def train_meta(obs: pd.DataFrame, panel: dict):
@@ -80,11 +82,20 @@ def train_meta(obs: pd.DataFrame, panel: dict):
     return m, feats
 
 
-def score_today(panel: dict, model, feats: list[str]) -> pd.DataFrame:
-    """Feature-and-score the LATEST bar of every ticker whose primary fires."""
-    rows = []
+def score_today(panel: dict, model, feats: list[str]) -> tuple[pd.DataFrame, dict]:
+    """Feature-and-score the latest COMPLETED bar of every ticker whose primary fires.
+
+    The scan runs at 16:00 Israel time: US markets are shut (so their last bar is complete)
+    but TASE is mid-session, and a partial bar has partial volume — which every volume-ratio
+    feature would read as supply drying up. Dropping any bar dated today removes that whole
+    class of error rather than special-casing exchanges."""
+    today = pd.Timestamp(datetime.now(tz=TZ).date())
+    rows, dropped = [], {"microcap": [], "below_falling_200": []}
     for t, df in panel.items():
         if df is None or len(df) < 400 or t.startswith("^"):
+            continue
+        df = df[df.index < today]                      # completed bars only
+        if len(df) < 400:
             continue
         try:
             f = D.compute_features(df)
@@ -94,7 +105,19 @@ def score_today(panel: dict, model, feats: list[str]) -> pd.DataFrame:
         mom = f["mom_12_1"].iloc[i]
         if not np.isfinite(mom) or mom <= MOM_THRESHOLD:
             continue                                    # primary did not fire
-        rec = {"ticker": t, "bar_date": f.index[i], "price": float(f["close"].iloc[i]),
+        price = float(f["close"].iloc[i])
+        # TASE quotes in agorot; compare on a common scale before applying a price floor.
+        price_usd_ish = price / 100 if t.endswith(".TA") else price
+        if price_usd_ish < MIN_PRICE_USD:
+            dropped["microcap"].append(t)
+            continue
+
+        ns = SimpleNamespace(**{c: f[c].to_numpy() for c in f.columns})
+        if D.ALL["below_falling_200"][1](ns, i):
+            dropped["below_falling_200"].append(t)      # the one validated bearish detector
+            continue
+
+        rec = {"ticker": t, "bar_date": f.index[i], "price": price,
                "mom": float(mom) * 100, "dd_pct": float(f["dd"].iloc[i]) * 100}
         for c in FEATURES:
             rec[c] = float(f[c].iloc[i]) if c in f.columns else np.nan
@@ -107,13 +130,13 @@ def score_today(panel: dict, model, feats: list[str]) -> pd.DataFrame:
 
     c = pd.DataFrame(rows)
     if c.empty:
-        return c
+        return c, dropped
     # Cross-sectional context is computed across TODAY's candidates, mirroring training.
     c["xs_dispersion"] = c["ret63"].std()
     c["xs_breadth"] = (c["ret63"] > 0).mean()
     c["meta_p"] = model.predict_proba(c[feats].to_numpy())[:, 1]
     c["meta_pct"] = c["meta_p"].rank(pct=True) * 100
-    return c.sort_values("meta_p", ascending=False)
+    return c.sort_values("meta_p", ascending=False), dropped
 
 
 def _fmt_price(ticker: str, px: float) -> str:
@@ -136,7 +159,16 @@ def main():
     panel = pickle.load(open(CACHE / "panel.pkl", "rb"))
     obs = pd.read_pickle(CACHE / "observations.pkl")
     model, feats = train_meta(obs, panel)
-    cand = score_today(panel, model, feats)
+    cand, dropped = score_today(panel, model, feats)
+
+    # Regime gate. Every trend detector we tested FLIPS SIGN when SPY is below its 200-day,
+    # so in risk-off this list is not merely weaker — it points the wrong way. Say so loudly
+    # rather than printing the same ranking with no warning.
+    spy = panel.get("SPY")
+    risk_on = True
+    if spy is not None:
+        c200 = spy["close"].rolling(200).mean()
+        risk_on = bool(spy["close"].iloc[-1] > c200.iloc[-1])
     if cand.empty:
         print("[mlm] no candidates", file=sys.stderr)
         return
@@ -146,9 +178,13 @@ def main():
     print(f"[mlm] {len(cand)} primary candidates as of {asof}", file=sys.stderr)
 
     top = cand.head(args.top)
+    regime_line = ("" if risk_on else
+                   "\n🚨 <b>RISK-OFF</b> — SPY is below its 200-day. Every trend detector we "
+                   "tested reverses sign in this regime. Treat this entire list as suspect.\n")
     lines = [f"📈 <b>MLM Scan</b> — meta-labelled momentum — {datetime.now(tz=TZ):%Y-%m-%d}",
              f"<i>{len(cand)} names cleared the momentum primary; ranked by the meta-model. "
-             f"Bars as of {asof}.</i>", ""]
+             f"Bars as of {asof} (completed sessions only).</i>",
+             regime_line, ""]
     for r in top.itertuples():
         tag = " ⭐held" if r.ticker in held else ""
         wy = "" if r.wyckoff == "—" else "  ·  wyckoff: entry-event ⚠️"
@@ -175,6 +211,13 @@ def main():
                 pos = int((cand.meta_p > r.meta_p).sum()) + 1
                 lines.append(f"• <b>{t}</b> — meta {r.meta_p*100:.0f}, ranked {pos} of "
                              f"{len(cand)}, mom {r.mom:+.0f}%")
+
+    # Disclose what was filtered out. Silent suppression turns a ranked list into a black box.
+    if dropped["microcap"] or dropped["below_falling_200"]:
+        lines.append(f"\n<i>Filtered before ranking: {len(dropped['microcap'])} below "
+                     f"${MIN_PRICE_USD:.0f} (spread/impact), "
+                     f"{len(dropped['below_falling_200'])} firing below-falling-200dma "
+                     f"(the one validated bearish detector).</i>")
 
     lines.append("\n<i>⚠️ Wyckoff is shown for continuity only. On this panel it measured "
                  "negative on its own (−1.22%, t=−2.92) and degraded momentum when combined "

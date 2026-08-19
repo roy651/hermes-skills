@@ -131,6 +131,59 @@ def fetch(ticker: str):
     return None
 
 
+def fetch_recent(ticker: str):
+    """Short-range fetch for the daily top-up — ~1KB instead of ~270KB per ticker."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    for attempt in range(3):
+        try:
+            r = requests.get(url, params={"interval": "1d", "range": "1mo"},
+                             headers=HEADERS, timeout=20)
+            if r.status_code == 429 or "Too Many Requests" in r.text[:300]:
+                raise requests.HTTPError("rl")
+            res = r.json().get("chart", {}).get("result")
+            if not res:
+                return None
+            q = res[0]["indicators"]["quote"][0]
+            adj = res[0]["indicators"].get("adjclose", [{}])[0].get("adjclose") or q["close"]
+            fac = [(a / c if (a is not None and c) else 1.0) for a, c in zip(adj, q["close"])]
+            sc = lambda arr: [v * f if v is not None else None for v, f in zip(arr, fac)]
+            df = pd.DataFrame({"open": sc(q["open"]), "high": sc(q["high"]),
+                               "low": sc(q["low"]), "close": adj, "volume": q["volume"]},
+                              index=pd.to_datetime(res[0]["timestamp"], unit="s").normalize()).dropna()
+            return df[~df.index.duplicated(keep="last")]
+        except Exception:
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    return None
+
+
+def update() -> None:
+    """Top up an existing panel with recent bars. Much cheaper than a full refetch, which
+    matters when this runs every trading day rather than once."""
+    path = OUT / "panel.pkl"
+    if not path.exists():
+        print("[update] no panel yet — run a full build first", file=sys.stderr)
+        main()
+        return
+    cache = pickle.load(open(path, "rb"))
+    tickers = [t for t, v in cache.items() if v is not None]
+    print(f"[update] topping up {len(tickers)} tickers", file=sys.stderr)
+    done = 0
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for t, fresh in zip(tickers, pool.map(fetch_recent, tickers)):
+            if fresh is not None and len(fresh):
+                old = cache[t]
+                merged = pd.concat([old[~old.index.isin(fresh.index)], fresh]).sort_index()
+                cache[t] = merged
+            done += 1
+            if done % 400 == 0:
+                print(f"[update] {done}/{len(tickers)}", file=sys.stderr)
+    pickle.dump(cache, open(path, "wb"))
+    ends = pd.Series([d.index.max() for d in cache.values() if d is not None])
+    print(f"[update] done — panel now ends {ends.max().date()} "
+          f"(median {ends.median().date()})", file=sys.stderr)
+
+
 def main():
     OUT.mkdir(exist_ok=True)
     tickers = universe() + BENCHMARKS
@@ -156,4 +209,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--update" in sys.argv:
+        update()
+    else:
+        main()
