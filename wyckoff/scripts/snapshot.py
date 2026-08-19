@@ -27,6 +27,7 @@ load_dotenv(Path.home() / ".hermes" / ".env")
 import yaml
 import finnhub
 import holdings as portfolio
+import reddit
 
 ARCHIVE = Path(__file__).parent.parent / "data" / "fundamentals_history"
 
@@ -60,6 +61,15 @@ def main() -> None:
 
     for t in tickers:
         out["tickers"][t] = snapshot_one(t)
+
+    # Reddit mentions are otherwise only fetched by the Saturday/Sunday jobs, so the archive
+    # would fill weekly. ApeWisdom serves a live snapshot only — a weekday not captured is
+    # gone. fetch_mentions() self-archives, so calling it here is the whole fix.
+    try:
+        mentions = reddit.fetch_mentions(pages=4)
+        print(f"[snapshot] reddit: archived {len(mentions)} tickers", file=sys.stderr)
+    except Exception as e:
+        print(f"[snapshot] reddit archive failed: {str(e)[:60]}", file=sys.stderr)
 
     got = sum(1 for v in out["tickers"].values() if v.get("consensus") not in (None, "unknown"))
     print(f"[snapshot] {len(tickers)} tickers, {got} with a usable consensus", file=sys.stderr)
