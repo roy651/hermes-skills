@@ -24,6 +24,9 @@ Everything below is detail. This is the standing summary as of 2026-08-07.
 | Is insider buying useful for entries? | **No.** No edge vs a size-matched control; more conviction predicted worse outcomes | §3 |
 | Should we buy deep drawdowns? | **No.** Monotonically punished, every year, worsening | §2 |
 | Biggest hazard found | **A production price-scale bug** that made three of four headline findings artifacts | §0 |
+| What is the production entry signal? | **Meta-labelled momentum (MLM)**, daily 16:00 Israel, zero LLM cost | §10 |
+| How many names should be held? | **10** (N=1 is noise: t=1.36, negative median). Sweet spot 5–20 | §10.4 |
+| Does the Wyckoff gate belong in entries? | **No — it degrades momentum** (+2.91 → +1.10). Annotation only | §10.1 |
 | Does the deterioration score work? | **No — flat from score 0 to 8** at 6m. ⚠️ weekly horizon untested | §9.1 |
 | Does the trailing stop work? | **Yes — return-neutral, cuts both tails ~⅔.** Keep it | §9.2 |
 | Who wins when deterioration and events contradict? | **Events.** The contradiction bucket has the best win rate | §9.3 |
@@ -412,3 +415,97 @@ Studies 1 and 3 at **21 and 63 days** before changing any live trim behaviour. "
 is noise" is too consequential to rest on a possible horizon mismatch.
 
 Reproduce: `python research/exits.py [--sample N]`
+
+---
+
+## 10. Meta-labelled momentum (MLM) — the production entry signal (2026-08-19/20)
+
+Replaces the Wyckoff funnel as the primary entry report. `scripts/mlm_scan.py`, daily at
+16:00 Israel, ~4 min, **zero LLM cost**.
+
+### 10.1 The Wyckoff gate actively degrades momentum
+
+Joined panel, 112,716 observations, forward 6m excess vs same-region peers:
+
+| cohort | n | share | mean | t | win% |
+|---|---|---|---|---|---|
+| neither | 71,504 | 63.4% | −0.91 | −5.45 | 43.0 |
+| **Wyckoff gate only** | 9,999 | 8.9% | **−1.22** | −2.92 | 43.7 |
+| **momentum only** | 24,349 | 21.6% | **+2.91** | **+5.05** | 48.4 |
+| both | 6,864 | 6.1% | +1.10 | 1.41 | 46.5 |
+
+Momentum alone earns +2.91 (t=5.05); intersecting it with the Wyckoff gate **cuts it to +1.10
+and destroys significance**. The gate alone is significantly negative and worse than random.
+It is retained in the digest as a flagged annotation only — never a filter, never a ranking
+input — and should be read as evidence *against* a name.
+
+### 10.2 Meta-labelling adds a modest, monotonic improvement
+
+Primary = `mom_12_1 > 30%` (no ML). Secondary = HistGradientBoosting on 17 context features,
+expanding-window walk-forward, 6-date embargo (the 126-day forward window overlaps five
+subsequent monthly observations; without the embargo the model trains on its own answer).
+
+| cohort | n | mean | t | median | win% |
+|---|---|---|---|---|---|
+| ALL primary (baseline) | 16,381 | +4.68 | 7.50 | 0.70 | 51.5 |
+| meta top 30% | 4,931 | +6.00 | 6.43 | 1.20 | 52.3 |
+| meta top 10% | 1,657 | **+8.21** | 6.89 | 1.49 | 53.4 |
+| meta bottom 10% | 1,623 | +5.55 | 3.19 | −0.41 | 49.3 |
+
+⚠️ The bottom decile beats the bottom half — non-monotonic at the tail, i.e. real noise in the
+ranking. And the +4.68 baseline is a *later, stronger sub-period* (37 dates), not comparable
+to the full-sample +2.58.
+
+### 10.3 What the model actually learned — mostly one thing
+
+| | correlation with meta score |
+|---|---|
+| momentum magnitude | **+0.044** (none) |
+| proximity to 52-week high | **+0.304** (rank corr +0.338) |
+
+Bottom decile sits 26.1% off its high; top decile 6.7%. **The model largely rediscovered the
+drawdown gradient from §2.** Encouraging as a sanity check, deflating as a contribution — it
+may be an expensive proxy for "prefer names near their highs". Untested: whether it beats that
+single rule directly.
+
+### 10.4 Concentration destroys the edge — the most decision-relevant table here
+
+Top-N held each month, equal weight, out of sample:
+
+| N | mean | t | median | win% | worst month |
+|---|---|---|---|---|---|
+| 1 | 11.71 | **1.36** | −2.34 | 48.6 | −40.6 |
+| 3 | 11.76 | 2.21 | −1.98 | 45.9 | −31.2 |
+| 5 | 14.85 | 4.47 | +2.32 | 53.0 | −20.2 |
+| **10** | **14.05** | **5.22** | **+3.88** | 56.2 | **−9.8** |
+| 20 | 11.48 | 6.00 | +3.07 | 55.5 | −6.6 |
+| 50 | 8.25 | 7.75 | +1.84 | 53.8 | −2.0 |
+| ALL | 4.68 | 7.50 | +0.70 | 51.5 | +0.4 |
+
+**N=1 is statistically indistinguishable from noise** (t=1.36, negative median). Picking one
+name keeps the mean (+14.05%) but takes a 45.2% standard deviation, a −28.7% 10th percentile,
+and a 44% chance of losing to peers. **Sweet spot N=5–20; 10 is the balance point.**
+
+⚠️ **Turnover is high and uncosted:** median overlap of consecutive months' top-10 is **30%** —
+seven of ten names change monthly, ~84 trades/year. None of the returns above include costs.
+
+### 10.5 Filters applied before ranking (disclosed in every digest)
+
+One hard gate (`mom_12_1 > 30%`, ~32% of the universe pass), then three filters, then a sort:
+completed bars only (16:00 Israel is mid-session on TASE — a partial bar reads as volume
+dry-up); a $5 price floor (5 of the top 30 were sub-$5 ASX microcaps, one ranked #1); and the
+`below_falling_200` veto. Plus a risk-off banner if SPY loses its 200-day, since every trend
+detector reverses sign there.
+
+### Known limitations — read before extending
+
+1. **Only 37 out-of-sample dates.** Observations start 2021-01 by configuration, though the
+   panel holds data from 2016 and Yahoo serves 2006. Widening the window is the cheapest
+   available improvement and is not yet done.
+2. **Unstable ranking.** The model retrains per run and probabilities cluster in a 55–65 band,
+   so the order shuffles between runs on identical data. Fine if the top-10 is taken as a set;
+   fatal if names are cherry-picked.
+3. **No fundamentals.** GKX's dominant predictors were price trends, **liquidity** and
+   volatility. We have two of three — dollar volume is computable from our own panel for free
+   and is not yet a feature.
+4. **No transaction costs anywhere.**
