@@ -95,3 +95,43 @@ Have a `.venv`, scripts, `.env`, logs/data, and are executed by a **systemd serv
 
 ## SSH
 `roy650@<ip>` — **wired/primary `192.168.1.16`** (pfSense static for eno1, active after the wired lease renews/reboot), **WiFi/fallback `192.168.1.17`**, Tailscale `100.78.84.7`. Reuse one connection: `-o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=600` (drops to `ControlMaster=no` if the Mac's own network changes mid-session → "Broken pipe").
+
+## Known state (2026-08-21) — security hardening
+
+Verified a Hermes security audit and hardened the mini-PC. Six of its seven findings held; one was
+materially wrong, two real issues were missed. **New skill `minipc-audit`** re-checks all of this
+monthly (kind-A-style script skill, cron `minipc_audit_monthly`, 1st at 06:00 UTC).
+
+- **SSH is key-only.** `/etc/ssh/sshd_config.d/01-hardening.conf`. The `01-` prefix is load-bearing:
+  sshd takes the **first** value it reads, `Include` is at line 12, and `50-cloud-init.conf` sets
+  `PasswordAuthentication yes`. Grepping `sshd_config` gives the wrong answer — always use `sshd -T`.
+- **ufw**: default deny; 22 scoped to the LAN + `tailscale0`. ⚠️ **The `tailscale0` rule is
+  decorative** — see below.
+- **Tailscale bypasses ufw entirely.** `-A INPUT -j ts-input` precedes every ufw chain and
+  `ts-input` ends `-i tailscale0 -j ACCEPT`. ufw does **not** filter tailnet traffic. The controls
+  that actually work are narrow **socket binds** and the **Tailscale ACL** (now port 22 only,
+  verified from the enforced packet filter, not the console). Tailnet Lock deliberately **off**:
+  Android cannot sign, so this host would be the sole signer.
+- **Only sshd binds a wildcard.** Gateway webhook → `127.0.0.1` (`platforms.webhook.extra.host` in
+  `~/.hermes/config.yaml`); daily-summary dashboard and actual-budget → the LAN address.
+- **`docker-modem-guard.service`** re-inserts a `DOCKER-USER` DROP for the modem-side interface on
+  every docker start (dockerd flushes its chains on restart). Needed because Docker's DNAT sits in
+  `nat/PREROUTING`, ahead of every ufw chain — **ufw cannot police published container ports**.
+- **`actual-budget.service`** waits for the LAN address, then starts the container (policy `no`).
+  Binding to a specific IP creates a DHCP-timing dependency: docker starts ~3s early, and a failed
+  bind leaves the container `Up` with **no port mapping**. `network-online.target` is useless here —
+  `systemd-networkd-wait-online` is *skipped* via `ConditionPathIsSymbolicLink`.
+- **Root-equivalence closed.** `roy650` removed from the `docker` group; blanket
+  `NOPASSWD: /bin/systemctl, /usr/bin/docker` replaced by `/etc/sudoers.d/roy650-services` (scoped
+  unit commands + `/usr/local/sbin/minipc-audit-root`). Both were root: `systemctl link` an arbitrary
+  unit, or `docker run -v /:/host --privileged`. Password sudo retained via the `sudo` group.
+  ⚠️ A `NOPASSWD` rule must never point into the git checkout — it is user-writable, i.e. a root shell.
+- **Ubuntu Pro attached** (free personal): `esm-apps`, `esm-infra`, `livepatch` enabled.
+- **WAN is clean** — zero open ports, confirmed 2026-08-21 from a phone hotspot. Cannot be checked
+  from inside (NAT hairpin off ⇒ everything looks closed). Re-run quarterly. ⚠️ Mobile carriers
+  intercept **port 53**, so a TCP connect reports it open for *any* address — control against an
+  RFC 5737 TEST-NET address before believing it.
+- ⚠️ Still open: modem Wi-Fi key rotation and **bridge mode** (the modem is upstream of pfSense and
+  broadcasts its own SSID — the only route onto the untrusted segment).
+- **Lesson:** a single vantage point is not a general property. "Firewalled from the LAN" is not
+  "firewalled" (8644 was open via tailnet); "open from a carrier" is not "open" (port 53).

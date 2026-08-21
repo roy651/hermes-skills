@@ -44,3 +44,7 @@ wyckoff/research/cache/
 
 # finance-assistant encrypted bank config (age) — never in git
 finance-assistant/importer/config.enc
+
+# minipc-audit baseline: expected ports, interface names and tailnet devices.
+# Runtime-only; copy config.example.yaml -> config.yaml to bootstrap.
+minipc-audit/config.yaml*

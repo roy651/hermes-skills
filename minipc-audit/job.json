@@ -1,0 +1,14 @@
+[
+  {
+    "id": "minipc_audit_monthly",
+    "name": "Mini-PC Monthly Security & Maintenance Audit",
+    "prompt": "Run the mini-PC monthly audit and report the result.\n\n```bash\ncd ~/.hermes/skills/minipc-audit && python3 scripts/audit.py\n```\n\nOUTPUT RULES (critical): your final response is the script's stdout, verbatim, starting at the '🛡️' header line. Do not add a preamble, a summary, an interpretation, or a closing remark. Do not reformat it — it is already laid out for Telegram.\n\nIf the script fails to run at all (missing config, traceback, non-zero exit with no report), say so plainly and include the error instead.",
+    "schedule": {
+      "kind": "cron",
+      "expr": "0 6 1 * *",
+      "display": "1st of the month, 06:00 UTC"
+    },
+    "deliver": "origin",
+    "enabled": true
+  }
+]
