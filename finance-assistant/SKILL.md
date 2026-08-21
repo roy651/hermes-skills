@@ -16,13 +16,32 @@ ActualBudget (Docker :5006) ← MoneyMan (daily cron) ← encrypted config.enc
 
 ### 1. ActualBudget
 
+The container is managed by **systemd**, not by hand:
+
 ```bash
-docker run -d --name actual-budget --restart unless-stopped \
-  -p 5006:5006 -v actual_data:/data \
-  actualbudget/actual-server:latest-alpine
+sudo systemctl start actual-budget        # stop / restart / status likewise
 ```
 
-Open http://192.168.1.17:5006, create budget, set password.  
+`actual-budget.service` waits for the LAN address to exist before starting the
+container, then publishes it on that address only. Both details matter:
+
+- **Publish on the LAN address, never `-p 5006:5006`.** A bare publish binds every
+  interface, and Docker's DNAT sits ahead of ufw — so the budget app answered on
+  the modem-side network, outside the firewall.
+- **Wait for the address.** Docker starts ~3s before the DHCP lease lands, and a
+  failed bind leaves the container `Up` with *no port mapping* — running, but
+  publishing nothing. Docker's own restart policy does not retry start failures,
+  which is why systemd owns it and the container's policy is `no`.
+
+First-time creation only (systemd manages it thereafter):
+
+```bash
+sudo docker run -d --name actual-budget --restart no \
+  -p 192.168.1.16:5006:5006 -e NODE_ENV=production \
+  -v actual_data:/data actualbudget/actual-server:latest-alpine
+```
+
+Open http://192.168.1.16:5006, create budget, set password.  
 Create accounts: Bank Leumi (checking), Max – Roy, Cal – Roy, Isracard – Roy, Max – Wife, Cal – Wife (all credit card type).
 
 ### 2. MoneyMan Importer
