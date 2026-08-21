@@ -90,12 +90,22 @@ bash ~/.hermes/scripts/minipc_audit.sh
 \`\`\`
 TXT
 else
-  echo "🔴 Conflicts — needs a human. Files:"
+  echo "🔴 Conflicts — needs a decision. Files:"
   echo '```'
   echo "$CONFLICTS"
   echo '```'
   echo
-  echo "These usually land on the local reverts (voice transcript, cron retry,"
-  echo "cron delivery order). Decide per file whether to keep the revert or adopt"
-  echo "upstream — see hermes-upstream-sync/SKILL.md for the full procedure."
+  echo "These land on the local reverts (voice transcript, cron retry, cron"
+  echo "delivery order): upstream changed code you deliberately reverted, so each"
+  echo "one is 'keep the revert' or 'adopt upstream' — a judgement call, not a"
+  echo "mechanical fix."
+  echo
+  echo "To get a neutral read on each file first:"
+  echo '```'
+  echo "Use the merge-reconciler skill on the hermes-agent upstream merge —"
+  echo "for each conflicted file, summarise what upstream changed, what our"
+  echo "revert was protecting, and whether the revert is still needed."
+  echo '```'
+  echo
+  echo "Full procedure: hermes-upstream-sync/SKILL.md"
 fi

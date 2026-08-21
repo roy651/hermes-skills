@@ -151,3 +151,37 @@ wildcard address or change a bind; the audit catches exactly that, independently
 happened because the job only *reported*; nobody acted. Merge monthly into a
 worktree automatically, report "clean, N commits, say go", and keep the **deploy**
 manual — it restarts everything on the box.
+
+### Restarting claude-proxy without patching upstream
+
+`hermes update` restarts the **gateway** only — it knows nothing about
+`claude-proxy`. Patching upstream to teach it would create a merge conflict
+every week, which is exactly what we are trying to avoid.
+
+There is no update/restart hook: the add-on hook system (`gateway/hooks.py`)
+dispatches only `gateway:startup`, `agent:start|step|end|main`, and the
+shell-hook system covers agent-level events (tool/LLM/session), not deploys.
+
+**The answer is a systemd drop-in**, at
+`~/.config/systemd/user/hermes-gateway.service.d/proxy-first.conf`:
+
+```ini
+[Service]
+ExecStartPre=-/usr/bin/systemctl --user restart --no-block claude-proxy.service
+ExecStartPre=-/bin/bash -c 'for i in $(seq 1 30); do curl -sf -m 2 http://localhost:8765/health >/dev/null && exit 0; sleep 1; done; exit 0'
+```
+
+Why this and not a hook:
+- It lives **outside the git checkout**, so it survives `hermes update` and can
+  never conflict with upstream.
+- It covers **every** restart path — `hermes update`, the watchdog, manual
+  `systemctl`, and boot. A `gateway:startup` hook only covers restarts that
+  reach the gateway's Python startup, and fires *after* the gateway is already
+  up, which is the wrong order.
+- `--no-block` avoids a systemd transaction deadlock (we are inside the
+  gateway's own start job); the curl loop is the real gate.
+- Both `ExecStartPre` lines are prefixed `-` so a proxy problem can never block
+  the gateway from starting.
+
+Verified 2026-08-21: `systemctl --user restart hermes-gateway` restarted the
+proxy first (lower PID), returned in 2s, both healthy.
