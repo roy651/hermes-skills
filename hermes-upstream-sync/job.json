@@ -1,11 +1,19 @@
-{
-  "id": "hermes_upstream_sync_check",
-  "name": "Hermes Upstream Sync Check",
-  "prompt": "Check if the hermes-agent installation is behind the upstream NousResearch repo and report the findings.\n\nRun these steps using execute_bash:\n\n1. Fetch upstream (no checkout):\n   cd ~/.hermes/hermes-agent && git fetch origin 2>&1\n\n2. Count commits behind:\n   git rev-list HEAD..origin/main --count\n\n3. If 0 commits behind, respond with [SILENT] — nothing to report.\n\n4. If behind, get the commit list:\n   git log HEAD..origin/main --oneline\n\n5. Check if our branch rebases cleanly (dry-run, no changes):\n   git stash 2>/dev/null; git rebase --onto origin/main origin/main HEAD --dry-run 2>&1 | tail -5; git stash pop 2>/dev/null\n\n6. Send a Telegram report to Roy with:\n   - How many commits behind\n   - Summary of notable changes (feat/fix only, skip docs/test/style commits)\n   - Whether rebase looks clean or has conflicts\n   - Recommendation: if rebase is clean → \"עדכון בטוח, ניתן לרוץ עכשיו\"; if conflicts → \"נדרש merge ידני לפני עדכון\"\n\nKeep the report concise and in English. Wrap any tables in triple-backtick code blocks.",
-  "schedule": {
-    "kind": "cron",
-    "expr": "0 9 * * 0"
-  },
-  "deliver": "origin",
-  "enabled": true
-}
+[
+  {
+    "id": "hermes_upstream_sync_check",
+    "name": "Hermes Upstream — weekly check + trial merge",
+    "mode": "no-agent",
+    "note": "Not auto-imported — documents the live job. Converted 2026-08-21 from an agent job that only COUNTED commits (and was ignored until the fork drifted 2,918 behind) to a --no-agent script that actually trial-merges in a scratch worktree and reports an actionable verdict. Silent when up to date: empty stdout suppresses delivery. The DEPLOY stays manual — it restarts every service on the box.",
+    "script": "hermes_upstream_check.sh",
+    "source": "hermes-upstream-sync/scripts/check_and_merge.sh",
+    "edit_command": "hermes cron edit hermes_upstream_sync_check --script hermes_upstream_check.sh --no-agent --name 'Hermes Upstream — weekly check + trial merge'",
+    "schedule": {
+      "kind": "cron",
+      "expr": "0 9 * * 0",
+      "display": "Sundays 09:00 UTC"
+    },
+    "deliver": "origin",
+    "enabled": true,
+    "cadence_note": "Upstream moves ~250-300 commits/day, so a weekly delta is still ~2,100 commits. Weekly is NOT about smaller deltas — it is about catching a conflict while the upstream change is fresh, and picking up security fixes within days. Size does not predict difficulty: the 2,918-commit merge on 2026-08-21 was clean. Conflicts land on the 14 local reverts, not on volume."
+  }
+]
