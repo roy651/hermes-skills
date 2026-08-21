@@ -376,16 +376,29 @@ def check_maintenance(priv: dict | None, cfg: dict) -> None:
     record(sec, "livepatch enabled",
            OK if re.search(r"livepatch\s+yes\s+enabled", pro) else INFO)
 
+    # Most services here are *user* units, and `systemctl --user` needs
+    # XDG_RUNTIME_DIR to reach the session bus. Without it every user unit looks
+    # dead. Distinguish "cannot measure" from "not running" -- reporting six
+    # healthy services as FAIL because of a missing env var is exactly the kind
+    # of false alarm that makes a monthly report get ignored.
+    user_bus = "Failed to connect" not in sh("systemctl --user is-system-running")
+
     failed = sh("systemctl --failed --no-legend --no-pager").strip()
-    failed_user = sh("systemctl --user --failed --no-legend --no-pager").strip()
+    failed_user = sh("systemctl --user --failed --no-legend --no-pager").strip() if user_bus else ""
     both = "; ".join(x for x in (failed, failed_user) if x and "0 loaded" not in x)
     record(sec, "no failed units", OK if not both else WARN, both[:200])
 
     for unit in cfg["expect"]["services"]:
-        state = sh(f"systemctl --user is-active {unit}").strip() or "unknown"
+        state = sh(f"systemctl --user is-active {unit}").strip() if user_bus else ""
         if state != "active":
             state = sh(f"systemctl is-active {unit}").strip() or state
-        record(sec, f"service {unit}", OK if state == "active" else FAIL, state)
+        if state == "active":
+            record(sec, f"service {unit}", OK)
+        elif user_bus:
+            record(sec, f"service {unit}", FAIL, state or "unknown")
+        else:
+            record(sec, f"service {unit}", UNKNOWN,
+                   "user bus unreachable (no XDG_RUNTIME_DIR) — not measured")
 
     root_use = sh("df -h / | tail -1").split()
     if len(root_use) >= 5:
