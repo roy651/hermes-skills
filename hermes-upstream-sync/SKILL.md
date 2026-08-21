@@ -78,3 +78,76 @@ with open('/home/roy650/.hermes/cron/jobs.json', 'w') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 EOF
 ```
+
+## Actually performing the merge + deploy
+
+The check above is read-only. This is the deploy, learned the hard way on 2026-08-21
+(2,918 commits behind; the merge itself was clean, the *deploy* was where it went wrong).
+
+### The venv is uv-managed and has NO pip
+
+`venv/bin/pip` does not exist — `python -m pip` reports *No module named pip*. The
+project ships a `uv.lock` and a `[tool.uv] override-dependencies` block that plain
+pip would ignore anyway. `hermes_cli/update_lock.py` describes the real update as
+**"git pull + uv sync + desktop rebuild"**.
+
+### `uv sync` alone is NOT enough — extras are the trap
+
+A bare `uv sync` installs only the base dependency group. This install has **every
+extra** present (`messaging`, `mcp`, `voice`, `google`, `slack`, `matrix`, …), and
+`python-telegram-bot` and `mcp` live in extras. A bare sync silently upgraded
+`cryptography` while leaving `mcp` at 1.28.1 when 0.20.5 requires 2.0.0.
+
+```bash
+cd ~/.hermes/hermes-agent
+export VIRTUAL_ENV="$PWD/venv"
+uv sync --frozen --inexact --all-extras --active
+```
+
+`--frozen` = install exactly what the lock pins (the set upstream tested).
+`--inexact` = do not prune packages absent from the lock.
+
+### Order of operations
+
+```bash
+# 1. safety nets FIRST -- the schema migration is not reversible by git alone
+git tag pre-upstream-merge-$(date +%Y%m%d-%H%M%S) HEAD
+cp -al venv venv.bak-$(date +%Y%m%d-%H%M%S)          # hardlink: instant, 1.1G costs nothing
+mkdir -p ~/hermes-db-backup-$(date +%Y%m%d-%H%M%S)
+sqlite3 ~/.hermes/state.db ".backup '<dir>/state.db'"
+
+# 2. merge in a SCRATCH WORKTREE, never the live checkout
+git worktree add -b merge/upstream-<date> ~/hermes-merge local/improvements
+cd ~/hermes-merge && git merge origin/main
+
+# 3. smoke-test with an ISOLATED HERMES_HOME -- otherwise the new binary
+#    migrates the live state.db before you have committed to the upgrade
+HERMES_HOME=/tmp/smoke .venv-test/bin/hermes --version
+
+# 4. only then: stop the watchdog TIMER (it fires every 5m and will fight you),
+#    stop the gateway, fast-forward, uv sync --all-extras, then
+#    proxy -> wait for health -> gateway
+```
+
+### Verify afterwards
+
+Run the `minipc-audit` skill. A 2,918-commit jump can re-enable a service on a
+wildcard address or change a bind; the audit catches exactly that, independently.
+
+### Pitfalls that cost real time
+
+- **Never `$?` after a pipeline.** `uv sync ... | tail | sed; RC=$?` captures `sed`,
+  not the install — a failed dependency step reported success and the gateway was
+  restarted on stale libraries. Capture the exit code directly.
+- **`git merge-tree` "changed in both" is not a conflict.** Counting those lines
+  predicted conflicts on a merge that applied cleanly. Use a real dry-run merge.
+- **The schema migration runs at gateway start.** After it, rollback = restore the
+  DB backup *and* reset the code, and any messages since the migration are lost.
+- Keep the safety nets for a few days before deleting them.
+
+### Do not let it drift this far again
+
+2,918 commits merged cleanly, and would have at any point along the way. The drift
+happened because the job only *reported*; nobody acted. Merge monthly into a
+worktree automatically, report "clean, N commits, say go", and keep the **deploy**
+manual — it restarts everything on the box.
