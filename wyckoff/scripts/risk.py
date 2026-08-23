@@ -22,6 +22,7 @@ STATE_FILE = Path(__file__).parent.parent / "data" / "positions_state.json"
 ATR_PERIOD = 14
 CHANDELIER_MULT = 3.0
 STRUCTURE_LOOKBACK = 20
+STRUCTURE_MIN_SESSIONS = 10   # fewer owned bars than this is not a swing low, just a handful of bars
 STRUCTURE_BUFFER_ATR = 0.25      # cushion below the swing low so a wick fakeout doesn't trip the stop
 
 
@@ -66,12 +67,16 @@ def structure_stop(df: pd.DataFrame, lookback: int = STRUCTURE_LOOKBACK,
       exactly what put IBM's stop above its entry on a same-day add). Only the range you
       have actually held through defines your structure risk.
 
-    Returns ``None`` when there is not yet a prior *owned* session (entered today), so the
-    caller falls back to the chandelier trail until a real owned range exists.
+    Returns ``None`` until there are ``STRUCTURE_MIN_SESSIONS`` prior owned bars, so the caller
+    falls back to the chandelier trail until a real owned range exists. The minimum matters as
+    much as the exclusions above: with two owned bars the "floor of the prior sessions" is
+    literally the entry day's low, which sits a fraction of a percent under the entry and is an
+    artifact of a short window rather than a level the market defended. Left unguarded it also
+    poisons the ratchet, which would hold that artificial level for the life of the position.
     """
     owned = df.loc[df.index >= entry_date] if entry_date is not None else df
     prior = owned["low"].iloc[-lookback - 1:-1]
-    if not len(prior):
+    if len(prior) < STRUCTURE_MIN_SESSIONS:
         return None
     return float(prior.min()) - STRUCTURE_BUFFER_ATR * atr(df)
 
@@ -179,6 +184,14 @@ if __name__ == "__main__":  # self-test: synthetic data, shared state (no file w
     assert rc["stop_type"] == "chandelier", "same-day entry must fall back to chandelier, not pre-entry structure"
     assert rc["stop"] < rc["price"], f"a fresh-entry stop must sit below price, got {rc['stop']} vs {rc['price']}"
     assert not rc["stop_hit"], "a same-day entry into a dip must not self-trigger a breach"
+    # A young position has no structure yet: with a couple of owned bars the "floor" would be
+    # the entry day's low. It must fall back to the chandelier, not invent a level.
+    young = df.iloc[:-1].copy()
+    assert structure_stop(young, entry_date=young.index[-2]) is None, \
+        "two owned bars must not yield a structure stop"
+    assert structure_stop(df, entry_date=df.index[-STRUCTURE_MIN_SESSIONS - 1]) is not None, \
+        "a full owned window must yield a structure stop"
+
     # The ratchet: a volatility spike must not widen an existing stop. Same highest_high,
     # a much wider ATR — the stop has to hold its previous level, not fall with the bands.
     calm: dict = {}
