@@ -107,7 +107,10 @@ def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = No
     rec["highest_high"] = highest_high
 
     if manual_stop is not None:
+        # A level chosen deliberately replaces the ratchet outright — including downward,
+        # which is the whole point of setting one by hand.
         stop, stop_type = float(manual_stop), "manual"
+        rec["stop_floor"] = stop
     else:
         chand = chandelier_stop(df, highest_high)
         struct = structure_stop(df, entry_date=date.fromisoformat(rec["entry_date"]))
@@ -115,6 +118,17 @@ def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = No
             stop, stop_type = chand, "chandelier"
         else:
             stop, stop_type = struct, "structure"
+
+        # RATCHET. A trailing stop must never loosen. Both inputs can fall on their own:
+        # the chandelier is highest_high - 3*ATR, so a volatility spike alone widens it, and
+        # the structure floor drops when a lower swing low rolls into the lookback. Either way
+        # protection would relax at exactly the moment risk rises — and a breach could be
+        # un-breached simply by the market getting noisier, which is what happened to XLF
+        # (stop 57.20 -> 56.76 on an unchanged highest_high, purely from ATR 0.40 -> 0.55).
+        floor = rec.get("stop_floor")
+        if floor is not None and float(floor) > stop:
+            stop, stop_type = float(floor), stop_type + "-held"
+        rec["stop_floor"] = stop
 
     if standalone:
         save_state(st)
@@ -131,6 +145,7 @@ def assess(ticker: str, df: pd.DataFrame, qty: float, *, today: date | None = No
         "entry_date": rec["entry_date"],
         "baseline_qty": rec["baseline_qty"],
         "max_stage": rec["max_stage"],
+        "stop_floor": round(rec.get("stop_floor", stop), 2),
     }
 
 
@@ -164,4 +179,21 @@ if __name__ == "__main__":  # self-test: synthetic data, shared state (no file w
     assert rc["stop_type"] == "chandelier", "same-day entry must fall back to chandelier, not pre-entry structure"
     assert rc["stop"] < rc["price"], f"a fresh-entry stop must sit below price, got {rc['stop']} vs {rc['price']}"
     assert not rc["stop_hit"], "a same-day entry into a dip must not self-trigger a breach"
+    # The ratchet: a volatility spike must not widen an existing stop. Same highest_high,
+    # a much wider ATR — the stop has to hold its previous level, not fall with the bands.
+    calm: dict = {}
+    r1 = assess("RATCHET", df, qty=10, today=idx[-1], state=calm)
+    noisy = df.copy()
+    noisy["high"] = noisy["close"] + 4.0            # ATR expands ~5x; highest_high is unchanged
+    noisy["low"] = noisy["close"] - 4.0
+    noisy.iloc[-1, noisy.columns.get_indexer(["high"])] = df["high"].iloc[-1]   # no new high
+    r2 = assess("RATCHET", noisy, qty=10, today=idx[-1] + timedelta(days=1), state=calm)
+    assert chandelier_stop(noisy, r1["highest_high"]) < r1["stop"], "test setup: ATR must widen the raw stop"
+    assert r2["stop"] >= r1["stop"], f"stop loosened under volatility: {r1['stop']} -> {r2['stop']}"
+    assert r2["stop_type"].endswith("-held"), f"expected a held stop, got {r2['stop_type']}"
+
+    # A manual level still overrides in both directions.
+    r3 = assess("RATCHET", df, qty=10, today=idx[-1] + timedelta(days=2), state=calm, manual_stop=1.0)
+    assert r3["stop"] == 1.0 and r3["stop_type"] == "manual", "manual stop must override the ratchet"
+
     print("\n[self-test OK]")
