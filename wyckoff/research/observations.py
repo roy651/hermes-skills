@@ -30,7 +30,10 @@ import detectors as D
 CACHE = Path(__file__).parent / "cache"
 LAB = CACHE
 H3, H6 = 63, 126
-START, END = "2021-01-01", "2026-02-01"
+# Widened from 2021 to the full panel depth: ~119 monthly dates instead of 61. The 2021+
+# subset of this file reproduces the earlier study exactly (peer means are within-date),
+# so the two windows stay comparable from one artifact.
+START, END = "2016-09-01", "2026-02-01"
 
 
 def region_of(ticker: str) -> str:

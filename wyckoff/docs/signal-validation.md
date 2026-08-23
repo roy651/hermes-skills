@@ -509,3 +509,185 @@ detector reverses sign there.
    volatility. We have two of three — dollar volume is computable from our own panel for free
    and is not yet a feature.
 4. **No transaction costs anywhere.**
+
+---
+
+# §11 — The widened test: what tripling the sample did to the result (2026-08-20)
+
+Run per `strategy-spec.md`. Sample widened from 61 monthly observation dates (2021-2026) to
+**113** (2016-09 → 2026-01), out-of-sample dates from 37 to **78**. No refetch — the panel
+already held the history. Then, for the first time, the signal was run as an actual portfolio.
+
+**The short version: the edge is much weaker than §10 reported, and the portfolio backtest's
+spectacular headline is an artifact of survivorship and a lottery tail. Several DESIGN findings
+are robust and worth keeping. The signal itself is not, on this evidence, worth mechanising.**
+
+## 11.1 The momentum edge halves on the wider sample
+
+| detector | old (61 dates) | wide (113 dates) |
+|---|---|---|
+| `mom_12_1_strong` | +2.58%, **t = 4.43** | +1.55%, **t = 1.98** |
+| `nr7` | promoted | **dropped out** |
+| `below_falling_200` | promoted | **dropped out** |
+
+US-only, by era — the edge is not weak, it is *era-specific*:
+
+| era | dates | x6 when fired | t |
+|---|---|---|---|
+| 2016-2020 | 40 | **−0.26** | **−0.13** |
+| 2021-2026 | 61 | +2.74 | 4.29 |
+
+Per year: 2020 **−6.43**, 2021 −0.54, 2022 −0.73 against 2023 +6.05, 2024 +3.17, 2025 +5.62.
+This is the documented **momentum crash** pattern — long good stretches punctuated by severe
+losses at market rebounds. §10's window happened to contain mostly the good regime.
+
+**Survivorship is not the explanation.** The diagnostic in `strategy-spec.md` §1.3 predicted
+that if survivorship drove the result the *older* era would look *better*. It looks worse. That
+rules the bias out as the cause of the era gap — but see §11.5, where it returns with force.
+
+## 11.2 `below_falling_200` is a live veto that does almost nothing
+
+It fires on **1.26%** of momentum-fired rows (1.50% in the top decile) — by construction, a
+stock up 30%+ over 12-1 months is almost never below a falling 200MA. It removes about one
+candidate in eighty. Losing its promotion is therefore not an operational problem, but it
+should stop being described as a validated filter.
+
+A **market-level** 200MA gate was tested as the alternative and would have *hurt*: top decile
+with SPY above its 200MA +12.11 (t=6.88), below **+14.43** (t=2.48). The three dates at the
+March-2020 bottom were the best in the sample — median **+16.56**, win rate **70%**. A trend
+gate locks you out of the best entries.
+
+## 11.3 Liquidity earns its place; sector actively hurts
+
+Feature ablation, judged on the top decile (the cohort a ten-name portfolio draws from):
+
+| feature set | top-decile x6 | t | median | win% |
+|---|---|---|---|---|
+| base | +9.77 | 6.01 | +0.91 | 51.4 |
+| **base+liq** | **+12.55** | **7.02** | **+1.56** | **52.5** |
+| base+mkt | +9.70 | 5.94 | +0.90 | 51.2 |
+| base+liq+mkt | +12.08 | 6.93 | +1.75 | 52.3 |
+| base+liq+mkt+sec | +7.90 | 5.09 | −0.74 | 48.8 |
+
+Liquidity was the one family the literature named a priori (GKX's dominant trio is price
+trends, liquidity, volatility) and it is the one that paid. **Sector hurt** — an 11-level
+categorical on 30k rows lets the model memorise sector-era effects it cannot generalise.
+`DEFAULT_FEATURES = "base+liq"`.
+
+## 11.4 The signal-study means are skew-driven
+
+Top decile by year — the mean and the median tell different stories:
+
+| year | mean | median | win% |
+|---|---|---|---|
+| 2020 | **+33.19** | **−1.00** | 49.7 |
+| 2022 | −0.01 | −5.00 | 42.2 |
+| 2023 | +18.45 | +11.19 | 64.1 |
+| 2024 | +15.69 | +7.99 | 62.5 |
+
+A mean of +33% against a median of −1% is a lottery, not an edge. A ten-name portfolio either
+catches that tail or it does not — which is exactly why the portfolio test was necessary.
+
+## 11.5 The portfolio backtest — and the three layers of deflation
+
+`research/backtest.py`, US-only, N=10, M=20, 10bp round trip, unfilled slots to SPY.
+**The engine is not the problem**: a hand-rolled independent calculation returned 64.8% CAGR
+against the engine's 66.9%. The arithmetic is right. What it is buying is the problem.
+
+| | R1 momentum | R2 meta | R3 smoothed | SPY |
+|---|---|---|---|---|
+| **as tested (2019-2026)** | 66.9% / Sh 1.34 | 44.1% / 1.14 | 47.1% / 1.25 | 16.6% / 0.84 |
+| **entry-banded 30-100%** | 24.3% / 0.68 | 19.4% / 0.58 | **35.5% / 1.06** | 16.6% / 0.84 |
+| **banded, ex-2020** | 20.3% / 0.61 | 9.5% / 0.30 | 23.3% / **0.73** | 15.5% / **0.92** |
+
+**Layer 1 — survivorship, at maximum force.** On 2021-01-29 the top ten by momentum were
+CHRD(+1538%), MARA(+999%), CELH(+634%), CLSK(+470%), MRNA(+445%), TSLA(+420%), **GME(+393%)**,
+PTON(+365%). The meme squeeze, the bitcoin miners and the COVID bubble — selected from a
+universe defined as *the S&P 1500 as of 2026*. The 1000%-momentum names of 2021 that went to
+zero are not in the panel. The bias is largest exactly where this strategy concentrates.
+
+**Layer 2 — the tail is the strategy.** Restricting entries to the 30-100% momentum band drops
+R1 from 62.4% to 24.5% CAGR. Names up 100%+ account for essentially all of the excess.
+
+**Layer 3 — 2020 is most of what remains.** Restarting every curve at 2021-01-01, **only one
+arm beats SPY on Sharpe: weekly R1 at 1.04 vs 0.92 — and it trades 687 times a year.** Every
+monthly arm underperforms SPY risk-adjusted. Fama-MacBeth t on monthly excess collapses to
+0.75-1.25, all below 2.
+
+**The pre-registered primary configuration failed.** Criterion 2 required R2 to beat R1; it did
+not (Sharpe 1.14 vs 1.34). R1 wins by loading harder on the lottery tail — so the failure is
+informative rather than damning, but the config does not clear its own bar either way.
+
+## 11.6 What IS robust — the design findings survive
+
+These are about mechanism, not about the signal's magnitude, and they held across every cut:
+
+1. **Smoothing the rank works.** R3 beats R2 in every configuration tested (35.5% vs 19.4%
+   banded; better drawdown everywhere). It was proposed as a *stability* fix and turned out to
+   improve returns — averaging is a noise filter and the dominant feature moves slowly.
+2. **The buffer band works.** M=20 beats M=10 (Sharpe 1.06 vs 0.95) and beats M=30 (1.04),
+   at 104 trades/year against 173. Retaining down to 2N is the right turnover brake.
+3. **The chandelier stop HURTS inside a systematic sleeve** — Sharpe 0.86 against 1.14 without
+   it. The stop is validated for the discretionary book (§9); it does not transfer. It exits
+   winners on noise when the rule would have held them.
+4. **Costs barely bite** at this turnover — 0bp to 30bp moves Sharpe only 1.16 → 1.11. The
+   "cash instead of SPY" arm was *identical*, meaning the fill never binds: the universe always
+   had ten candidates.
+5. **Weekly ≥ monthly, contradicting the recorded prediction.** `strategy-spec.md` §2.6
+   predicted weekly would buy churn. Weekly scored Sharpe 1.27 vs monthly 1.14 with a better
+   drawdown. Recorded as a miss.
+
+## 11.7 Verdict and what would change it
+
+**Do not mechanise this into a traded sleeve.** Three independent deflations — survivorship,
+the lottery tail, and a single dominant year — leave nothing that clears SPY risk-adjusted on
+honest assumptions. The daily MLM report stays useful as a **monitor and watchlist**, which is
+how it is already wired; it should not become an execution rule.
+
+Two things would genuinely change the answer, in order:
+
+1. **Point-in-time index constituents.** Until the panel stops being "today's survivors", every
+   concentrated backtest on it is unreliable, and concentration is what this strategy does.
+2. **More history.** The portfolio test covers 2019-2026 only — walk-forward training consumes
+   the first years — so one extraordinary year is 15% of the sample. A 20-year panel would put
+   2008, 2011 and 2015-16 in the test.
+
+Both are Phase 0 of the alpha-lab plan. That phase is no longer optional.
+
+## 11.8 The regime sign-flip, tested (Roy's proposal, 2026-08-20)
+
+The idea: when the *market* is below a falling 200MA, invert the ranking and buy the weakest
+momentum instead of the strongest — the Daniel-Moskowitz momentum-crash prescription, and the
+same sign-flip logic `promote.py` already applies to DEFENSE detectors.
+
+**The regime is rare.** SPY below a falling 200MA covers **10.5%** of trading days and only
+**10 observation dates**: 2018 Q4, 2020-03/05, most of 2022, and 2025-04. Everything below rests
+on that thin base.
+
+**In the signal study the medians do flip, but the means do not:**
+
+| regime | cohort | mean | median | win% |
+|---|---|---|---|---|
+| GOOD | top 10% | +12.83 | **+1.89** | 52.8 |
+| GOOD | bottom 10% | +0.51 | −1.31 | 47.4 |
+| BAD | top 10% | +10.70 | **−3.09** | 46.7 |
+| BAD | bottom 10% | +2.46 | **+1.53** | 51.1 |
+
+**As a portfolio it costs more than it saves** (entry-banded, monthly, N=10, M=20, 10bp):
+
+| arm | 2019-2026 | ex-2020 | maxDD |
+|---|---|---|---|
+| A — R3 as-is | 35.5% / Sh **1.06** | 23.3% / 0.73 | −40.6 |
+| B — sign flip in bad regime | 26.6% / 0.83 | 20.6% / 0.70 | −36.5 |
+| C — park in SPY in bad regime | 27.6% / 0.88 | 22.4% / **0.75** | **−34.3** |
+| SPY | 16.6% / 0.84 | 15.5% / **0.92** | −24.5 |
+
+Two conclusions, both useful:
+
+1. **The flip reduces drawdown but pays for it in return.** Sharpe falls in every window tested.
+2. **If regime defence is wanted, park — do not invert.** Arm C dominates arm B on return,
+   Sharpe and drawdown simultaneously.
+
+The decisive case is **2022**, the year the flip exists for: plain A returned −4.6% while the
+flip returned −12.6%. Buying the weakest momentum during a bear market catches falling knives,
+because in a downtrend weak momentum is not mean-reverting — it is continuing.
