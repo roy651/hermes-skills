@@ -33,7 +33,11 @@ import deterioration as det
 import events as wyk
 
 CACHE = Path(__file__).parent / "cache"
-H6 = 126                     # ~6 months of sessions
+H6 = 126                     # ~6 months of sessions — the original, and still the default
+# The ladder acts WEEKLY but every number here was measured at six months. A trim signal that
+# is right about the next month and wrong about the next six would look worthless at H6 and
+# valuable at H21. Until both are measured, the ladder is untested rather than falsified.
+HORIZON = H6
 LOOKBACK = 120               # bars handed to the detectors, matching production
 ATR_N, CHAND_MULT, STRUCT_LB, STRUCT_BUF = 14, 3.0, 20, 0.25
 
@@ -45,7 +49,8 @@ def atr_series(high, low, close, n=ATR_N):
     return out
 
 
-def simulate_stop(high, low, close, atr, t, horizon=H6):
+def simulate_stop(high, low, close, atr, t, horizon=None):
+    horizon = HORIZON if horizon is None else horizon
     """Walk the engine's real stop rule forward from entry at bar t.
 
     stop = max(chandelier, structure), i.e. whichever is TIGHTER:
@@ -80,7 +85,12 @@ def simulate_stop(high, low, close, atr, t, horizon=H6):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sample", type=int, default=0, help="limit tickers (0 = all)")
+    ap.add_argument("--horizon", type=int, default=H6,
+                    help="forward sessions to measure (21=1m, 63=3m, 126=6m)")
     args = ap.parse_args()
+    global HORIZON
+    HORIZON = args.horizon
+    label = {21: "1m", 63: "3m", 126: "6m"}.get(HORIZON, f"{HORIZON}d")
 
     panel = pickle.load(open(CACHE / "panel.pkl", "rb"))
     obs = pd.read_pickle(CACHE / "observations.pkl")
@@ -98,7 +108,7 @@ def main():
                if df is not None and len(df) > 600 and not t.startswith("^")]
     if args.sample:
         tickers = tickers[:args.sample]
-    print(f"[exits] {len(tickers)} tickers x {len(dates)} dates", file=sys.stderr)
+    print(f"[exits] {len(tickers)} tickers x {len(dates)} dates @ horizon {HORIZON} ({label})", file=sys.stderr)
 
     rows = []
     for n, t in enumerate(tickers):
@@ -109,7 +119,7 @@ def main():
 
         for d in dates:
             i = idx.searchsorted(d, side="right") - 1
-            if i < 260 or i + H6 >= len(close) or not np.isfinite(close[i]) or close[i] <= 0:
+            if i < 260 or i + HORIZON >= len(close) or not np.isfinite(close[i]) or close[i] <= 0:
                 continue
             window = df.iloc[i - LOOKBACK + 1:i + 1]
             try:
@@ -118,15 +128,15 @@ def main():
             except Exception:
                 continue
 
-            hold_ret = close[min(i + H6, len(close) - 1)] / close[i] - 1
+            hold_ret = close[min(i + HORIZON, len(close) - 1)] / close[i] - 1
             stop_ret, bars, stopped = simulate_stop(high, low, close, atr, i)
 
             # Being stopped does not put you in cash — you redeploy. Crediting the remaining
             # horizon at the benchmark is the honest comparison; without it the stop is
             # penalised for every day it is correctly out of a falling name.
             redeploy = 0.0
-            if stopped and bars < H6:
-                b0, b1 = bench_at(d, bars), bench_at(d, H6)
+            if stopped and bars < HORIZON:
+                b0, b1 = bench_at(d, bars), bench_at(d, HORIZON)
                 if b0 and b1:
                     redeploy = b1 / b0 - 1
             stop_rd = (1 + stop_ret) * (1 + redeploy) - 1
@@ -159,7 +169,7 @@ def main():
 
     # ---- 1. does the score predict weakness? -------------------------------------
     print("=" * 94)
-    print("STUDY 1 — DETERIORATION SCORE vs FORWARD 6m EXCESS RETURN (peer-relative, %)")
+    print(f"STUDY 1 — DETERIORATION SCORE vs FORWARD {label} EXCESS RETURN (peer-relative, %)")
     print("a working score should decline monotonically as score rises")
     print("=" * 94)
     g = r.groupby("score").agg(n=("hold_x", "size"), mean_x=("hold_x", "mean"),
@@ -169,7 +179,7 @@ def main():
 
     # ---- 2. stop vs hold ---------------------------------------------------------
     print("\n" + "=" * 94)
-    print("STUDY 2 — TRAILING STOP vs HOLD (same positions, raw 6m return %)")
+    print(f"STUDY 2 — TRAILING STOP vs HOLD (same positions, raw {label} return %)")
     print("=" * 94)
     out = []
     for label, sub in [("ALL", r), ("score 0-2", r[r.score <= 2]),
