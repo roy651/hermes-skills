@@ -60,7 +60,7 @@ def parse_xlsx(path: str) -> tuple[dict, list]:
     if header_i is None:
         sys.exit(f"error: header row with '{HEADER_KEY}' not found — is this the balances export?")
 
-    parsed, unmapped = {}, []
+    parsed, unmapped, closed = {}, [], []
     for r in rows[header_i + 1:]:
         if r[COL_SECNUM] is None or r[COL_NAME] is None:
             continue
@@ -69,8 +69,15 @@ def parse_xlsx(path: str) -> tuple[dict, list]:
         if not ticker:
             unmapped.append((secnum, str(r[COL_NAME])))
             continue
-        parsed[ticker] = {"qty": _qty(r[COL_QTY]), "avg_cost": round(float(r[COL_COST]), 2)}
-    return parsed, unmapped
+        qty = _qty(r[COL_QTY])
+        # The broker keeps listing a position it sold today, at qty 0 and avg_cost 0. Importing
+        # that as a holding gives every downstream job a position we do not own — stop_check would
+        # compute a stop for it and could alert on it — and the 0 cost would wipe the real basis.
+        if not qty:
+            closed.append(ticker)
+            continue
+        parsed[ticker] = {"qty": qty, "avg_cost": round(float(r[COL_COST]), 2)}
+    return parsed, unmapped, closed
 
 
 def diff_lines(current: dict, new: dict) -> list[str]:
@@ -93,7 +100,7 @@ def main():
     args = ap.parse_args()
 
     current = json.loads(HOLDINGS.read_text())
-    parsed, unmapped = parse_xlsx(args.xlsx)
+    parsed, unmapped, closed = parse_xlsx(args.xlsx)
 
     # Keep holdings absent from the file; for those present, update qty/avg_cost from the sheet but
     # PRESERVE any hand-set metadata (e.g. "asset_class": "bond", "no_trailing_stop") — the broker
@@ -106,6 +113,13 @@ def main():
     changes = diff_lines(current, merged)
     print(f"[import] {len(parsed)} positions parsed · {len(changes)} change(s):")
     print("\n".join(changes) if changes else "  (none — already in sync)")
+    if closed:
+        still_held = [t for t in closed if t in current]
+        print(f"[import] {len(closed)} zero-quantity row(s) skipped: {', '.join(sorted(closed))}")
+        if still_held:
+            # Deleting is deliberately left to a person, same as the absent-from-file case.
+            print(f"[import] ⚠️  sold out at the broker but STILL in holdings.json: "
+                  f"{', '.join(sorted(still_held))} — remove by hand")
     if unmapped:
         print("[import] UNMAPPED rows (add to SECNUM_TO_TICKER, then re-run):")
         for s, n in unmapped:
