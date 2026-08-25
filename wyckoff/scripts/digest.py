@@ -187,10 +187,11 @@ def llm_read(body: str) -> str:
         txt = _md_to_telegram(txt or "")
         if not txt:
             raise ValueError("empty response")
-        return f"\n\n———\n🧠 <b>Read</b> <i>(interpretation — the numbers above stand as printed)</i>\n{txt}"
+        return (f"\n\n🧠 <b>Read</b> <i>(interpretation — the detail below stands as measured)</i>\n"
+                f"{txt}\n———")
     except Exception as e:
         print(f"[digest] llm read failed: {e}", file=sys.stderr)
-        return "\n\n———\n⚠️ <i>Read unavailable — mechanical sections above are unaffected.</i>"
+        return "\n\n⚠️ <i>Read unavailable — the measured sections below are unaffected.</i>\n———"
 
 
 def run(kind: str, dry_run: bool = False, use_llm: bool = True) -> None:
@@ -202,9 +203,11 @@ def run(kind: str, dry_run: bool = False, use_llm: bool = True) -> None:
         sections = ["<i>Nothing to report.</i>"]
 
     body = "\n\n".join(sections)
-    msg = f"{header}\n\n{body}"
-    if use_llm:
-        msg += llm_read(body)
+    # The read leads. The weekly runs to ~14k characters and Telegram splits at 4k, so putting
+    # the interpretation last would bury it in the third message. Summary first, evidence after
+    # — and the evidence is still printed in full, unaltered.
+    read = llm_read(body) if use_llm else ""
+    msg = f"{header}{read}\n\n{body}"
 
     print(msg) if dry_run else notifier.send(msg)
     print(f"[digest] {kind}: {len(sections)} section(s), {len(msg)} chars", file=sys.stderr)
