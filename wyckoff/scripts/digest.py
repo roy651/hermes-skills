@@ -170,6 +170,12 @@ def weekly_sections() -> list[str]:
             out.append(got)
         else:
             out.append(f"⚠️ <b>{title}</b> — no recent report in the archive.")
+    # MLM is CONTEXT, not an instruction. The portfolio test showed it does not beat SPY once
+    # the moonshot tail and 2020 come out, so it is demoted from a daily entry queue to a
+    # weekly momentum backdrop, and labelled as such.
+    mlm = _latest("mlm-scan")
+    if mlm:
+        out.append("<i>— momentum backdrop (context only; not an entry queue) —</i>\n" + mlm)
     s = _section("Watchlist", watchlist_scan.run, as_section=True)
     if s:
         out.append(s)
