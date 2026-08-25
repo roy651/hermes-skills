@@ -691,3 +691,92 @@ Two conclusions, both useful:
 The decisive case is **2022**, the year the flip exists for: plain A returned −4.6% while the
 flip returned −12.6%. Buying the weakest momentum during a bear market catches falling knives,
 because in a downtrend weak momentum is not mean-reverting — it is continuing.
+
+---
+
+# §12 — The exit engine, measured at the right horizon (2026-08-25)
+
+§9 measured the exit engine at six months and concluded the deterioration score did not work.
+That conclusion was **wrong in one direction and right in another**, and the difference matters.
+`research/exits.py` now takes `--horizon`; results below are the full panel, 102 dates.
+
+## 12.1 The score is a 3-month signal that was tested at 6
+
+| horizon | score 5+ minus score 0-2 | t | stop effect (all) | t | stopped |
+|---|---|---|---|---|---|
+| 1 month | −0.33 | −1.67 | −0.24pp | −1.06 | 68% |
+| **3 months** | **−1.32** | **−3.20** | −0.67pp | −1.60 | 96% |
+| 6 months (§9) | ~0 | — | ~neutral | — | — |
+
+At three months the score clears the promotion gate. It was only ever measured at six, where it
+washes out. **Caveat:** three horizons were tested and one cleared, so this carries some
+multiple-testing risk — though the *direction* was predicted in advance, which counts for
+something.
+
+**The weekly trim ladder is still not validated.** At one month the score is t = −1.67. What is
+real is a quarterly read, not a weekly trim.
+
+## 12.2 The stop is a variance tool, not a return tool
+
+Never significant at any horizon (t = −1.06 at 1m, −1.60 at 3m). What it actually does, on
+181,187 observations at one month:
+
+| | hold | with stop |
+|---|---|---|
+| p5 (disaster case) | −14.80 | **−8.30** |
+| median | **+1.03** | −1.76 |
+| mean | 1.61 | 1.37 |
+
+**It halves the left tail and destroys the median.** Keep it for disaster control; never expect
+it to harvest a gain. At three months it fires on **96%** of positions, so at that horizon it
+cannot discriminate between anything at all.
+
+## 12.3 The score only works where you would least want to use it
+
+The score correlates just −0.307 with drawdown-from-high, so it is *not* merely a restatement of
+"price is off its high". But splitting the panel into drawdown quintiles shows where its
+information actually lives:
+
+| drawdown quintile | mean dd | score 5+ minus 0-2 | t |
+|---|---|---|---|
+| deepest | −40.2% | **−3.20** | **−4.12** |
+| deep | −20.7% | −0.82 | −1.63 |
+| mid | −12.0% | −0.80 | −2.26 |
+| shallow | −5.8% | +0.26 | 0.58 |
+| **at highs** | **−1.2%** | **+0.38** | **0.30** |
+
+**Near the highs the score has no predictive power whatsoever.** It is a *distress indicator for
+already-damaged positions*, not a harvest signal for winners.
+
+## 12.4 The DD case — the panel and the single case agree
+
+DD was bought 2026-06-28 at 134.72, peaked at 149.42 in early August, and stopped out at 136.63.
+Replaying the score daily through the hold:
+
+- It read **5-6 through the whole of July**, while DD climbed 132 → 149. Acting on "score ≥ 5"
+  would have sold on **2026-06-30 at 135.64** — two days after entry, and missed the entire run.
+- It fell to **3 at the actual peak** (2026-08-05, 147.37, −0.3% off the high) — the one day
+  selling was right.
+- It returned to 5 on **2026-08-18**, once price was already 7.1% off the high.
+
+The composition explains why. Across two months, `upthrust`, `utad` and `distribution_volume`
+were on **almost every single day** — constants, not signals. `sow`, `lpsy`, `support_break` and
+`rel_weak` **never fired once**. The score's whole variation came from `off_highs` and
+`ma_rollover`, which are mechanical restatements of "price is below its recent high".
+
+So the score is **lowest at the peak by construction** — at the high, `off_highs` is off. It can
+never tell you to sell a winner. And DD sat at −0.3% off its high, which §12.3 shows is exactly
+the bucket where the score carries no information (t = 0.30). The case study and the 181,187-row
+panel say the same thing.
+
+## 12.5 What this changes
+
+1. **Do not wire the score to a per-position sell trigger.** It is a cross-sectional tilt, not
+   position timing — the same lesson as momentum: a portfolio-level edge does not license
+   single-name calls.
+2. **Legitimate use:** ranking which of several *already-damaged* positions to cut first.
+3. **The harvest problem remains unsolved.** We have a validated risk tool (the stop, for tails)
+   and a validated distress ranker (the score, for losers). We have **nothing** that says when to
+   take profit on a winner near its high. The only candidate is a **time exit from a defined
+   event window** — which is the entry-side argument for the earnings-event plan, arriving from
+   the exit side.
