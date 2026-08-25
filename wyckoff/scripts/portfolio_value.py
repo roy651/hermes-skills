@@ -43,10 +43,13 @@ def _period_price(df, ref_date: date, period: str) -> float | None:
     return None
 
 
-def run():
+def run(as_section: bool = False):
     holdings_map = portfolio.load()
     if not holdings_map:
-        notifier.send("📊 <b>Portfolio Value</b>\n\n<i>No holdings found.</i>")
+        fail = "📊 <b>Portfolio Value</b>\n\n<i>No holdings found.</i>"
+        if as_section:
+            return fail
+        notifier.send(fail)
         return
 
     today = datetime.now(tz=TZ).date()
@@ -153,7 +156,10 @@ def run():
         total_cost_usd += cost_basis_usd
 
     if not rows:
-        notifier.send("📊 <b>Portfolio Value</b>\n\n<i>Could not fetch data for any holding.</i>")
+        fail = "📊 <b>Portfolio Value</b>\n\n<i>Could not fetch data for any holding.</i>"
+        if as_section:
+            return fail
+        notifier.send(fail)
         return
 
     rows.sort(key=lambda r: r["pnl_start_usd"], reverse=True)
@@ -196,7 +202,10 @@ def run():
     if not ups and not downs:
         lines.append("<i>No notable movers today.</i>")
 
-    notifier.send("\n".join(lines))
+    msg = "\n".join(lines)
+    if as_section:
+        return msg
+    notifier.send(msg)
     print(f"[portfolio_value] sent report for {len(rows)} holdings", file=sys.stderr)
 
 

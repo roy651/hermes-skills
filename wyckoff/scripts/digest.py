@@ -1,160 +1,148 @@
-"""Shared Telegram digest formatting for entry.py and exit.py.
+#!/usr/bin/env python3
+"""One report instead of eleven jobs.
 
-One `format_block` is the single source of truth for a per-ticker block, so the two
-schedulers can't drift (the drift between two copies caused the earlier HTML-escape bug).
-All dynamic/LLM-sourced text is html-escaped here.
+The portfolio produced four Telegram messages on a normal weekday and three more across the
+weekend — roughly twenty-three a week, most of them arriving within minutes of each other near
+midnight. This assembles them into two: a DAILY brief that is purely defensive, and a WEEKLY
+review that carries every judgement call.
+
+The organising rule is that **cadence should match evidence**. Risk is the only thing that
+genuinely needs daily attention; everything else is a decision, and decisions are weekly at most.
+
+Two design choices worth knowing before editing:
+
+1. **Delivery is consolidated, logic is not.** Each section is produced by the module that
+   already owned it, called with ``as_section=True`` so it returns text instead of sending.
+   A section that raises is reported in place and the rest of the report still goes out.
+   One giant prompt would be slower, more fragile, and would lose everything at once.
+
+2. **The LLM may add and caution; it may NEVER delete.** Mechanical sections are printed
+   unchanged, always. If the read thinks a breach is noise it says so underneath — the breach
+   still appears. Our own validator has been wrong before (it argued to hold FFIV two days
+   before it broke its stop twice), so an advisory layer that can silently suppress a real
+   signal would be worse than no layer at all.
+
+Usage:  digest.py --daily | --weekly  [--dry-run] [--no-llm]
 """
 from __future__ import annotations
-import html
-import re
 
-PHASE_EMOJI = {
-    "accumulation": "🟡",
-    "markup": "✅",
-    "distribution": "⚠️",
-    "markdown": "🔴",
-    "unclear": "⬜",
-}
+import sys
+import traceback
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-REC_EMOJI = {
-    "buy": "🟢 Buy",
-    "add": "🟢 Add",
-    "hold": "✅ Hold",
-    "reduce": "🟠 Reduce",
-    "sell": "🔴 Sell",
-    "watch": "🔵 Watch",
-    "pass": "⬜ Pass",
-}
+sys.path.insert(0, str(Path(__file__).parent))
+from dotenv import load_dotenv
+load_dotenv(Path.home() / ".hermes" / ".env")
 
+import notifier
 
-def entry_below_price(entry, price: float) -> bool:
-    """True if the whole entry zone sits below the current price (a limit/pullback order)."""
-    nums = re.findall(r"\d+\.?\d*", str(entry))
-    if not nums:
-        return False
-    return price > max(float(x) for x in nums)
+TZ = ZoneInfo("Asia/Jerusalem")
 
+# What the research has already killed. The read runs with no memory of the programme, and the
+# Wyckoff narrative is seductive enough that without this it will confidently argue from
+# detectors we falsified. Numbers are from docs/signal-validation.md.
+FALSIFIED = """\
+EVIDENCE YOU MUST RESPECT (from our own testing, not opinion):
+- The Wyckoff ACCUMULATION entry gate measured NEGATIVE (-0.36% vs +0.02% baseline) and it
+  DEGRADED momentum when combined (+2.91% -> +1.10%). Never argue for a buy from it.
+- markup_pullback scored t=0.57 - statistically indistinguishable from noise. It once drove a
+  real losing trade. Never treat it as confirmation.
+- The deterioration score is a DISTRESS indicator for already-damaged positions, not a harvest
+  signal. In the deepest-drawdown quintile it is strong (t=-4.12); for a position NEAR ITS HIGH
+  it has NO predictive power (t=0.30). Never use it to argue for selling a winner.
+- The trailing stop is validated as TAIL CONTROL only: it roughly halves the 5th-percentile
+  outcome and makes the median worse. It is not a profit-taking tool.
+- We have NO validated signal for when to take profit on a winner. If that is the question,
+  the honest answer is that we do not know.
+- mom_12_1 is era-dependent and much weaker than first measured (t fell 4.43 -> 1.98 on a
+  tripled sample). It is not a green light on its own.
+"""
 
-def format_block(
-    result: dict,
-    holding: dict | None,
-    price: float,
-    name: str = "",
-    currency: str = "USD",
-    news_info: dict | None = None,
-    gate_action: bool = False,
-) -> str:
-    """One per-ticker digest block.
+SYSTEM = """You are reviewing an automated portfolio report for its owner, a private investor.
 
-    gate_action=True  (weekly entry funnel): show Entry/Stop only for a buy/add rec, and flag
-                       an entry zone that sits below current price as a limit/pullback order.
-    gate_action=False (daily exit-watch):    show Entry/Stop unconditionally.
-    """
-    ticker = result["ticker"]
-    phase = result.get("phase", "unclear")
-    confidence = result.get("phase_confidence", "")
-    criteria = result.get("criteria_met", "?")
-    rec = result.get("recommendation", "")
-    note = result.get("note", "")
-    signals = result.get("active_signals", [])
-    entry = result.get("entry_zone")
-    stop = result.get("stop")
+Your job is INTERPRETATION and QUALITY CONTROL, not signal generation:
+- Point out what actually matters in the numbers above, in 2-5 short bullets.
+- Flag any mechanical signal you believe is FALSE or misleading, and say why.
+- Flag anything that looks like a data error (an impossible price, a stop above the price for
+  no reason, a stale figure).
+- If nothing needs attention, say so plainly in one line. Do not manufacture observations.
 
-    phase_icon = PHASE_EMOJI.get(phase, "⬜")
-    rec_label = REC_EMOJI.get(rec, rec)
-    sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
-    price_str = f"{sym}{price:.2f}"
-
-    title = f"<b>{ticker}</b>"
-    if name and name != ticker:
-        title += f" <i>({html.escape(name)})</i>"
-
-    if holding:
-        qty = holding["qty"]
-        cost = holding["avg_cost"]
-        pnl_pct = (price - cost) / cost * 100
-        pnl_sign = "+" if pnl_pct >= 0 else ""
-        cost_str = f"{sym}{cost:.2f}"
-        header = f"{title} · {qty} @ {cost_str} · {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
-    else:
-        header = f"{title} · {price_str}"
-
-    lines = [header]
-    lines.append(f"  {phase_icon} {html.escape(phase.title())} ({html.escape(str(confidence))}) · {criteria}/9 criteria")
-    if signals:
-        lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in signals))}")
-
-    action_line = f"  {rec_label}"
-    if (not gate_action) or rec in ("buy", "add"):
-        if entry:
-            action_line += f" · Entry ${html.escape(str(entry))}"
-            if gate_action and entry_below_price(entry, price):
-                action_line += " ⏳ limit (await pullback)"
-        if stop:
-            action_line += f" · Stop ${html.escape(str(stop))}"
-    lines.append(action_line)
-    if note:
-        lines.append(f"  <i>{html.escape(str(note))}</i>")
-
-    if news_info:
-        if not news_info.get("clean", True):
-            flag = news_info.get("flag") or "unknown issue"
-            lines.append(f"  ⚠️ NEWS FLAG: {html.escape(flag)}")
-        consensus = news_info.get("analyst_consensus", "unknown")
-        if consensus and consensus != "unknown":
-            lines.append(f"  👥 Analysts: {html.escape(consensus)}")
-        summary = news_info.get("summary", "")
-        if summary:
-            lines.append(f"  <i>📰 {html.escape(summary)}</i>")
-
-    return "\n".join(lines)
+Hard rules:
+- You cannot cancel a signal. The mechanical sections stand as printed; you may only comment.
+- Never recommend a buy from a falsified detector (see the evidence block).
+- "No view" and "I don't know" are correct and expected answers. Do not fill space.
+- Be specific and short. No preamble, no restating the report back.
+- Plain text with simple HTML tags (<b>, <i>) only. No markdown, no headers."""
 
 
-def format_managed_block(holding: dict, price: float, engine: dict, validation: dict | None = None,
-                         name: str = "", currency: str = "USD") -> str:
-    """Exit-watch block: the deterministic engine DECIDES and DESCRIBES; the LLM only VALIDATES.
-    `engine` = {"risk","det","ladder"}; `validation` = {"valid": bool|None, "note": str} or None
-    (valid=None → LLM unavailable, no validation line shown).
+def _section(title: str, fn, *args, **kwargs) -> str | None:
+    """Run one section; a failure is reported in place rather than killing the report."""
+    try:
+        out = fn(*args, **kwargs)
+        return out.strip() if out and out.strip() else None
+    except Exception as e:
+        print(f"[digest] section {title!r} failed: {e}", file=sys.stderr)
+        traceback.print_exc()
+        return f"⚠️ <b>{title}</b> — section failed: <i>{str(e)[:120]}</i>"
 
-    ONE colour cue per asset, keyed to the ACTION (the thing you act on); no other icons. Five
-    lines so the rec is findable at a glance: asset · recommendation · condition · signals · note.
-    """
-    rk, det_a, lad = engine["risk"], engine["det"], engine["ladder"]
-    ticker = rk["ticker"]
-    sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
-    qty = holding["qty"]
-    cost = holding["avg_cost"] / 100 if currency == "ILS" else holding["avg_cost"]   # ILS cost is in agorot
-    pnl_pct = (price - cost) / cost * 100 if cost else 0.0
-    psign = "+" if pnl_pct >= 0 else ""
 
-    action = lad["action"]
-    dot = ("🔴" if action.startswith("EXIT") else "🟡" if action.startswith("TRIM")
-           else "🟢" if action.startswith("ADD") else "🔵")   # EXIT red · TRIM yellow · ADD green · HOLD blue
+def daily_sections() -> list[str]:
+    import stop_check, portfolio_value, watchlist_scan, checkpoints
+    out = []
+    for title, fn, kw in [("Risk", stop_check.run, {"as_section": True}),
+                          ("Value", portfolio_value.run, {"as_section": True}),
+                          ("Watchlist", watchlist_scan.run, {"as_section": True})]:
+        s = _section(title, fn, **kw)
+        if s:
+            out.append(s)
+    # Only imminent checkpoints belong in a daily brief; the full horizon is a weekly matter.
+    rows = checkpoints.pending(datetime.now(tz=ZoneInfo("UTC")), checkpoints.IMMINENT_DAYS)
+    if rows:
+        out.append(checkpoints.build(rows, checkpoints.IMMINENT_DAYS))
+    return out
 
-    score = det_a["score"]
-    if rk["stop_hit"] or score >= 7:
-        condition = "Breaking down"
-    elif score >= 5:
-        condition = "Distribution"
-    elif score >= 3:
-        condition = "Weakening"
-    else:
-        condition = "Structure intact"
 
-    delta = lad["delta_qty"]
-    delta_str = f" · {'buy' if delta > 0 else 'sell'} {abs(round(delta))}" if delta else ""
-    name_part = f" · <i>{html.escape(name)}</i>" if name and name != ticker else ""
+def weekly_sections() -> list[str]:
+    import checkpoints
+    out = []
+    rows = checkpoints.pending(datetime.now(tz=ZoneInfo("UTC")), checkpoints.HORIZON_DAYS)
+    out.append(checkpoints.build(rows, checkpoints.HORIZON_DAYS))
+    return out
 
-    # 1. asset   2. recommendation   3. condition   4. signals   5. validator note
-    lines = [
-        f"{dot} <b>{ticker}</b>{name_part} · {qty} @ {sym}{cost:.2f} → {sym}{price:.2f} ({psign}{pnl_pct:.1f}%)",
-        f"<b>{html.escape(action)}</b>{delta_str} · stop {sym}{rk['stop']} ({rk['distance_pct']}% away) · {lad['pos_pct']}% of port",
-        f"{condition} · {score}/9",
-    ]
-    if det_a["signals"]:
-        lines.append(html.escape(", ".join(str(s) for s in det_a["signals"])))
-    if validation and validation.get("valid") is not None:
-        label = "confirmed" if validation["valid"] else "<b>flag</b>"
-        note = validation.get("note", "")
-        lines.append(f"Validator: {label}" + (f" — <i>{html.escape(str(note))}</i>" if note else ""))
-    return "\n".join(lines)
+
+def llm_read(body: str) -> str:
+    """The interpretation block. Degrades to a visible notice — never to a failed report."""
+    try:
+        import analysis
+        txt = analysis._call_llm(SYSTEM, [FALSIFIED, "\nTODAY'S REPORT:\n", body], raw=True)
+        txt = (txt or "").strip()
+        if not txt:
+            raise ValueError("empty response")
+        return f"\n\n———\n🧠 <b>Read</b> <i>(interpretation — the numbers above stand as printed)</i>\n{txt}"
+    except Exception as e:
+        print(f"[digest] llm read failed: {e}", file=sys.stderr)
+        return "\n\n———\n⚠️ <i>Read unavailable — mechanical sections above are unaffected.</i>"
+
+
+def run(kind: str, dry_run: bool = False, use_llm: bool = True) -> None:
+    now = datetime.now(tz=TZ)
+    header = (f"📋 <b>Daily Brief</b> — {now:%a %d %b}" if kind == "daily"
+              else f"📖 <b>Weekly Review</b> — {now:%d %b %Y}")
+    sections = daily_sections() if kind == "daily" else weekly_sections()
+    if not sections:
+        sections = ["<i>Nothing to report.</i>"]
+
+    body = "\n\n".join(sections)
+    msg = f"{header}\n\n{body}"
+    if use_llm:
+        msg += llm_read(body)
+
+    print(msg) if dry_run else notifier.send(msg)
+    print(f"[digest] {kind}: {len(sections)} section(s), {len(msg)} chars", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    kind = "weekly" if "--weekly" in sys.argv else "daily"
+    run(kind, dry_run="--dry-run" in sys.argv, use_llm="--no-llm" not in sys.argv)

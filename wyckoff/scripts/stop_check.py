@@ -24,7 +24,7 @@ import risk
 import notifier
 
 
-def run(dry_run: bool = False) -> None:
+def run(dry_run: bool = False, as_section: bool = False) -> str | None:
     held = portfolio.load()
     if not held:
         print("[stop_check] no holdings", file=sys.stderr)
@@ -81,11 +81,15 @@ def run(dry_run: bool = False) -> None:
                 lines.append(f"• <b>{tk}</b> — {sym}{px} ≥ add-above {sym}{lvl}")
         lines.append("\n<i>The close-through-stop is the hard exit; the weekly exit-watch is close-based and may lag.</i>")
         msg = "\n".join(lines)
+        if as_section:
+            return msg
         print(msg) if dry_run else notifier.send(msg)
         print(f"[stop_check] {len(breaches)} breach(es), {len(touches)} touch(es), "
               f"{len(adds)} add-level(s)", file=sys.stderr)
     else:
         print("[stop_check] no breaches", file=sys.stderr)
+        if as_section:
+            return "🛑 <b>Risk</b> — no stop breached, no add-level reclaimed."
 
     if exempt:
         print(f"[stop_check] {len(exempt)} no-trailing-stop holding(s) skipped: {', '.join(exempt)}", file=sys.stderr)

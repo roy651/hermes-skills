@@ -84,7 +84,7 @@ def _check(ticker: str, levels: dict | None, band: float) -> dict | None:
         return None
 
 
-def run():
+def run(as_section: bool = False):
     cfg = _load_cfg()
     watchlist = [t.upper() for t in cfg.get("watchlist", [])]
     levels_map = {k.upper(): v for k, v in (cfg.get("watchlist_levels") or {}).items()}
@@ -122,7 +122,10 @@ def run():
         lines.append("")
     lines.append("↳ <i>Reply with a ticker to run a full LLM Wyckoff verify.</i>")
 
-    notifier.send("\n".join(lines))
+    msg = "\n".join(lines)
+    if as_section:
+        return msg
+    notifier.send(msg)
     print(f"[watchlist_scan] sent {len(alerts)} alert(s)", file=sys.stderr)
 
 
