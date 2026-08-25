@@ -56,6 +56,12 @@ def _archive(text: str) -> None:
 
 def send(text: str) -> None:
     _archive(text)
+    # WYCKOFF_SILENT lets a producer keep writing to the archive while posting nothing. The
+    # weekly digest reads those archives and delivers one consolidated message, so the slow
+    # LLM jobs that feed it run unchanged and simply stop double-posting.
+    if os.environ.get("WYCKOFF_SILENT") == "1":
+        print(f"[notifier] silent mode — archived {len(text)} chars, not sent", file=sys.stderr)
+        return
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ["TELEGRAM_TOKEN"]
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "391626535"))
     if len(text) <= _MAX:
