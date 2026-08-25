@@ -26,6 +26,7 @@ Usage:  digest.py --daily | --weekly  [--dry-run] [--no-llm]
 """
 from __future__ import annotations
 
+import re
 import sys
 import traceback
 from datetime import datetime
@@ -77,6 +78,20 @@ Hard rules:
 - Plain text with simple HTML tags (<b>, <i>) only. No markdown, no headers."""
 
 
+def _md_to_telegram(t: str) -> str:
+    """Convert the markdown the model emits anyway into Telegram-safe HTML.
+
+    The system prompt asks for plain text; models still reach for **bold**. Telegram renders in
+    HTML parse mode, so asterisks would show literally and a stray '<' would break the send.
+    Converting is more reliable than asking again.
+    """
+    t = re.sub(r"^#{1,6}\s*", "", t, flags=re.M)          # stray headers
+    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t, flags=re.S)
+    t = re.sub(r"(?<![*\w])\*([^*\n]+?)\*(?!\*)", r"<i>\1</i>", t)
+    t = re.sub(r"^\s*[-*]\s+", "• ", t, flags=re.M)        # bullets
+    return t.strip()
+
+
 def _section(title: str, fn, *args, **kwargs) -> str | None:
     """Run one section; a failure is reported in place rather than killing the report."""
     try:
@@ -97,18 +112,70 @@ def daily_sections() -> list[str]:
         s = _section(title, fn, **kw)
         if s:
             out.append(s)
-    # Only imminent checkpoints belong in a daily brief; the full horizon is a weekly matter.
-    rows = checkpoints.pending(datetime.now(tz=ZoneInfo("UTC")), checkpoints.IMMINENT_DAYS)
+    # Only imminent checkpoints belong in a daily brief, and only the ones that ask something
+    # of a person. A recurring monthly report is a routine; a one-shot is a decision someone
+    # deliberately parked on a date. Telling you to "decide" about a disk-space audit is noise.
+    rows = [r for r in checkpoints.pending(datetime.now(tz=ZoneInfo("UTC")),
+                                           checkpoints.IMMINENT_DAYS) if r.get("one_shot")]
     if rows:
         out.append(checkpoints.build(rows, checkpoints.IMMINENT_DAYS))
     return out
 
 
+REPORTS = Path(__file__).parent.parent / "data" / "reports"
+
+
+def _latest(fragment: str, max_age_days: int = 8) -> str | None:
+    """Most recent archived digest whose filename contains `fragment`.
+
+    exit.py and entry.py are slow LLM jobs with their own watchdogs, and notifier.send() already
+    archives everything it sends. Reading the archive is far safer than re-running them inside
+    this report: nothing can hang the weekly, and their state handling is untouched.
+    """
+    if not REPORTS.exists():
+        return None
+    cands = sorted((f for f in REPORTS.glob(f"*{fragment}*.txt")),
+                   key=lambda f: f.stat().st_mtime, reverse=True)
+    if not cands:
+        return None
+    newest = cands[0]
+    age = (datetime.now().timestamp() - newest.stat().st_mtime) / 86400
+    if age > max_age_days:
+        return f"⚠️ <i>Latest {fragment} report is {age:.0f} days old — the job may have stopped.</i>"
+    return newest.read_text().strip()
+
+
+def engine_health() -> str:
+    """What ran, what didn't. A silent failure is the failure mode that actually costs money."""
+    expected = [("exit-all", "the weekly exit review"), ("entry", "the entry funnel"),
+                ("mlm-scan", "the momentum scan"), ("stop-check", "the daily stop check")]
+    lines = ["🩺 <b>Engine health</b>"]
+    for frag, desc in expected:
+        got = _latest(frag, max_age_days=9)
+        if got is None:
+            lines.append(f"• ❌ no {desc} found in the archive at all")
+        elif got.startswith("⚠️"):
+            lines.append(f"• ⚠️ {desc}: {got}")
+        else:
+            lines.append(f"• ✅ {desc} ran")
+    return "\n".join(lines)
+
+
 def weekly_sections() -> list[str]:
-    import checkpoints
+    import checkpoints, watchlist_scan
     out = []
+    for frag, title in [("exit-all", "Positions"), ("entry", "Entry funnel")]:
+        got = _latest(frag)
+        if got:
+            out.append(got)
+        else:
+            out.append(f"⚠️ <b>{title}</b> — no recent report in the archive.")
+    s = _section("Watchlist", watchlist_scan.run, as_section=True)
+    if s:
+        out.append(s)
     rows = checkpoints.pending(datetime.now(tz=ZoneInfo("UTC")), checkpoints.HORIZON_DAYS)
     out.append(checkpoints.build(rows, checkpoints.HORIZON_DAYS))
+    out.append(engine_health())
     return out
 
 
@@ -117,7 +184,7 @@ def llm_read(body: str) -> str:
     try:
         import analysis
         txt = analysis._call_llm(SYSTEM, [FALSIFIED, "\nTODAY'S REPORT:\n", body], raw=True)
-        txt = (txt or "").strip()
+        txt = _md_to_telegram(txt or "")
         if not txt:
             raise ValueError("empty response")
         return f"\n\n———\n🧠 <b>Read</b> <i>(interpretation — the numbers above stand as printed)</i>\n{txt}"

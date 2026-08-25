@@ -111,7 +111,10 @@ def pending(now: datetime, days: int) -> list[dict]:
         if when and when <= horizon:
             out.append({"name": j.get("name") or j.get("id", "?"),
                         "id": (j.get("id") or "")[:12], "when": when,
-                        "days": (when - now).days})
+                        "days": (when - now).days,
+                        # A bounded job is a decision parked on a date; a recurring one is a
+                        # routine that runs whether or not anybody looks at it.
+                        "one_shot": bool(repeat.get("times"))})
     return sorted(out, key=lambda r: r["when"])
 
 
