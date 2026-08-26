@@ -223,11 +223,25 @@ def call_proxy(prompt: str, model: str = "claude-opus-4-6", timeout: int = 1200)
         return f"__ERROR__ {str(e)[:120]}"
 
 
-def run_batches(transport: str, model: str, n: int, k: int, workers: int, seed: int = 5) -> None:
-    cases = json.load(open(CASES))[:n]
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(len(cases))
-    batches = [[cases[i] for i in order[j:j + k]] for j in range(0, len(order) - k + 1, k)]
+MATCHED = CACHE / "blind_cases_matched.json"
+
+
+def run_batches(transport: str, model: str, n: int, k: int, workers: int, seed: int = 5,
+                matched: bool = False) -> None:
+    if matched:
+        # Batches are pre-formed by sector and quarter; re-randomising would destroy the
+        # matching that is the entire point of this arm.
+        allc = json.load(open(MATCHED))
+        byb: dict = {}
+        for c in allc:
+            byb.setdefault(c["batch_id"], []).append(c)
+        batches = [v for v in byb.values() if len(v) == k][: max(1, n // k)]
+        cases = [c for b in batches for c in b]
+    else:
+        cases = json.load(open(CASES))[:n]
+        rng = np.random.default_rng(seed)
+        order = rng.permutation(len(cases))
+        batches = [[cases[i] for i in order[j:j + k]] for j in range(0, len(order) - k + 1, k)]
     letters = [chr(65 + i) for i in range(k)]
 
     def one(args):
@@ -263,7 +277,7 @@ def run_batches(transport: str, model: str, n: int, k: int, workers: int, seed: 
             if i % 5 == 0:
                 print(f"[batch:{transport}] {i}/{len(batches)}", file=sys.stderr)
     df = pd.DataFrame(out)
-    tag = f"batch_{transport}"
+    tag = f"batch_{transport}" + ("_matched" if matched else "")
     df.to_pickle(CACHE / f"blind_{tag}.pkl")
     nb = df.batch.nunique() if len(df) else 0
     print(f"[{tag}] {nb}/{len(batches)} batches usable, {len(df)} cases", file=sys.stderr)
@@ -292,7 +306,8 @@ if __name__ == "__main__":
         run_batches(transport=_tr,
                     model=_argv("--model", _default_model),
                     n=int(_argv("--n", "60")), k=int(_argv("--batch", "5")),
-                    workers=int(_argv("--workers", "2")))
+                    workers=int(_argv("--workers", "2")),
+                    matched="--matched" in sys.argv)
     elif "--score" in sys.argv:
         score()
     else:

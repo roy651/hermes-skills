@@ -198,6 +198,116 @@ def build(n_cases: int, seed: int = 11) -> None:
     print(f"[blind] wrote {out}", file=sys.stderr)
 
 
+
+
+
+# ------------------------------------------------------------------ sector/date-matched cases
+# The first design asked a model to rank five companies from DIFFERENT sectors on DIFFERENT
+# dates. That is close to unanswerable: a 60% gross margin is excellent for a retailer and
+# mediocre for software, and comparing a bank to a biotech on "margin direction" is meaningless.
+# The null it produced may have been a badly posed question rather than an absent ability.
+#
+# The fix keeps the blinding intact by putting the context into BATCH CONSTRUCTION rather than
+# the prompt. All five companies share a sector and a calendar quarter, so both confounds are
+# differenced away without either ever being named. On top of that each metric carries its
+# PERCENTILE within that peer group — which is the "how is the segment doing" information,
+# expressed relatively so it reveals neither the sector nor the date.
+
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import features_extra as FX
+
+
+def _pct_table(snap: pd.DataFrame, peers: list[pd.DataFrame]) -> pd.DataFrame:
+    """Annotate the latest quarter's metrics with their percentile among peer companies."""
+    out = snap.copy()
+    latest = {c: snap[c].iloc[-1] for c in snap.columns}
+    pcts = {}
+    for c in snap.columns:
+        vals = [p[c].iloc[-1] for p in peers if c in p.columns and pd.notna(p[c].iloc[-1])]
+        v = latest[c]
+        pcts[c] = (np.nan if (pd.isna(v) or len(vals) < 3)
+                   else round(100 * sum(1 for x in vals if x < v) / len(vals)))
+    out.loc["PCTILE"] = [pcts[c] for c in snap.columns]
+    return out
+
+
+def build_matched(n_batches: int, k: int = 5, seed: int = 21) -> None:
+    panel = pickle.load(open(CACHE / "panel.pkl", "rb"))
+    ev = pd.read_pickle(CACHE / "eps_events.pkl")
+    sec = FX.sectors()
+    us = {t for t, d in panel.items() if d is not None and "." not in t and len(d) > 600}
+    close = pd.DataFrame({t: panel[t]["close"] for t in us if t in panel}).sort_index()
+    cm = F.cik_map()
+
+    ev = ev[ev.ticker.isin(us) & ev.ticker.isin(sec)].copy()
+    ev["sector"] = ev.ticker.map(sec)
+    ev["q"] = pd.to_datetime(ev.filed).dt.to_period("Q")
+    ev = ev[(ev.filed >= "2017-01-01") &
+            (ev.filed <= close.index[-1] - pd.Timedelta(days=FWD_DAYS + 10))]
+
+    groups = [g for _, g in ev.groupby(["sector", "q"]) if g.ticker.nunique() >= k + 2]
+    rng = random.Random(seed)
+    rng.shuffle(groups)
+    print(f"[matched] {len(groups)} sector-quarter groups with >= {k+2} companies",
+          file=_sys.stderr)
+
+    cases, done = [], 0
+    for g in groups:
+        if done >= n_batches:
+            break
+        g = g.drop_duplicates("ticker")
+        picks = rng.sample(list(g.itertuples()), min(k + 3, len(g)))
+        snaps, keep = [], []
+        for r in picks:
+            cik = cm.get(r.ticker.upper().replace(".", "-"))
+            if not cik:
+                continue
+            facts = F.company_facts(r.ticker, cik)
+            if not facts:
+                continue
+            try:
+                s = snapshot(facts, pd.Timestamp(r.filed))
+            except Exception:
+                continue
+            if s is None or s.isna().mean().mean() > 0.35:
+                continue
+            i = close.index.searchsorted(pd.Timestamp(r.filed), side="left")
+            j = i + FWD_DAYS
+            px = close[r.ticker].to_numpy()
+            if j >= len(close.index) or not np.isfinite(px[i]) or px[i] < MIN_PRICE \
+               or not np.isfinite(px[j]):
+                continue
+            snaps.append(s)
+            keep.append((r, px[j] / px[i] - 1))
+            if len(keep) == k:
+                break
+        if len(keep) < k:
+            continue
+        # Forward return relative to THIS peer group, not the whole market: sector and quarter
+        # are shared, so what remains is company-specific performance.
+        grp_mean = float(np.mean([x for _, x in keep]))
+        for (r, ret), s in zip(keep, snaps):
+            cases.append({"case_id": f"M{len(cases):04d}", "batch_id": done,
+                          "ticker": r.ticker, "as_of": str(pd.Timestamp(r.filed).date()),
+                          "table": _pct_table(s, snaps).to_string(),
+                          "fwd_excess_%": round((ret - grp_mean) * 100, 3)})
+        done += 1
+        if done % 10 == 0:
+            print(f"[matched] {done}/{n_batches} batches", file=_sys.stderr)
+
+    out = CACHE / "blind_cases_matched.json"
+    out.write_text(json.dumps(cases, indent=1))
+    d = pd.DataFrame(cases)
+    print(f"[matched] {len(cases)} cases in {d.batch_id.nunique()} batches · "
+          f"{d.ticker.nunique()} tickers", file=_sys.stderr)
+    print(f"[matched] peer-relative excess sd {d['fwd_excess_%'].std():.2f} "
+          f"(unmatched design was ~28)", file=_sys.stderr)
+
+
 if __name__ == "__main__":
-    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 300
-    build(n)
+    _n = lambda f, d: int(sys.argv[sys.argv.index(f) + 1]) if f in sys.argv else d
+    if "--matched" in sys.argv:
+        build_matched(_n("--batches", 40))
+    else:
+        build(_n("--n", 300))
