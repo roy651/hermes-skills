@@ -200,6 +200,25 @@ def call_ollama(prompt: str, model: str, timeout: int = 900, think: bool = False
         return f"__ERROR__ {str(e)[:120]}"
 
 
+def call_proxy(prompt: str, model: str = "claude-opus-4-6", timeout: int = 400) -> str:
+    """The mini-PC's claude-proxy — a direct API call, so far faster than the local 27B.
+
+    Running this arm alongside the ollama one is the contamination test itself: a frontier model
+    may remember what a given company did; a 27B open model almost certainly does not. Matching
+    scores mean the signal is analysis. A large gap means the frontier model's edge is memory.
+    """
+    payload = json.dumps({"model": model, "temperature": 0, "max_tokens": 1200,
+                          "messages": [{"role": "user", "content": prompt}]}).encode()
+    req = urllib.request.Request("http://localhost:8765/v1/chat/completions", data=payload,
+                                 headers={"Content-Type": "application/json",
+                                          "Authorization": "Bearer local"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        return f"__ERROR__ {str(e)[:120]}"
+
+
 def run_batches(transport: str, model: str, n: int, k: int, workers: int, seed: int = 5) -> None:
     cases = json.load(open(CASES))[:n]
     rng = np.random.default_rng(seed)
@@ -211,7 +230,12 @@ def run_batches(transport: str, model: str, n: int, k: int, workers: int, seed: 
         bi, batch = args
         tables = "\n\n".join(f"COMPANY {letters[i]}\n{c['table']}" for i, c in enumerate(batch))
         prompt = BATCH_PROMPT.format(k=len(batch), tables=tables)
-        txt = (call_ollama(prompt, model) if transport == "ollama" else call_claude(prompt, 600))
+        if transport == "ollama":
+            txt = call_ollama(prompt, model)
+        elif transport == "proxy":
+            txt = call_proxy(prompt, model)
+        else:
+            txt = call_claude(prompt, 600)
         m = re.findall(r'\{[^{}]*"order"[^{}]*\}', txt, re.S)
         if not m:
             return None
