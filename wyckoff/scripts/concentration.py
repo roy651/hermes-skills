@@ -23,6 +23,7 @@ load_dotenv(Path.home() / ".hermes" / ".env")
 
 import data as market_data
 import fx_rate
+import israeli_fund
 import holdings as portfolio
 import notifier
 
@@ -44,25 +45,33 @@ def collect() -> tuple[list[dict], float]:
         usdils = float(market_data.fetch_ohlcv("USDILS=X", days=5).df["close"].iloc[-1])
     except Exception:
         usdils = fx_rate.latest()
-    rows, total = [], 0.0
+    rows, total, unpriced = [], 0.0, []
     for ticker, h in held.items():
         try:
-            td = market_data.fetch_ohlcv(ticker, days=10)
+            # Israeli funds are not on Yahoo — exit.py already routes them here, and without
+            # the same fallback this silently DROPPED ~22% of the book and inflated every other
+            # weight by a quarter. A concentration report that omits a position is worse than
+            # no report, so anything still unpriceable is named rather than quietly discarded.
+            if h.get("fund_id") or h.get("globes_id"):
+                td = israeli_fund.as_ticker_data(h.get("fund_id"), h.get("globes_id"), name=ticker)
+            else:
+                td = market_data.fetch_ohlcv(ticker, days=10)
             px = float(td.df["close"].iloc[-1])
             usd = px * h["qty"] * ((1.0 / usdils) if td.currency == "ILS" else 1.0)
         except Exception as e:
             print(f"[concentration] {ticker}: {e}", file=sys.stderr)
+            unpriced.append(ticker)
             continue
         rows.append({"ticker": ticker, "usd": usd,
                      "strategic": bool(h.get("strategic") or portfolio.no_trailing_stop(h))})
         total += usd
     for r in rows:
         r["pct"] = r["usd"] / total * 100 if total else 0.0
-    return sorted(rows, key=lambda r: -r["usd"]), total
+    return sorted(rows, key=lambda r: -r["usd"]), total, unpriced
 
 
 def build_section(as_section: bool = True) -> str:
-    rows, total = collect()
+    rows, total, unpriced = collect()
     if not rows:
         return "⚖️ <b>Concentration</b> — <i>no priceable holdings.</i>"
 
@@ -85,6 +94,9 @@ def build_section(as_section: bool = True) -> str:
     if core:
         lines.append(f"<i>{core:.0f}% is flagged strategic / no-trailing-stop — deliberate ballast, "
                      f"not drift.</i>")
+    if unpriced:
+        lines.append(f"⚠️ <b>{', '.join(unpriced)}</b> could not be priced and is EXCLUDED — "
+                     f"every weight above is overstated until this is fixed.")
     heavy = [r for r in rows if r["pct"] >= HEAVY_PCT and not r["strategic"]]
     if heavy:
         lines.append("⚠️ <b>" + ", ".join(r["ticker"] for r in heavy) +
