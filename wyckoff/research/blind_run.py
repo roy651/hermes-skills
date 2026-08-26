@@ -284,8 +284,13 @@ def _argv(flag, default):
 
 if __name__ == "__main__":
     if "--batch" in sys.argv:
-        run_batches(transport=_argv("--transport", "ollama"),
-                    model=_argv("--model", "qwen3.6:27b"),
+        # The model default MUST follow the transport. A single shared default sent an ollama
+        # model name to the claude-proxy, which rejected every call and silently produced
+        # "0 batches usable" with no error — the failure looked like a parsing problem.
+        _tr = _argv("--transport", "ollama")
+        _default_model = {"ollama": "qwen3.6:27b", "proxy": "claude-opus-4-6"}.get(_tr, "")
+        run_batches(transport=_tr,
+                    model=_argv("--model", _default_model),
                     n=int(_argv("--n", "60")), k=int(_argv("--batch", "5")),
                     workers=int(_argv("--workers", "2")))
     elif "--score" in sys.argv:
