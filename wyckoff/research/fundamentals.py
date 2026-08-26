@@ -179,6 +179,25 @@ def probe(tickers: list[str]) -> None:
         print(h.tail(4)[["period_end", "filed", "eps", "form"]].to_string(index=False))
 
 
+def drop_mistagged(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove facts where a TOTAL was tagged under a PER-SHARE concept.
+
+    A handful of filers tag net income in dollars against an EPS element — FITB reports
+    "955,000,000" for a quarter. It is rare (~0.06% of events) but corrosive: SUE divides the
+    surprise by the standard deviation of a company's own history, so one 10^9 outlier inflates
+    that denominator and silently zeroes the signal for every quarter of that ticker.
+
+    The test is per-ticker and scale-free — an absolute cap would wrongly discard genuinely
+    high-EPS names — and it compares each value to that company's own typical magnitude.
+    """
+    med = df.groupby("ticker").eps.transform(lambda s: s.abs().median()).clip(lower=0.10)
+    bad = df.eps.abs() > 100 * med
+    if bad.any():
+        print(f"[clean] dropped {bad.sum()} mis-tagged event(s) across "
+              f"{df.loc[bad, 'ticker'].nunique()} ticker(s)", file=sys.stderr)
+    return df[~bad].copy()
+
+
 def build() -> pd.DataFrame:
     """Panel-wide event table: one row per (ticker, reported quarter, filing date)."""
     import pickle
@@ -208,7 +227,7 @@ def build() -> pd.DataFrame:
         rows.append(h[["ticker", "period_end", "filed", "eps", "form"]])
         if n % 100 == 0:
             print(f"[build] {n}/{len(us)}  events={sum(len(r) for r in rows):,}", file=sys.stderr)
-    out = pd.concat(rows, ignore_index=True).sort_values(["ticker", "period_end"])
+    out = drop_mistagged(pd.concat(rows, ignore_index=True).sort_values(["ticker", "period_end"]))
     out.to_pickle(CACHE / "eps_events.pkl")
     print(f"[build] {len(out):,} events across {out.ticker.nunique()} tickers "
           f"({miss} no-facts, {thin} thin)", file=sys.stderr)
