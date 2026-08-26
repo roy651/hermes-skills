@@ -200,8 +200,12 @@ def call_ollama(prompt: str, model: str, timeout: int = 900, think: bool = False
         return f"__ERROR__ {str(e)[:120]}"
 
 
-def call_proxy(prompt: str, model: str = "claude-opus-4-6", timeout: int = 400) -> str:
+def call_proxy(prompt: str, model: str = "claude-opus-4-6", timeout: int = 1200) -> str:
     """The mini-PC's claude-proxy — a direct API call, so far faster than the local 27B.
+
+    NOTE: the proxy SERIALISES claude calls behind a lock, so concurrency here buys nothing and
+    a second worker simply queues — which silently blew a shorter timeout and lost whole batches.
+    Run this arm with workers=1 and a generous timeout.
 
     Running this arm alongside the ollama one is the contamination test itself: a frontier model
     may remember what a given company did; a 27B open model almost certainly does not. Matching
