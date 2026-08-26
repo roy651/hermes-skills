@@ -146,8 +146,111 @@ def score() -> None:
                 print(f"  confidence {lo:.1f}-{hi:.1f}: n={len(s):<4} hit rate {s.hit.mean()*100:5.1f}%")
 
 
+# ---------------------------------------------------------------- batch ranking + ollama
+# The single-case arm returned "no view" for almost everything (scores 41-50, sd 4.3): the
+# anti-overconfidence prompting worked, but left nothing to rank. Asking for a RELATIVE ORDER
+# within a small batch forces discrimination without inviting invented conviction — and an
+# ordering is what the Spearman scoring wants anyway.
+
+import os
+import urllib.request
+
+OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+BATCH_PROMPT = """You are ranking {k} anonymised companies by their fundamentals alone.
+
+You are NOT told the companies, industries, dates, or share prices. Do not guess identities.
+
+Each table shows twelve quarters, oldest first. Every figure is a margin, growth rate or ratio -
+absolute size has been removed. Q-0 is the most recent quarter.
+
+{tables}
+
+Rank all {k} from BEST to WORST expected performance RELATIVE TO EACH OTHER over the next six
+months, judged only on what the fundamentals show: trajectory, margin direction, cash conversion,
+balance-sheet strength, and whether growth is being bought with capital or earned.
+
+You must produce a strict order - no ties. Ranking them is the task even if the differences are
+small; you are ordering them, not claiming any is a good investment.
+
+Give one short line per company saying what decided its place, then end with exactly one line of
+JSON and nothing after it:
+{{"order": [<company letters, best first>], "confidence": <0.0-1.0>}}"""
+
+
+def call_ollama(prompt: str, model: str, timeout: int = 900) -> str:
+    payload = json.dumps({"model": model, "prompt": prompt, "stream": False,
+                          "options": {"temperature": 0.0, "num_ctx": 16384}}).encode()
+    req = urllib.request.Request(f"{OLLAMA}/api/generate", data=payload,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read()).get("response", "").strip()
+    except Exception as e:
+        return f"__ERROR__ {str(e)[:120]}"
+
+
+def run_batches(transport: str, model: str, n: int, k: int, workers: int, seed: int = 5) -> None:
+    cases = json.load(open(CASES))[:n]
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(len(cases))
+    batches = [[cases[i] for i in order[j:j + k]] for j in range(0, len(order) - k + 1, k)]
+    letters = [chr(65 + i) for i in range(k)]
+
+    def one(args):
+        bi, batch = args
+        tables = "\n\n".join(f"COMPANY {letters[i]}\n{c['table']}" for i, c in enumerate(batch))
+        prompt = BATCH_PROMPT.format(k=len(batch), tables=tables)
+        txt = (call_ollama(prompt, model) if transport == "ollama" else call_claude(prompt, 600))
+        m = re.findall(r'\{[^{}]*"order"[^{}]*\}', txt, re.S)
+        if not m:
+            return None
+        try:
+            d = json.loads(m[-1])
+            got = [str(x).strip().upper()[:1] for x in d["order"]]
+            conf = float(d.get("confidence", np.nan))
+        except Exception:
+            return None
+        if sorted(got) != sorted(letters[:len(batch)]):
+            return None
+        return [{"case_id": batch[letters.index(L)]["case_id"], "pred_rank": r + 1,
+                 "fwd_excess_%": batch[letters.index(L)]["fwd_excess_%"],
+                 "confidence": conf, "batch": bi} for r, L in enumerate(got)]
+
+    out = []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for i, r in enumerate(ex.map(one, list(enumerate(batches))), 1):
+            if r:
+                out.extend(r)
+            if i % 5 == 0:
+                print(f"[batch:{transport}] {i}/{len(batches)}", file=sys.stderr)
+    df = pd.DataFrame(out)
+    tag = f"batch_{transport}"
+    df.to_pickle(CACHE / f"blind_{tag}.pkl")
+    nb = df.batch.nunique() if len(df) else 0
+    print(f"[{tag}] {nb}/{len(batches)} batches usable, {len(df)} cases", file=sys.stderr)
+    if len(df) > 10:
+        df["actual_rank"] = df.groupby("batch")["fwd_excess_%"].rank(ascending=False)
+        rho, p = stats.spearmanr(df.pred_rank, df.actual_rank)
+        t = rho * np.sqrt((len(df) - 2) / max(1 - rho ** 2, 1e-9))
+        top = df[df.pred_rank == 1]["fwd_excess_%"].mean()
+        bot = df[df.pred_rank == df.groupby("batch")["pred_rank"].transform("max")]["fwd_excess_%"].mean()
+        print(f"[{tag}] rank corr {rho:+.3f}  t={t:+.2f}  p={p:.3f}", file=sys.stderr)
+        print(f"[{tag}] picked-best {top:+.2f}%  picked-worst {bot:+.2f}%  "
+              f"spread {top-bot:+.2f}pp", file=sys.stderr)
+
+
+def _argv(flag, default):
+    return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else default
+
+
 if __name__ == "__main__":
-    if "--score" in sys.argv:
+    if "--batch" in sys.argv:
+        run_batches(transport=_argv("--transport", "ollama"),
+                    model=_argv("--model", "qwen3.6:27b"),
+                    n=int(_argv("--n", "60")), k=int(_argv("--batch", "5")),
+                    workers=int(_argv("--workers", "2")))
+    elif "--score" in sys.argv:
         score()
     else:
         arm = sys.argv[sys.argv.index("--arm") + 1] if "--arm" in sys.argv else "main"
