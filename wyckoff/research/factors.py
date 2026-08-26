@@ -174,6 +174,15 @@ FACTORS = ["gross_profitability", "op_profitability", "roe", "accruals", "asset_
            "leverage", "cash_ratio", "asset_turnover"]
 
 
+# Values that are arithmetically possible but economically meaningless: an ROE of 735,900%
+# (equity rounding to nothing) or a 2,147% operating margin (a trivial revenue base). They are
+# not outliers to be winsorised, they are broken denominators, and they sort straight into the
+# extreme decile where they contaminate exactly the number being measured.
+SANE = {"roe": (-3, 3), "op_profitability": (-3, 3), "op_margin": (-1, 1),
+        "cash_conversion": (-20, 20), "leverage": (0, 20), "margin_trend": (-1, 1),
+        "accruals": (-1, 1), "asset_growth": (-0.9, 5), "rev_growth": (-0.9, 10)}
+
+
 def report(df: pd.DataFrame) -> None:
     pd.set_option("display.width", 200)
     for h in HORIZONS:
@@ -182,6 +191,9 @@ def report(df: pd.DataFrame) -> None:
         out = []
         for fac in FACTORS:
             s = sub.dropna(subset=[fac]).copy()
+            if fac in SANE:
+                lo, hi = SANE[fac]
+                s = s[(s[fac] >= lo) & (s[fac] <= hi)]
             if len(s) < 3000:
                 continue
             # Decile within each month, so the sort is a same-time decision.
@@ -191,12 +203,21 @@ def report(df: pd.DataFrame) -> None:
             hi = s[s.d == 9].groupby("m")[col].mean()
             lo = s[s.d == 0].groupby("m")[col].mean()
             sp = (hi - lo).dropna()
+            # The MEDIAN spread alongside the mean. A decile of loss-making companies has a
+            # lottery return distribution: it loses most of the time yet carries a large
+            # positive mean. Whenever mean and median disagree in sign, the mean is the tail.
+            hm = s[s.d == 9].groupby("m")[col].median()
+            lm = s[s.d == 0].groupby("m")[col].median()
+            spm = (hm - lm).dropna()
             if len(sp) < 24:
                 continue
             t = sp.mean() / (sp.std(ddof=1) / np.sqrt(len(sp)))
-            out.append({"factor": fac, "n": len(s), "top-bot%": sp.mean(), "t": t,
-                        "months": len(sp), "pos%": (sp > 0).mean() * 100})
-        r = pd.DataFrame(out).sort_values("t", key=abs, ascending=False)
+            tm = spm.mean() / (spm.std(ddof=1) / np.sqrt(len(spm)))
+            out.append({"factor": fac, "n": len(s), "mean_sp%": sp.mean(), "t_mean": t,
+                        "med_sp%": spm.mean(), "t_med": tm,
+                        "agree": "yes" if np.sign(sp.mean()) == np.sign(spm.mean()) else "NO",
+                        "months": len(sp)})
+        r = pd.DataFrame(out).sort_values("t_med", key=abs, ascending=False)
         print(f"\n=== HORIZON {h} sessions — top minus bottom decile, monthly Fama-MacBeth ===")
         print(r.to_string(index=False, float_format=lambda v: f"{v:8.2f}"))
 
