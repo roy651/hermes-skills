@@ -178,8 +178,18 @@ JSON and nothing after it:
 {{"order": [<company letters, best first>], "confidence": <0.0-1.0>}}"""
 
 
-def call_ollama(prompt: str, model: str, timeout: int = 900) -> str:
-    payload = json.dumps({"model": model, "prompt": prompt, "stream": False,
+def call_ollama(prompt: str, model: str, timeout: int = 900, think: bool = False) -> str:
+    """Local inference.  matters enormously here.
+
+    qwen3.6 is a reasoning model: it emits thousands of thinking tokens before answering, and
+    this machine generates at ~14 tok/s, so a single 5-company ranking took 6+ minutes and a
+    30-batch cohort would have run over two hours. Disabling the trace took the same trivial
+    prompt from 13.6s to 0.5s.
+
+    The trade-off is real and must be remembered when reading results: this is a WEAKER
+    configuration. A null result here bounds the non-reasoning setup, not the model.
+    """
+    payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "think": think,
                           "options": {"temperature": 0.0, "num_ctx": 16384}}).encode()
     req = urllib.request.Request(f"{OLLAMA}/api/generate", data=payload,
                                  headers={"Content-Type": "application/json"})
