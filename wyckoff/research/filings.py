@@ -32,6 +32,11 @@ import fundamentals as F
 CACHE = Path(__file__).parent / "cache"
 OUT = CACHE / "filing_vectors.pkl"
 TOP_TERMS = 800                     # enough for a stable cosine, small enough to store
+# Filings run from 2MB to tens of MB of inline-XBRL-bloated HTML, and regex-stripping that is
+# the actual bottleneck — 10 companies took 50 minutes. The narrative that carries the signal
+# (MD&A, risk factors) sits early; the tail is exhibits and tagged tables. Truncating EVERY
+# document identically keeps the comparison fair, which is what a similarity measure needs.
+MAX_HTML = 600_000
 
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
@@ -97,7 +102,7 @@ def filing_index(cik: str) -> list[dict]:
 def vectorise(cik: str, f: dict, lex: dict) -> dict | None:
     url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{f['acc']}/{f['doc']}"
     try:
-        html = edgar._get(url)
+        html = edgar._get(url)[:MAX_HTML]
     except Exception:
         return None
     text = _WS.sub(" ", _TAG.sub(" ", html)).lower()
