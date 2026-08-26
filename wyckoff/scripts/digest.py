@@ -104,10 +104,11 @@ def _section(title: str, fn, *args, **kwargs) -> str | None:
 
 
 def daily_sections() -> list[str]:
-    import stop_check, portfolio_value, watchlist_scan, checkpoints
+    import stop_check, portfolio_value, watchlist_scan, checkpoints, concentration
     out = []
     for title, fn, kw in [("Risk", stop_check.run, {"as_section": True}),
                           ("Value", portfolio_value.run, {"as_section": True}),
+                          ("Concentration", concentration.build_section, {}),
                           ("Watchlist", watchlist_scan.run, {"as_section": True})]:
         s = _section(title, fn, **kw)
         if s:
@@ -162,8 +163,11 @@ def engine_health() -> str:
 
 
 def weekly_sections() -> list[str]:
-    import checkpoints, watchlist_scan
+    import checkpoints, watchlist_scan, concentration
     out = []
+    c = _section("Concentration", concentration.build_section)
+    if c:
+        out.append(c)
     for frag, title in [("exit-all", "Positions"), ("entry", "Entry funnel")]:
         got = _latest(frag)
         if got:
