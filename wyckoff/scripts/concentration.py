@@ -89,8 +89,12 @@ def build_section(as_section: bool = True) -> str:
     eff = 1 / sum((r["pct"] / 100) ** 2 for r in rows) if total else 0
     top2 = sum(r["pct"] for r in rows[:2])
     core = sum(r["pct"] for r in rows if r["strategic"])
+    # Cash is not represented in holdings.json, so these are shares OF INVESTED CAPITAL. Any
+    # idle balance dilutes every figure here — the same silent-omission trap as the unpriced
+    # fund, just smaller and pre-existing. Say so rather than implying it is the whole book.
     lines.append(f"<b>{len(rows)}</b> positions, but an effective <b>{eff:.1f}</b> "
-                 f"— top two are <b>{top2:.0f}%</b> of the book.")
+                 f"— top two are <b>{top2:.0f}%</b> of invested capital.")
+    lines.append("<i>Cash is not tracked, so these are shares of invested capital, not net worth.</i>")
     if core:
         lines.append(f"<i>{core:.0f}% is flagged strategic / no-trailing-stop — deliberate ballast, "
                      f"not drift.</i>")
