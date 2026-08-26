@@ -110,6 +110,56 @@ def eps_history(facts: dict) -> pd.DataFrame:
     return df.groupby("period_end", as_index=False).first().drop(columns=["rank"])
 
 
+def annual_eps(facts: dict) -> pd.DataFrame:
+    """Full-year EPS, same point-in-time discipline. Needed to recover the missing quarter."""
+    units = facts.get("facts", {}).get("us-gaap", {})
+    rows = []
+    for rank, tag in enumerate(EPS_TAGS):
+        for unit, entries in units.get(tag, {}).get("units", {}).items():
+            for e in entries:
+                if e.get("form") != "10-K" or not e.get("filed"):
+                    continue
+                start, end = e.get("start"), e.get("end")
+                if not start or not end:
+                    continue
+                if not (330 <= (pd.Timestamp(end) - pd.Timestamp(start)).days <= 400):
+                    continue
+                filed = pd.Timestamp(e["filed"])
+                if (filed - pd.Timestamp(end)).days > MAX_FILING_LAG_DAYS:
+                    continue
+                rows.append({"fy_end": pd.Timestamp(end), "fy_start": pd.Timestamp(start),
+                             "filed": filed, "eps": float(e["val"]), "rank": rank})
+    if not rows:
+        return pd.DataFrame(columns=["fy_end", "fy_start", "filed", "eps"])
+    df = pd.DataFrame(rows).sort_values(["fy_end", "rank", "filed"])
+    return df.groupby("fy_end", as_index=False).first().drop(columns=["rank"])
+
+
+def with_q4(quarters: pd.DataFrame, annuals: pd.DataFrame) -> pd.DataFrame:
+    """Reconstruct the missing fiscal Q4 as FY minus the three quarters inside it.
+
+    Every filer reports Q1-Q3 in 10-Qs and then folds Q4 into the annual 10-K, so a naive
+    quarterly scrape silently loses ~25% of all earnings events — and the annual report is the
+    highest-attention one of the year. The derived quarter inherits the 10-K's FILING date,
+    which is exactly when that number became public.
+    """
+    if quarters.empty or annuals.empty:
+        return quarters
+    out = [quarters]
+    for a in annuals.itertuples():
+        inside = quarters[(quarters.period_end > a.fy_start) & (quarters.period_end <= a.fy_end)]
+        if len(inside) != 3:                    # need exactly Q1-Q3 to subtract cleanly
+            continue
+        if (quarters.period_end == a.fy_end).any():
+            continue                            # already reported standalone
+        out.append(pd.DataFrame([{
+            "period_end": a.fy_end, "filed": a.filed,
+            "eps": round(a.eps - inside.eps.sum(), 4),
+            "tag": "derived", "form": "10-K-derived"}]))
+    res = pd.concat(out, ignore_index=True).sort_values("period_end")
+    return res.groupby("period_end", as_index=False).first()
+
+
 def probe(tickers: list[str]) -> None:
     cm = cik_map()
     for t in tickers:
@@ -119,7 +169,7 @@ def probe(tickers: list[str]) -> None:
         facts = company_facts(t.upper(), cik)
         if not facts:
             print(f"{t}: no facts"); continue
-        h = eps_history(facts)
+        h = with_q4(eps_history(facts), annual_eps(facts))
         if h.empty:
             print(f"{t}: CIK {cik} — no quarterly EPS found"); continue
         lag = (h.filed - h.period_end).dt.days
@@ -129,8 +179,50 @@ def probe(tickers: list[str]) -> None:
         print(h.tail(4)[["period_end", "filed", "eps", "form"]].to_string(index=False))
 
 
+def build() -> pd.DataFrame:
+    """Panel-wide event table: one row per (ticker, reported quarter, filing date)."""
+    import pickle
+    panel = pickle.load(open(CACHE / "panel.pkl", "rb"))
+    us = sorted(t for t, d in panel.items()
+                if d is not None and "." not in t and not t.startswith("^"))
+    cm = cik_map()
+    rows, miss, thin = [], 0, 0
+    for n, t in enumerate(us):
+        cik = cm.get(t.upper().replace(".", "-"))
+        if not cik:
+            miss += 1
+            continue
+        facts = company_facts(t, cik)
+        if not facts:
+            miss += 1
+            continue
+        try:
+            h = with_q4(eps_history(facts), annual_eps(facts))
+        except Exception as e:
+            print(f"[build] {t}: {str(e)[:60]}", file=sys.stderr)
+            continue
+        if len(h) < 8:
+            thin += 1
+            continue
+        h = h.assign(ticker=t)
+        rows.append(h[["ticker", "period_end", "filed", "eps", "form"]])
+        if n % 100 == 0:
+            print(f"[build] {n}/{len(us)}  events={sum(len(r) for r in rows):,}", file=sys.stderr)
+    out = pd.concat(rows, ignore_index=True).sort_values(["ticker", "period_end"])
+    out.to_pickle(CACHE / "eps_events.pkl")
+    print(f"[build] {len(out):,} events across {out.ticker.nunique()} tickers "
+          f"({miss} no-facts, {thin} thin)", file=sys.stderr)
+    print(f"[build] derived Q4 rows: {(out.form == '10-K-derived').sum():,} "
+          f"({(out.form == '10-K-derived').mean()*100:.1f}%)", file=sys.stderr)
+    print(f"[build] span {out.period_end.min().date()} .. {out.period_end.max().date()}",
+          file=sys.stderr)
+    return out
+
+
 if __name__ == "__main__":
-    if "--probe" in sys.argv:
+    if "--build" in sys.argv:
+        build()
+    elif "--probe" in sys.argv:
         names = sys.argv[sys.argv.index("--probe") + 1:]
         probe(names or ["AAPL", "MSFT", "KO"])
     else:
