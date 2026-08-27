@@ -104,7 +104,8 @@ def _section(title: str, fn, *args, **kwargs) -> str | None:
 
 
 def daily_sections() -> list[str]:
-    import stop_check, portfolio_value, watchlist_scan, checkpoints, concentration
+    import stop_check, portfolio_value, watchlist_scan, checkpoints, concentration, signals
+    import holdings as portfolio
     out = []
     for title, fn, kw in [("Risk", stop_check.run, {"as_section": True}),
                           ("Value", portfolio_value.run, {"as_section": True}),
@@ -116,6 +117,10 @@ def daily_sections() -> list[str]:
     # Only imminent checkpoints belong in a daily brief, and only the ones that ask something
     # of a person. A recurring monthly report is a routine; a one-shot is a decision someone
     # deliberately parked on a date. Telling you to "decide" about a disk-space audit is noise.
+    held = list(portfolio.load().keys())
+    flags = _section("Signals", signals.build_section, held)
+    if flags:
+        out.append(flags)
     rows = [r for r in checkpoints.pending(datetime.now(tz=ZoneInfo("UTC")),
                                            checkpoints.IMMINENT_DAYS) if r.get("one_shot")]
     if rows:
@@ -163,7 +168,8 @@ def engine_health() -> str:
 
 
 def weekly_sections() -> list[str]:
-    import checkpoints, watchlist_scan, concentration
+    import checkpoints, watchlist_scan, concentration, signals
+    import holdings as portfolio
     out = []
     c = _section("Concentration", concentration.build_section)
     if c:
@@ -177,6 +183,13 @@ def weekly_sections() -> list[str]:
     # MLM is CONTEXT, not an instruction. The portfolio test showed it does not beat SPY once
     # the moonshot tail and 2020 come out, so it is demoted from a daily entry queue to a
     # weekly momentum backdrop, and labelled as such.
+    held = list(portfolio.load().keys())
+    flags = _section("Signals", signals.build_section, held)
+    if flags:
+        out.append(flags)
+    res = _section("Entry residue", signals.entry_residue, 12, held)
+    if res:
+        out.append(res)
     mlm = _latest("mlm-scan")
     if mlm:
         out.append("<i>— momentum backdrop (context only; not an entry queue) —</i>\n" + mlm)
