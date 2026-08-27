@@ -114,6 +114,11 @@ if __name__ == "__main__":
 
 MIN_PRICE = 5.0
 MIN_DOLLAR_VOL = 5e6
+# Sorting by raw momentum puts names up 2,000% at the top — precisely the moonshot tail that
+# signal-validation.md §11 showed is a survivorship-contaminated lottery (banding entries to
+# 30-100% cut the backtest from 62.4% to 24.5% CAGR, i.e. the tail WAS the return, and it was
+# not real). Listing them as candidates would be reproducing the failed strategy.
+MOM_BAND = (30.0, 100.0)
 
 
 def entry_residue(top: int = 12, held: list[str] | None = None) -> str:
@@ -152,10 +157,14 @@ def entry_residue(top: int = 12, held: list[str] | None = None) -> str:
     unc_vetoed = {t for t, u in unc.items() if u["pct"] >= 90}
     df = df[~df.ticker.isin(vetoed | unc_vetoed) & ~df.ticker.isin(held)]
 
+    n_band = len(df)
+    df = df[(df.mom >= MOM_BAND[0]) & (df.mom <= MOM_BAND[1])]
+    n_dropped = n_band - len(df)
     df = df.sort_values("mom", ascending=False).head(top)
     lines = ["📋 <b>Entry residue</b> — <i>NOT recommendations</i>",
              f"<i>{n0} liquid names, minus {len(vetoed)} recent-miss vetoes and "
-             f"{len(unc_vetoed)} high-uncertainty, minus current holdings. "
+             f"{len(unc_vetoed)} high-uncertainty, minus current holdings, minus "
+             f"{n_dropped} outside the 30-100% momentum band. "
              f"Ordered by 12-1 momentum — our weakest surviving signal (t=1.98, and zero in "
              f"2016-2020). Treat as a discussion shortlist, nothing more.</i>", "<pre>",
              f"{'TICKER':<8}{'PRICE':>9}{'MOM':>8}{'OFF-HI':>8}{'ADV$m':>8}"]
