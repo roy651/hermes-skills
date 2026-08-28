@@ -780,3 +780,90 @@ panel say the same thing.
    take profit on a winner near its high. The only candidate is a **time exit from a defined
    event window** — which is the entry-side argument for the earnings-event plan, arriving from
    the exit side.
+
+---
+
+# §13 — Multi-scale path features and the regime hypothesis (2026-08-27/28)
+
+Two studies, both negative, and the second explains the first. Code: `research/paths.py`,
+`research/model_paths.py`, `research/regime.py`.
+
+## 13.1 The features
+
+Roy's design: decompose the price path into **non-overlapping eras** rather than overlapping
+cumulative windows, because `ret(20)` and `ret(21)` share 95% of their data and correlate ~0.99 —
+a dozen cumulative windows is a dozen copies of one number. Seven disjoint segments (1-5, 6-10,
+11-21, 22-42, 43-84, 85-168, 169-252 sessions), log-spaced because return variance scales with
+√t. Each carries **return, volume ratio and realised volatility**; six **acceleration** terms
+across adjacent eras capture the second derivative (the first derivative is what the segments
+already are). Plus `dd` and `mom_12_1`.
+
+**48,901 rows · 510 tickers · 29 features · 3 sectors**, rank-standardised within (date, sector)
+— the normalisation that matters, since it makes every feature a relative statement.
+
+## 13.2 The model is significantly WRONG, not merely useless
+
+Pre-registered protocol: binary target (sign of 6-month return vs sector), HistGradientBoosting
+depth 3, expanding walk-forward with a 6-date embargo, Fama-MacBeth *t* on per-date rank
+correlation, permutation control within date.
+
+| segment | rank-corr | t | vs permutation null |
+|---|---|---|---|
+| pooled | **−0.0303** | **−2.21** | **OUTSIDE** |
+| Consumer Discretionary | **−0.0502** | **−3.38** | **OUTSIDE** |
+| Industrials | −0.0047 | −0.30 | inside |
+| Utilities | +0.0163 | +0.86 | inside |
+
+**Diagnosis.** Top features are `mom_12_1`, volume and volatility. The model's favoured quintile
+is **beaten-down, high-volatility, low-momentum** (mom −0.27, dd −0.32, recent vol +0.27) with
+mean **+2.96%** and median **−3.47%** — it selects lottery tickets.
+
+**Mechanism: non-stationarity.** Training spans 2020-21, when battered volatile names rocketed.
+The model learned "buy the wreckage", the relationship inverted, and it kept applying it.
+
+## 13.3 The regime hypothesis — tested, and it fails on sample size
+
+If the relationship flips sign, that is only exploitable when the flip is **persistent** or
+**predictable from a contemporaneous observable**. Detecting a regime after it changed leaves you
+permanently one step behind.
+
+The naive test looked emphatic — autocorrelation +0.667, sign flips 25% against 50% for white
+noise (z = −4.15), a 17-month single-sign run, and cross-sectional dispersion explaining the sign
+at p = 0.004.
+
+**All of it was overlap.** Consecutive dates share 5/6 of their 6-month outcome window, so their
+correlations must look alike whether or not a regime exists. Re-testing on **non-overlapping**
+windows:
+
+- six starting offsets give autocorrelations from **+0.541 to −0.649** — the persistence itself
+  changes sign depending on where you start
+- sign-flip rates 27-64%, straddling the white-noise 50%
+- pooled persistence p = **0.401**
+- dispersion: overlap-adjusted **t = +1.14**; measured directly on non-overlapping dates
+  **p = 0.255**
+
+## 13.4 The recurring error, named so it stops recurring
+
+This is the **third** instance of one mistake — the effective sample being far smaller than the
+row count:
+
+1. **Blind test** — the parametric *t* counted 200 correlated rows as independent (p 0.034 → 0.065
+   on permutation)
+2. **Factor study** — means inflated by lottery tails (ROE t = −2.26 → nothing on medians)
+3. **Regime test** — autocorrelation inflated by overlapping outcome windows
+
+**Treat every t-statistic in this project as guilty until the effective N is established.**
+
+## 13.5 Why the horizon must shorten
+
+10 years ≈ 2,520 trading days, so non-overlapping windows number `2520 / H`:
+**H=126 gives 20; H=21 gives 120.** A switching process cannot be characterised — let alone have
+its number of states counted — from 20 draws. There are two distinct sample sizes and they must
+not be confused: ~500 stocks per date governs how precisely the relationship is measured *on* a
+date; ~20 independent periods governs whether its average is nonzero or persists. Regime
+questions are time-series questions, so they are bounded by the 20.
+
+**Next step: rerun the whole path study at H=21**, same features and protocol. It also fits what
+we already know — the tradable structure we have found lives at short horizons (PEAD in 5-10
+sessions, the beat-pop reversing within 3 days), and the stop exits 96% of positions inside three
+months anyway, so a 6-month target never matched how the book behaves.
