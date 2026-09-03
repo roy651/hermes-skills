@@ -170,8 +170,8 @@ The household AP was replaced. **SSID `sandy_wanda_6` → `sandy_wanda_7`**, new
   item 7 ("replace the Tenda") is what actually happened.
 - **Bypass dongle retired.** `wlx6c1ff78c875a` had sat `NO-CARRIER` for weeks (the known
   USB-current problem) and `append_csv` wrote `LOSS` on every sample while it did — it keyed on
-  "a `wlx*` interface exists", not "the bypass was pinged". Fixed (`alt_measured`), dongle
-  unplugged, `60-wifi-bypass.yaml` → `/etc/netplan/disabled/`. Cost: pfSense faults are inferred,
+  "a `wlx*` interface exists", not "the bypass was pinged". Fixed (`alt_measured`); `60-wifi-bypass.yaml` →
+  `/etc/netplan/disabled/`, dongle left plugged in but unconfigured (inert, `NO-CARRIER`). Cost: pfSense faults are inferred,
   not proven, and a WAN-down alert can't split pfSense-WAN from modem/ISP. Unrelated to the AP
   swap — the dongle targets the *modem's* SSID, which did not change.
 - **`systemctl` scope trap:** `wifi-monitor.service` is a **`--user`** unit. Plain

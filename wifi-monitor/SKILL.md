@@ -106,8 +106,8 @@ measured*, never as a loss.
 **⚠️ Retired 2026-09-03.** The dongle had sat `NO-CARRIER` (unassociated — the known USB-current
 problem) for weeks, and a bug in `append_csv` wrote `LOSS` on every sample while it did, because it
 keyed on "does a `wlx*` interface exist" instead of "was the bypass actually pinged". Fixed: a
-down dongle now writes *not measured*. The dongle is unplugged and `60-wifi-bypass.yaml` moved to
-`/etc/netplan/disabled/` (netplan does not recurse). **What is lost without it:** only the two
+down dongle now writes *not measured*. `60-wifi-bypass.yaml` is moved to `/etc/netplan/disabled/`
+(netplan does not recurse); the dongle stays plugged in, unconfigured and inert. **What is lost without it:** only the two
 bypass-informed verdicts — `proven_pfsense_runs` can no longer *prove* pfSense (it stays an
 inference bucket), and a WAN-down alert can no longer split "pfSense WAN side" from "modem/ISP"
 or "pfSense dead" from "this host dead". The WiFi / Wired / Modem / WAN rows never depended on it.
