@@ -140,6 +140,13 @@ monthly (kind-A-style script skill, cron `minipc_audit_monthly`, 1st at 06:00 UT
 
 The household AP was replaced. **SSID `sandy_wanda_6` → `sandy_wanda_7`**, new password.
 
+- **Transitional: `sandy_wanda_6` lives on as a *secondary* SSID on the Asus** (old password) so
+  legacy IoT — robot-vac, Nest, Reolink cam — kept working without re-pairing. Verified from the
+  mini-PC that it is **bridged onto the main `192.168.1.0/24`** (pfSense DHCP, LAN-reachable), not
+  an isolated guest segment. Plan: migrate those devices to `_7` one by one, then delete the
+  secondary SSID. The second mesh node is `192.168.1.222` (`e8:9c:25:9f:1a:60`); the primary is
+  `.172`.
+
 - **The mini-PC's only credential store is `/etc/netplan/50-cloud-init.yaml`** (`wifis: wlp1s0:`),
   applied with `sudo netplan apply`. NetworkManager is **inactive** (no nmcli profiles) and
   `/etc/wpa_supplicant/` holds only scripts — so there is exactly one place to edit.
