@@ -177,3 +177,22 @@ The household AP was replaced. **SSID `sandy_wanda_6` → `sandy_wanda_7`**, new
 - **`systemctl` scope trap:** `wifi-monitor.service` is a **`--user`** unit. Plain
   `systemctl status wifi-monitor` reports "could not be found" / "inactive" and looks like an
   outage. Always `systemctl --user`.
+
+## Known state (2026-09-04)
+- **Second Claude logout outage: 2026-08-28 03:00 → 09-03 09:50 UTC (6 days).** Same mechanism as
+  2026-07-27: a failed OAuth refresh wipes the refresh token, `claude` exits 1 with **empty stderr**,
+  every LLM-backed cron job 503s, no-agent jobs keep running. Recovered only by an interactive
+  `/login`. **The proxy now names it**: on a non-zero exit it runs `claude auth status` and returns
+  "Claude CLI is LOGGED OUT on the mini-PC … Fix: ssh -t … 'claude login'"; otherwise it includes
+  the CLI's stdout (the CLI prints its reason there, not on stderr). Roy declined a periodic
+  watchdog cron — the clearer Telegram failure text is the chosen control.
+- **Claude tier is now `claude-fable-5-1`** (`~/.claude/settings.json`; backup
+  `settings.json.bak-opus5`). `switch-model/switch.sh claude-model fable` maps it; the script copy
+  in `~/.hermes/skills/switch-model/` must be refreshed on change. Verified via `X-Proxy-Backend`.
+- **Re-running a spent one-shot:** `hermes cron run <id>` refuses a completed job until
+  `hermes cron resume <id>`; it then runs synchronously in the CLI. If the agent removes its own
+  job mid-run (reolink-renew does, by design) Hermes logs "fire claim ownership lost" and drops the
+  reply — the work is done, only the Telegram summary is lost. Recurring jobs re-run and deliver
+  normally with `hermes cron run`.
+- **`minipc_audit.sh` exits 1 when any check fails** (e.g. pending security updates), so Hermes
+  marks the run "failed" although the report ran. Script design, not an outage.

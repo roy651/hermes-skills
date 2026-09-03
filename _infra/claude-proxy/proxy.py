@@ -186,6 +186,33 @@ def _messages_to_prompt(messages: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+def _claude_logged_in() -> bool:
+    """Ask the CLI whether it holds a usable login. Unknown counts as logged in, so a
+    broken status command never turns an ordinary crash into a false logout alarm."""
+    try:
+        out = subprocess.run([CLAUDE_BIN, "auth", "status"], capture_output=True,
+                             text=True, timeout=20).stdout
+        return bool(json.loads(out).get("loggedIn"))
+    except Exception:
+        return True
+
+
+def _explain_claude_failure(returncode: int, stdout: str, stderr: str) -> str:
+    """Build the error text for a non-zero claude exit.
+
+    The CLI writes its reason to stdout in JSON mode and leaves stderr empty, so the old
+    message read "claude exited 1: " whatever the cause. The logged-out case gets its own
+    message with the fix: a failed OAuth refresh wipes the refresh token and nothing recovers
+    until a human runs `claude login` (2026-08-28 → 09-03: six days of 503s on every LLM job).
+    """
+    if not _claude_logged_in():
+        return ("Claude CLI is LOGGED OUT on the mini-PC (OAuth token wiped; will not self-heal). "
+                "Fix: ssh -t roy650@192.168.1.16 'claude login', then "
+                "systemctl --user restart claude-proxy hermes-gateway")
+    detail = (stderr.strip() or stdout.strip() or "no output")[:300]
+    return f"claude exited {returncode}: {detail}"
+
+
 def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[str, str | None, str | None]:
     """
     Invoke claude CLI. Returns (response_text, session_id, model_used).
@@ -230,7 +257,7 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
             _procs.pop(proc.pid, None)
 
     if proc.returncode != 0:
-        raise RuntimeError(f"claude exited {proc.returncode}: {stderr[:300]}")
+        raise RuntimeError(_explain_claude_failure(proc.returncode, stdout, stderr))
 
     try:
         global _last_result
