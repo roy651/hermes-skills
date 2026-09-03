@@ -196,3 +196,14 @@ The household AP was replaced. **SSID `sandy_wanda_6` → `sandy_wanda_7`**, new
   normally with `hermes cron run`.
 - **`minipc_audit.sh` exits 1 when any check fails** (e.g. pending security updates), so Hermes
   marks the run "failed" although the report ran. Script design, not an outage.
+- **Daily Brief rebuilt (first draft sent 2026-09-04, under review for a few days).** Roy found
+  it repetitive. `wyckoff/scripts/digest.py --daily` now adds a mechanical **market snapshot**
+  (`scripts/market.py`: SPY/QQQ/IWM/TLT/HYG/GLD/DXY/VIX 1d/5d/20d + sector ETFs ranked by 5d),
+  an **Engines** block parsed from the archive (exit review, entry funnel, MLM scan — one line
+  each, stale-flagged), and a **delta gate**: the concentration table prints only when a weight
+  moves ≥1 point or on Mondays (`data/brief_state.json`), and validated flags older than 7 days
+  collapse to one carried line (`signals.build_section(fresh_days=)`). The read now **web-searches**
+  inside the Claude Code call (market wrap, events/news on held names and sectors, one analyst
+  piece from `brief.analysts` in `config.yaml`) — parts Market / Your book / Check, ≤1,800 chars.
+  To fit the searches the **claude-proxy ceiling is 480s** (was 300; `analysis.py` waits 490).
+  Dry run: 93s, 4.4k chars. `--dry-run` does not touch the state file.
