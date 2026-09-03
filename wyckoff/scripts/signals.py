@@ -18,6 +18,7 @@ Usage:  signals.py --check AAPL MSFT
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -93,11 +94,30 @@ def position_notes(tickers: list[str], today: pd.Timestamp | None = None) -> lis
     return lines
 
 
-def build_section(tickers: list[str]) -> str | None:
+FLAG_AGE = re.compile(r"(?:missed|beat) (\d+)d ago")
+
+
+def build_section(tickers: list[str], fresh_days: int | None = None) -> str | None:
+    """With `fresh_days`, flags older than that collapse into one trailing line. A veto is
+    valid for the whole quarter it was measured over, but repeating the same line for three
+    months trains the reader to skip the section; the weekly still prints every flag in full."""
     notes = position_notes(tickers)
     if not notes:
         return None
-    return ("🧾 <b>Validated flags on held positions</b>\n" + "\n".join(notes) +
+    carried = []
+    if fresh_days is not None:
+        fresh = []
+        for line in notes:
+            m = FLAG_AGE.search(line)
+            (carried if m and int(m.group(1)) > fresh_days else fresh).append(line)
+        notes = fresh
+    body = "\n".join(notes)
+    if carried:
+        names = ", ".join(f"{re.search(r'<b>(.+?)</b>', l).group(1)} ({FLAG_AGE.search(l).group(1)}d)"
+                          for l in carried)
+        body += (("\n" if notes else "") +
+                 f"• older, still inside the {VETO_LOOKBACK_DAYS}d veto window (full detail in the weekly): {names}")
+    return ("🧾 <b>Validated flags on held positions</b>\n" + body +
             "\n<i>Exit-side only. We have no validated entry signal.</i>")
 
 

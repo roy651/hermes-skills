@@ -39,6 +39,19 @@ entry:
   # cleaner S&P/NDX name. 20 index + 10 sleeve = 30 LLM reads. Set 0 to disable the sleeve cohort.
   sleeve_cohort_size: 10
 
+brief:
+  # Sources the daily read may cite for "views" — at most one per brief, and only when they
+  # published something this week a holder of this book should hear. Names are search terms.
+  analysts:
+    - Torsten Sløk (Apollo)
+    - Liz Ann Sonders (Schwab)
+    - Mike Wilson (Morgan Stanley)
+    - Jurrien Timmer (Fidelity)
+    - Howard Marks (Oaktree memos)
+    - Ben Carlson (A Wealth of Common Sense)
+    - Lyn Alden
+  max_web_searches: 8
+
 reddit:
   pages: 2                      # ApeWisdom pages to fetch (25 tickers per page)
   velocity_warn_threshold: 2.0  # ≥200% mention increase → ⚠️ distribution warning

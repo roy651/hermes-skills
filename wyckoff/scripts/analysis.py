@@ -319,14 +319,14 @@ def _call_llm(system: str, user_parts: list[str], raw: bool = False) -> dict | s
         "Content-Type": "application/json",
     }
     # Retry: the local proxy can return an empty body or time out under concurrent load.
-    # Request timeout sits just ABOVE the proxy's 300s claude ceiling so we wait for the proxy's
+    # Request timeout sits just ABOVE the proxy's 480s claude ceiling so we wait for the proxy's
     # verdict (claude reply, fallback, or its own timeout) instead of abandoning a slow-but-valid
     # reply at 120s and logging a false "Read timed out". Claude errors exit fast, so this never
     # makes us wait on an error — only on genuine slow generation, which we want to keep.
     last_err: Exception | None = None
     for attempt in range(3):
         try:
-            resp = requests.post(API_URL, headers=headers, json=payload, timeout=310)
+            resp = requests.post(API_URL, headers=headers, json=payload, timeout=490)
             resp.raise_for_status()
             _note_backend(resp.headers.get("X-Proxy-Backend", ""))
             text = resp.json()["choices"][0]["message"]["content"].strip()
