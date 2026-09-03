@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: switch.sh <profile>
 # Profiles: claude, qwen, qwen-coder, mimo, gpt-oss, gemma, gemini
-# Claude model tier: switch.sh claude-model <haiku|sonnet|opus>
+# Claude model tier: switch.sh claude-model <haiku|sonnet|opus|fable>
 # Status: switch.sh status
 #
 # Claude routes through local proxy (http://localhost:8765/v1, provider: custom).
@@ -58,7 +58,8 @@ case "$profile" in
       haiku)  model_id="claude-haiku-4-5-20251001" ;;
       sonnet) model_id="claude-sonnet-4-6" ;;
       opus)   model_id="claude-opus-5" ;;
-      *)      echo "Unknown tier: $tier. Use haiku, sonnet, or opus."; exit 1 ;;
+      fable)  model_id="claude-fable-5-1" ;;
+      *)      echo "Unknown tier: $tier. Use haiku, sonnet, opus, or fable."; exit 1 ;;
     esac
     python3 - "$model_id" <<'EOF'
 import json, os, sys

@@ -33,6 +33,7 @@ bash ~/.hermes/skills/switch-model/switch.sh <command>
 | Change Claude tier to Haiku | `bash ~/.hermes/skills/switch-model/switch.sh claude-model haiku` |
 | Change Claude tier to Sonnet | `bash ~/.hermes/skills/switch-model/switch.sh claude-model sonnet` |
 | Change Claude tier to Opus | `bash ~/.hermes/skills/switch-model/switch.sh claude-model opus` |
+| Change Claude tier to Fable 5.1 (current default) | `bash ~/.hermes/skills/switch-model/switch.sh claude-model fable` |
 | Show current model status | `bash ~/.hermes/skills/switch-model/switch.sh status` |
 
 ## Rules
@@ -46,5 +47,5 @@ bash ~/.hermes/skills/switch-model/switch.sh <command>
 ## Triggers
 
 - "switch to qwen/qwen-coder/mimo/gpt-oss/claude" → provider switch
-- "use haiku/sonnet/opus" or "change Claude to [tier]" → claude-model switch
+- "use haiku/sonnet/opus/fable" or "change Claude to [tier]" → claude-model switch
 - "what model am I on" or "show model status" → status
