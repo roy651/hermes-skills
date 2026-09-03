@@ -69,7 +69,7 @@ _sessions: dict[str, dict] = {}   # key -> {"id","model","msg_count"}
 # each other. Track them all instead and reap only genuinely stuck ones by age.
 _procs = {}
 _procs_lock = threading.Lock()
-STUCK_AFTER_SEC = 330            # communicate() already times out at 300s; older than this is stuck
+STUCK_AFTER_SEC = 510            # communicate() already times out at 480s; older than this is stuck
 
 # Bound concurrency rather than forbidding it. One-shot callers (wyckoff) are independent and
 # safe to run in parallel; a RESUMED session is not — it must never race itself — so those are
@@ -247,11 +247,12 @@ def _call_claude(messages: list[dict], resume_id: str | None = None) -> tuple[st
         _procs[proc.pid] = (proc, time.monotonic())
 
     try:
-        stdout, stderr = proc.communicate(input=prompt, timeout=300)
+        # 480s: the daily brief's read runs several web searches inside one call.
+        stdout, stderr = proc.communicate(input=prompt, timeout=480)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
-        raise RuntimeError("claude timed out after 300s")
+        raise RuntimeError("claude timed out after 480s")
     finally:
         with _procs_lock:
             _procs.pop(proc.pid, None)
