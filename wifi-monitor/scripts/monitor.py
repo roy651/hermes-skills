@@ -2,12 +2,12 @@
 """
 WiFi quality monitor — dual-interface ping loop.
 
-Pings TARGET on both WIFI_IFACE (wlp1s0, via Tenda AP → pfSense) and WIRED_IFACE
+Pings TARGET on both WIFI_IFACE (wlp1s0, via the house AP → pfSense) and WIRED_IFACE
 (eno1, direct to pfSense) every INTERVAL seconds.  Comparing both interfaces
-distinguishes Tenda/WiFi faults from pfSense/upstream faults:
+distinguishes AP/WiFi faults from pfSense/upstream faults:
 
-  wlp1s0  →  Tenda AP  →  pfSense 192.168.1.1
-  eno1               →  pfSense 192.168.1.1  (direct, no AP in path)
+  wlp1s0  →  AP (bridge mode)  →  pfSense 192.168.1.1
+  eno1                        →  pfSense 192.168.1.1  (direct, no AP in path)
 
 On WiFi degradation:
   - Captures WiFi state snapshot + radio channel scan (cached, no root needed)
@@ -31,7 +31,7 @@ from pathlib import Path
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-TARGET           = "192.168.1.1"    # LAN gateway  — tests WiFi/Tenda hop
+TARGET           = "192.168.1.1"    # LAN gateway  — tests the WiFi/AP hop
 MODEM_TARGET     = os.environ.get("MODEM_TARGET", "192.168.3.1")  # WAN gateway — tests pfSense→modem; "" to disable
 WAN_TARGET       = os.environ.get("WAN_TARGET",   "8.8.8.8")      # internet    — tests full ISP path
 WAN_TARGET_ALT   = os.environ.get("WAN_TARGET_ALT", "1.1.1.1")    # second opinion before calling it loss
@@ -473,13 +473,18 @@ def _ping_target(target: str, timeout: int = 2) -> float | None:
 
 def append_csv(ts: str, wifi_ms: float | None, wired_ms: float | None,
                modem_ms: float | None, wan_ms: float | None,
-               alt_ms: float | None = None) -> None:
+               alt_ms: float | None = None, alt_measured: bool = False) -> None:
     # alt_ms was appended as a 6th column on 2026-08-06. Rows written before that have 5 fields and
     # every reader treats a missing 6th as "not measured" — NOT as a loss — so the month of history
     # stays usable rather than being rotated away.
+    #
+    # alt_measured must come from the caller: alt_ms is None both when the bypass was pinged and
+    # lost AND when it was skipped because the dongle had no link. Only the first is a LOSS. Keying
+    # on ALT_IFACE here (as this once did) wrote LOSS on every sample for a month while the dongle
+    # sat unassociated, which read in the report as a permanently failing bypass.
     with open(LOG_CSV, "a") as f:
         f.write(f"{ts},{_fmt(wifi_ms)},{_fmt(wired_ms)},{_fmt(modem_ms)},{_fmt(wan_ms)},"
-                f"{_fmt(alt_ms) if ALT_IFACE else ''}\n")
+                f"{_fmt(alt_ms) if alt_measured else ''}\n")
 
 
 def append_event(text: str) -> None:
@@ -525,13 +530,16 @@ VERDICT_EXCLUDED = {"Scheduled", "Modem unresponsive"}
 # "Scheduled", never dropped — the time still shows up honestly, so a restart that grows from 60s to
 # 5 minutes stays visible, but a known nightly event stops swamping the WiFi-hop signal.
 #
-# ⚠️ THESE ARE UTC, while the household thinks in local time (Asia/Jerusalem = UTC+3 in summer):
-#   01:05-01:20 UTC = 04:05-04:20 local — the Tenda's nightly restart (~60s, one episode)
-#   13:05-13:20 UTC = 16:05-16:20 local — the mesh re-steers the client to another node exactly 12h
-#                                          later (~11-15s; a roam, not a restart)
+# ⚠️ THESE ARE UTC, while the household thinks in local time (Asia/Jerusalem = UTC+3 in summer).
+#
+# Empty by default since the 2026-09-03 AP swap (Tenda sandy_wanda_6 → Asus sandy_wanda_7). The two
+# old windows described the Tenda's own habits — a 01:05 UTC nightly restart and a band-steer roam
+# exactly 12h later — and the Asus has not been observed long enough to know whether it has any.
+# Re-populate only once a recurring event is actually measured; a guessed window silently re-labels
+# real outages as "Scheduled".
 MAINTENANCE_WINDOWS = [
     tuple(part.split("-", 1))
-    for part in os.environ.get("MAINTENANCE_WINDOWS", "01:05-01:20,13:05-13:20").split(",")
+    for part in os.environ.get("MAINTENANCE_WINDOWS", "").split(",")
     if "-" in part
 ]
 
@@ -879,7 +887,7 @@ def main() -> None:
         # only the first licenses a verdict about pfSense.
         alt_live  = bool(ALT_IFACE and iface_ipv4(ALT_IFACE))
         alt_ms    = ping_one(ALT_IFACE, ALT_TARGET) if alt_live else None
-        append_csv(ts, wifi_ms, wired_ms, modem_ms, wan_ms, alt_ms)
+        append_csv(ts, wifi_ms, wired_ms, modem_ms, wan_ms, alt_ms, alt_measured=alt_live)
 
         wifi_bad   = wifi_ms is None or wifi_ms > BAD_MS
         bad_streak = bad_streak + 1 if wifi_bad else 0
@@ -951,7 +959,7 @@ def main() -> None:
             elif wan_ms is None and modem_ms is not None:
                 fault = f"modem OK ({modem_ms:.0f}ms), WAN LOSS → Bezeq/ISP fault"
             else:
-                fault = f"WAN OK ({_fmt_ms(wan_ms)}) → Tenda fault"
+                fault = f"WAN OK ({_fmt_ms(wan_ms)}) → AP fault"
 
             snapshot = event_start_snapshot(WIFI_IFACE)
             msg = (

@@ -135,3 +135,38 @@ monthly (kind-A-style script skill, cron `minipc_audit_monthly`, 1st at 06:00 UT
   broadcasts its own SSID — the only route onto the untrusted segment).
 - **Lesson:** a single vantage point is not a general property. "Firewalled from the LAN" is not
   "firewalled" (8644 was open via tailnet); "open from a carrier" is not "open" (port 53).
+
+## Known state (2026-09-03) — house AP swapped: Tenda → Asus mesh
+
+The household AP was replaced. **SSID `sandy_wanda_6` → `sandy_wanda_7`**, new password.
+
+- **The mini-PC's only credential store is `/etc/netplan/50-cloud-init.yaml`** (`wifis: wlp1s0:`),
+  applied with `sudo netplan apply`. NetworkManager is **inactive** (no nmcli profiles) and
+  `/etc/wpa_supplicant/` holds only scripts — so there is exactly one place to edit.
+  `/run/netplan/wpa-wlp1s0.conf` is **generated** from it on every apply; never edit that.
+- Result on `wlp1s0`: BSSID `e8:9c:25:68:ed:e4`, **5 GHz ch 60 @ 80 MHz VHT**, -55 dBm,
+  866 Mbit/s — up from the Tenda's 2.4 GHz ch 6 @ 40 MHz, -61 dBm, 240 Mbit/s.
+- ⚠️ **The Asus shipped in router mode, not AP/bridge mode** — `wlp1s0` first came up on
+  `192.168.50.34/24` via `192.168.50.1` (Asus factory LAN), i.e. **double-NAT behind pfSense**.
+  Decision: put the Asus in **AP mode** so pfSense stays the sole gateway/DHCP. Symptom to watch
+  for after any AP reset: a WiFi address outside `192.168.1.0/24`.
+- **A DHCP reservation keys on the CLIENT's MAC**, here `wlp1s0` = `00:e1:8c:50:02:7b`. An AP in
+  bridge mode forwards the client's own DHCP frames unchanged, so the AP's MAC never appears in the
+  mapping — swapping "Tenda's MAC" for "Asus's MAC" in pfSense is not a thing. (In router mode the
+  reservation is dead instead, because pfSense never sees the client MAC at all.)
+- **`MAINTENANCE_WINDOWS` now defaults to empty.** The old `01:05-01:20,13:05-13:20` UTC pair
+  described the *Tenda's* nightly restart and its 12h-later band-steer roam. Re-populate only from
+  a **measured** Asus event — a guessed window silently re-labels real outages as 🔧 Scheduled.
+- Code is now **vendor-neutral** ("AP", not "Tenda"), so the next swap needs no code edit; the
+  hardware is named in the docs only. `references/fault-triage.md` keeps the Tenda ROI list, marked
+  as historical: items 2/4/5 are generic radio levers, 1/3/6 were Tenda-firmware behaviour, and
+  item 7 ("replace the Tenda") is what actually happened.
+- **Bypass dongle retired.** `wlx6c1ff78c875a` had sat `NO-CARRIER` for weeks (the known
+  USB-current problem) and `append_csv` wrote `LOSS` on every sample while it did — it keyed on
+  "a `wlx*` interface exists", not "the bypass was pinged". Fixed (`alt_measured`), dongle
+  unplugged, `60-wifi-bypass.yaml` → `/etc/netplan/disabled/`. Cost: pfSense faults are inferred,
+  not proven, and a WAN-down alert can't split pfSense-WAN from modem/ISP. Unrelated to the AP
+  swap — the dongle targets the *modem's* SSID, which did not change.
+- **`systemctl` scope trap:** `wifi-monitor.service` is a **`--user`** unit. Plain
+  `systemctl status wifi-monitor` reports "could not be found" / "inactive" and looks like an
+  outage. Always `systemctl --user`.

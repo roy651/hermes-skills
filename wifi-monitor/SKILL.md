@@ -9,11 +9,11 @@ metadata:
 
 # WiFi Monitor
 
-A kind-B background service (no hermes job — runs as a systemd unit) that pings the gateway (`192.168.1.1`) every 5 seconds on both `wlp1s0` (WiFi → Tenda → pfSense) and `eno1` (wired → pfSense direct).
+A kind-B background service (no hermes job — runs as a systemd unit) that pings the gateway (`192.168.1.1`) every 5 seconds on both `wlp1s0` (WiFi → AP → pfSense) and `eno1` (wired → pfSense direct).
 
 Comparing both interfaces gives conclusive fault attribution:
-- WiFi slow, wired OK → Tenda/WiFi fault (scheduled reboot, interference, association issue)
-- Both slow → pfSense / upstream problem, not Tenda
+- WiFi slow, wired OK → AP/WiFi fault (scheduled reboot, interference, association issue)
+- Both slow → pfSense / upstream problem, not the AP
 
 ## Network notes — same-subnet multihoming (important)
 
@@ -28,7 +28,7 @@ Two consequences the monitor is built around:
    — that was tried (2026-07-10) to dodge ARP flux and backfired: source-IP bind does *not*
    pin egress (the route lookup picks the lowest-metric NIC, eno1, regardless of source), so a
    `.17`-sourced "WiFi" ping leaked out eno1 and returned over wlp1s0 — an asymmetric path that
-   measured ~67ms of garbage and fired **dozens of false "Tenda fault" alerts** while the real
+   measured ~67ms of garbage and fired **dozens of false "AP fault" alerts** while the real
    WiFi was ~5ms. Reverted to device-bind once #2 was in place.
 2. **ARP hardening (host sysctl, one-time, needs root) — this is what actually fixes the flux:**
    `/etc/sysctl.d/20-wifi-monitor-arp.conf` sets `arp_ignore=1` + `arp_announce=2` (all+default)
@@ -50,7 +50,7 @@ Before recommending any fix when "a few dozen drops" arrive, work three question
    floor uniformly — don't chase `power_scheme` on a 4 ms median).
 3. **Card or AP?** A second independent client (Roy's phone) failing at the *same wall-clock
    moment* localizes it to the AP and exonerates the 8265 card — skip the power-save test.
-   Then the 2.4-vs-5-GHz phone test picks the Tenda fix. Full Tenda remediation list is in the
+   Then the 2.4-vs-5-GHz phone test picks the AP fix. Full AP remediation list is in the
    reference file.
 
 ## What It Does
@@ -102,6 +102,16 @@ so it can never carry real traffic or hijack the default path — it exists only
 Remove the dongle and `ALT_IFACE` resolves empty, the probe disables itself, and attribution falls
 back to the inference. CSV rows before 2026-08-06 have 5 columns; a missing 6th is read as *not
 measured*, never as a loss.
+
+**⚠️ Retired 2026-09-03.** The dongle had sat `NO-CARRIER` (unassociated — the known USB-current
+problem) for weeks, and a bug in `append_csv` wrote `LOSS` on every sample while it did, because it
+keyed on "does a `wlx*` interface exist" instead of "was the bypass actually pinged". Fixed: a
+down dongle now writes *not measured*. The dongle is unplugged and `60-wifi-bypass.yaml` moved to
+`/etc/netplan/disabled/` (netplan does not recurse). **What is lost without it:** only the two
+bypass-informed verdicts — `proven_pfsense_runs` can no longer *prove* pfSense (it stays an
+inference bucket), and a WAN-down alert can no longer split "pfSense WAN side" from "modem/ISP"
+or "pfSense dead" from "this host dead". The WiFi / Wired / Modem / WAN rows never depended on it.
+To bring it back: a ≥0.9 A USB port, restore the yaml, `sudo netplan apply` — nothing else.
 
 **A provider outage does not cascade downward here** — WiFi/Wired/Modem probes all terminate at or
 before the modem, so only the WAN row can see the ISP. A *modem* failure is usually the local link
@@ -173,7 +183,7 @@ TELEGRAM_CHAT_ID=<your-chat-id>
 
 | Variable      | Default       | Notes                                  |
 |---------------|---------------|----------------------------------------|
-| `WIFI_IFACE`  | `wlp1s0`      | WiFi interface (through Tenda AP)      |
+| `WIFI_IFACE`  | `wlp1s0`      | WiFi interface (through the house AP)  |
 | `WIRED_IFACE` | `eno1`        | Wired interface (direct to pfSense)    |
 | `TARGET`      | `192.168.1.1` | Gateway to ping                        |
 | `INTERVAL`    | `5`           | Seconds between samples                |
@@ -201,12 +211,19 @@ out-of-tree module will not load otherwise. On success the device re-enumerates 
 
 ⚠️ `MAINTENANCE_WINDOWS` is **UTC**, but the household thinks in local time (Asia/Jerusalem = UTC+3
 in summer). Subtract 3 hours when adding one — a 16:11 *local* event is `13:05-13:20`, and entering
-`16:10-16:15` would silently suppress 19:10 local instead. The two defaults are:
+`16:10-16:15` would silently suppress 19:10 local instead.
+
+**It is empty by default since the 2026-09-03 AP swap** (Tenda `sandy_wanda_6` → Asus
+`sandy_wanda_7`). The two former defaults described the Tenda's own habits and are kept here only
+as a worked example of the format:
 
 - `01:05-01:20` UTC = **04:05–04:20 local** — the Tenda's nightly restart (~60–90s, one episode)
-- `13:05-13:20` UTC = **16:05–16:20 local** — the mesh steers the client to another node exactly 12h
-  later (~11–15s; a roam, not a restart — the journal shows a BSSID change and an AP-initiated
+- `13:05-13:20` UTC = **16:05–16:20 local** — the mesh steered the client to another node exactly
+  12h later (~11–15s; a roam, not a restart — the journal showed a BSSID change and an AP-initiated
   disassociation with reason 1)
+
+Re-populate only from a *measured* recurring Asus event. A guessed window silently re-labels real
+outages as "Scheduled".
 
 Loss inside a window is **re-labelled, never dropped**, and the daily verdict line reports unplanned
 loss separately (`15s unplanned · +85s scheduled`). So a restart that grows from 80s to 200s — as

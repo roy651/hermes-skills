@@ -71,12 +71,19 @@ Cheap 2-minute test that picks the fix: during the next burst window, connect th
 5 GHz airtime/channel-width. (The USB-dongle A/B is redundant once a second client corroborates
 — it can't tell you more than the phone already did if the wired link is clean.)
 
-## Tenda AP remediation (when it's the AP), ordered by ROI
+## AP remediation (when it's the AP), ordered by ROI
 
-The Tenda `sandy_wanda_6` is dual-band (2.4 ch6 + 5 ch40 @ 80 MHz VHT) in bridge/AP mode; its
-mgmt IP is NOT its BSSID and won't show in ARP until you talk to it at L3 (arp-scan to find it).
-Since the mini-PC is wired-primary (eno1 metric 100; WiFi is the metric-600 fallback the monitor
-probes), the Tenda's real job is household WiFi, not the mini-PC's traffic.
+The AP is an **Asus mesh, SSID `sandy_wanda_7`**, in AP/bridge mode (pfSense stays the sole
+gateway and DHCP server). As seen from the mini-PC on 2026-09-03: 5 GHz ch 60 @ 80 MHz VHT,
+BSSID `e8:9c:25:68:ed:e4`, -55 dBm, 866 Mbit/s. Its mgmt IP is NOT its BSSID and won't show in
+ARP until you talk to it at L3 (arp-scan to find it). Since the mini-PC is wired-primary
+(eno1 metric 100; WiFi is the metric-600 fallback the monitor probes), the AP's real job is
+household WiFi, not the mini-PC's traffic.
+
+⚠️ **The ROI list below was written against the previous AP** — a Tenda AC on `sandy_wanda_6`
+(2.4 ch6 + 5 ch40) — and item 7 is the one that was eventually taken: it was replaced by the Asus
+on 2026-09-03. Items 2, 4 and 5 are generic radio levers and still apply; items 1, 3 and 6 describe
+Tenda firmware behaviour and should not be assumed of the Asus until measured.
 
 1. **Firmware update.** Tenda AC firmware leaks/chokes under sustained evening load — classic
    "fine at noon, stalls at 21:00". First thing to check.
@@ -93,3 +100,4 @@ probes), the Tenda's real job is household WiFi, not the mini-PC's traffic.
 6. **Nightly scheduled reboot ~04:00 local** — band-aid for memory-leak-driven evening decay.
 7. **If it persists:** the Tenda is underpowered — promote the modem's AP (`sandy-wanda-backup`)
    to primary for streaming devices, or replace the Tenda with a better AP.
+   → **Taken 2026-09-03**: replaced with the Asus mesh (`sandy_wanda_7`).
