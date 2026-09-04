@@ -270,7 +270,16 @@ def _load_state() -> dict:
 
 def _collapse_unchanged_concentration(section: str, commit_state: bool) -> str:
     """Print the table when it moved (any weight by a full point, or the line-up) and on Mondays;
-    otherwise one line. The bars were identical for weeks, which taught the eye to skip them."""
+    otherwise one line. The bars were identical for weeks, which taught the eye to skip them.
+    Any failure here returns the full table: a cosmetic step must never cost the report."""
+    try:
+        return _collapsed_or_full(section, commit_state, datetime.now(tz=TZ))
+    except Exception as e:
+        print(f"[digest] concentration collapse failed, printing the table: {e}", file=sys.stderr)
+        return section
+
+
+def _collapsed_or_full(section: str, commit_state: bool, now_dt: datetime) -> str:
     rows = CONC_ROW.findall(section)
     if not rows:
         return section
@@ -282,9 +291,9 @@ def _collapse_unchanged_concentration(section: str, commit_state: bool) -> str:
         state["concentration"] = now
         BRIEF_STATE.parent.mkdir(parents=True, exist_ok=True)
         BRIEF_STATE.write_text(json.dumps(state, indent=1))
-    if moved or datetime.now(tz=TZ).weekday() == 0:
+    if moved or now_dt.weekday() == 0:
         return section
-    top = " · ".join(f"{name} {pct:.0f}%" for name, pct in rows[:3])
+    top = " · ".join(f"{name} {now[name]:.0f}%" for name, _ in rows[:3])
     tail = re.search(r"effective <b>[\d.]+</b>.*?$", section, re.M)
     summary = f"; {re.sub('<[^>]+>', '', tail.group(0))}" if tail else ""
     return (f"⚖️ <b>Concentration</b> — unchanged: {top}{summary} "
