@@ -29,7 +29,7 @@ import notifier
 import news as news_validator
 import finnhub
 import events as wyckoff_events
-import digest
+import blocks
 import reddit
 from prescreener import screen_universe, _factor_warnings, _load_factor_tags, TOP_N
 
@@ -209,7 +209,7 @@ def _pick_block(b: dict, dot: str, with_size: bool = True) -> list[str]:
     if rec in ENTRY_RECS:
         if entry:
             ez = f"entry {sym}{html.escape(str(entry))}"
-            if digest.entry_below_price(entry, b["price"]):
+            if blocks.entry_below_price(entry, b["price"]):
                 ez += " (await pullback)"
             rec_parts.append(ez)
         if stop:

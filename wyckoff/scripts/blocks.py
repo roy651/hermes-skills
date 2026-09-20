@@ -1,0 +1,163 @@
+"""Per-ticker Telegram block formatting for entry.py and exit.py.
+
+One `format_block` is the single source of truth for a per-ticker block, so the two
+schedulers can't drift (the drift between two copies caused the earlier HTML-escape bug).
+All dynamic/LLM-sourced text is html-escaped here.
+
+Lives apart from digest.py, which assembles the daily brief: that module was rewritten
+around the brief and these formatters went with it, silently breaking both schedulers.
+"""
+from __future__ import annotations
+import html
+import re
+
+PHASE_EMOJI = {
+    "accumulation": "🟡",
+    "markup": "✅",
+    "distribution": "⚠️",
+    "markdown": "🔴",
+    "unclear": "⬜",
+}
+
+REC_EMOJI = {
+    "buy": "🟢 Buy",
+    "add": "🟢 Add",
+    "hold": "✅ Hold",
+    "reduce": "🟠 Reduce",
+    "sell": "🔴 Sell",
+    "watch": "🔵 Watch",
+    "pass": "⬜ Pass",
+}
+
+
+def entry_below_price(entry, price: float) -> bool:
+    """True if the whole entry zone sits below the current price (a limit/pullback order)."""
+    nums = re.findall(r"\d+\.?\d*", str(entry))
+    if not nums:
+        return False
+    return price > max(float(x) for x in nums)
+
+
+def format_block(
+    result: dict,
+    holding: dict | None,
+    price: float,
+    name: str = "",
+    currency: str = "USD",
+    news_info: dict | None = None,
+    gate_action: bool = False,
+) -> str:
+    """One per-ticker digest block.
+
+    gate_action=True  (weekly entry funnel): show Entry/Stop only for a buy/add rec, and flag
+                       an entry zone that sits below current price as a limit/pullback order.
+    gate_action=False (daily exit-watch):    show Entry/Stop unconditionally.
+    """
+    ticker = result["ticker"]
+    phase = result.get("phase", "unclear")
+    confidence = result.get("phase_confidence", "")
+    criteria = result.get("criteria_met", "?")
+    rec = result.get("recommendation", "")
+    note = result.get("note", "")
+    signals = result.get("active_signals", [])
+    entry = result.get("entry_zone")
+    stop = result.get("stop")
+
+    phase_icon = PHASE_EMOJI.get(phase, "⬜")
+    rec_label = REC_EMOJI.get(rec, rec)
+    sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
+    price_str = f"{sym}{price:.2f}"
+
+    title = f"<b>{ticker}</b>"
+    if name and name != ticker:
+        title += f" <i>({html.escape(name)})</i>"
+
+    if holding:
+        qty = holding["qty"]
+        cost = holding["avg_cost"]
+        pnl_pct = (price - cost) / cost * 100
+        pnl_sign = "+" if pnl_pct >= 0 else ""
+        cost_str = f"{sym}{cost:.2f}"
+        header = f"{title} · {qty} @ {cost_str} · {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
+    else:
+        header = f"{title} · {price_str}"
+
+    lines = [header]
+    lines.append(f"  {phase_icon} {html.escape(phase.title())} ({html.escape(str(confidence))}) · {criteria}/9 criteria")
+    if signals:
+        lines.append(f"  Signals: {html.escape(', '.join(str(s) for s in signals))}")
+
+    action_line = f"  {rec_label}"
+    if (not gate_action) or rec in ("buy", "add"):
+        if entry:
+            action_line += f" · Entry ${html.escape(str(entry))}"
+            if gate_action and entry_below_price(entry, price):
+                action_line += " ⏳ limit (await pullback)"
+        if stop:
+            action_line += f" · Stop ${html.escape(str(stop))}"
+    lines.append(action_line)
+    if note:
+        lines.append(f"  <i>{html.escape(str(note))}</i>")
+
+    if news_info:
+        if not news_info.get("clean", True):
+            flag = news_info.get("flag") or "unknown issue"
+            lines.append(f"  ⚠️ NEWS FLAG: {html.escape(flag)}")
+        consensus = news_info.get("analyst_consensus", "unknown")
+        if consensus and consensus != "unknown":
+            lines.append(f"  👥 Analysts: {html.escape(consensus)}")
+        summary = news_info.get("summary", "")
+        if summary:
+            lines.append(f"  <i>📰 {html.escape(summary)}</i>")
+
+    return "\n".join(lines)
+
+
+def format_managed_block(holding: dict, price: float, engine: dict, validation: dict | None = None,
+                         name: str = "", currency: str = "USD") -> str:
+    """Exit-watch block: the deterministic engine DECIDES and DESCRIBES; the LLM only VALIDATES.
+    `engine` = {"risk","det","ladder"}; `validation` = {"valid": bool|None, "note": str} or None
+    (valid=None → LLM unavailable, no validation line shown).
+
+    ONE colour cue per asset, keyed to the ACTION (the thing you act on); no other icons. Five
+    lines so the rec is findable at a glance: asset · recommendation · condition · signals · note.
+    """
+    rk, det_a, lad = engine["risk"], engine["det"], engine["ladder"]
+    ticker = rk["ticker"]
+    sym = {"USD": "$", "ILS": "₪"}.get(currency, currency + " ")
+    qty = holding["qty"]
+    cost = holding["avg_cost"] / 100 if currency == "ILS" else holding["avg_cost"]   # ILS cost is in agorot
+    pnl_pct = (price - cost) / cost * 100 if cost else 0.0
+    psign = "+" if pnl_pct >= 0 else ""
+
+    action = lad["action"]
+    dot = ("🔴" if action.startswith("EXIT") else "🟡" if action.startswith("TRIM")
+           else "🟢" if action.startswith("ADD") else "🔵")   # EXIT red · TRIM yellow · ADD green · HOLD blue
+
+    score = det_a["score"]
+    if rk["stop_hit"] or score >= 7:
+        condition = "Breaking down"
+    elif score >= 5:
+        condition = "Distribution"
+    elif score >= 3:
+        condition = "Weakening"
+    else:
+        condition = "Structure intact"
+
+    delta = lad["delta_qty"]
+    delta_str = f" · {'buy' if delta > 0 else 'sell'} {abs(round(delta))}" if delta else ""
+    name_part = f" · <i>{html.escape(name)}</i>" if name and name != ticker else ""
+
+    # 1. asset   2. recommendation   3. condition   4. signals   5. validator note
+    lines = [
+        f"{dot} <b>{ticker}</b>{name_part} · {qty} @ {sym}{cost:.2f} → {sym}{price:.2f} ({psign}{pnl_pct:.1f}%)",
+        f"<b>{html.escape(action)}</b>{delta_str} · stop {sym}{rk['stop']} ({rk['distance_pct']}% away) · {lad['pos_pct']}% of port",
+        f"{condition} · {score}/9",
+    ]
+    if det_a["signals"]:
+        lines.append(html.escape(", ".join(str(s) for s in det_a["signals"])))
+    if validation and validation.get("valid") is not None:
+        label = "confirmed" if validation["valid"] else "<b>flag</b>"
+        note = validation.get("note", "")
+        lines.append(f"Validator: {label}" + (f" — <i>{html.escape(str(note))}</i>" if note else ""))
+    return "\n".join(lines)

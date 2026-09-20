@@ -23,7 +23,7 @@ import data as market_data
 import analysis as wyckoff
 import holdings as portfolio
 import notifier
-import digest
+import blocks
 import risk
 import deterioration
 import ladder
@@ -309,7 +309,7 @@ def run():
             action = engines[t]["ladder"]["action"]
             cat = ("EXIT" if action.startswith("EXIT") else "TRIM" if action.startswith("TRIM")
                    else "ADD" if action.startswith("ADD") else "HOLD")
-            block = digest.format_managed_block(
+            block = blocks.format_managed_block(
                 holdings[t], price, engines[t], validation=llm_out.get(t),
                 name=td.name, currency=td.currency)
             ann = reddit.annotation_line(reddit_data.get(t), rd_threshold)
@@ -318,7 +318,7 @@ def run():
             buckets[cat].append((engines[t]["det"]["score"], block))
         else:
             result = llm_out.get(t) or {"ticker": t, "phase": "unclear"}
-            block = digest.format_block(
+            block = blocks.format_block(
                 result, None, price, name=td.name, currency=td.currency, gate_action=False)
             ann = reddit.annotation_line(reddit_data.get(t), rd_threshold)
             if ann:
@@ -341,11 +341,11 @@ def run():
 
     if any(buckets.values()):
         for cat, label in (("EXIT", "Exit"), ("TRIM", "Trim"), ("ADD", "Add"), ("HOLD", "Hold")):
-            blocks = buckets[cat]
-            if blocks:
-                parts.append(f"\n<b>— {label} ({len(blocks)}) —</b>")
+            cat_blocks = buckets[cat]
+            if cat_blocks:
+                parts.append(f"\n<b>— {label} ({len(cat_blocks)}) —</b>")
                 # blank line before each block (the leading \n) so assets read as separate groups, not a blob
-                parts.extend("\n" + block for _score, block in sorted(blocks, key=lambda x: x[0], reverse=True))
+                parts.extend("\n" + block for _score, block in sorted(cat_blocks, key=lambda x: x[0], reverse=True))
 
     if watchlist_lines:
         parts.append("\n<b>Watchlist</b>")
