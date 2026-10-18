@@ -46,7 +46,6 @@ import notifier
 TZ = ZoneInfo("Asia/Jerusalem")
 CONFIG = Path(__file__).parent.parent / "config.yaml"
 BRIEF_STATE = Path(__file__).parent.parent / "data" / "brief_state.json"
-FRESH_FLAG_DAYS = 7          # a validated flag prints in full for a week, then as one carried line
 
 # Default "views" sources; override with `brief.analysts` in config.yaml (names are search terms).
 DEFAULT_ANALYSTS = ["Torsten Sløk (Apollo)", "Liz Ann Sonders (Schwab)", "Mike Wilson (Morgan Stanley)",
@@ -143,33 +142,18 @@ def _section(title: str, fn, *args, **kwargs) -> str | None:
 
 
 def daily_sections(commit_state: bool = True) -> list[str]:
-    import stop_check, portfolio_value, watchlist_scan, checkpoints, concentration, signals, market
-    import holdings as portfolio
+    # Positions and market only. Stops, engines, watchlist, signals and checkpoints were dropped
+    # on 2026-10-18 when the trading methods were retired; the weekly still has those sections.
+    import portfolio_value, concentration, market
     out = []
-    for title, fn, kw in [("Risk", stop_check.run, {"as_section": True}),
-                          ("Value", portfolio_value.run, {"as_section": True}),
-                          ("Market", market.build_section, {}),
-                          ("Engines", engine_lines, {})]:
+    for title, fn, kw in [("Value", portfolio_value.run, {"as_section": True}),
+                          ("Market", market.build_section, {})]:
         s = _section(title, fn, **kw)
         if s:
             out.append(s)
     c = _section("Concentration", concentration.build_section)
     if c:
         out.append(_collapse_unchanged_concentration(c, commit_state))
-    s = _section("Watchlist", watchlist_scan.run, as_section=True)
-    if s:
-        out.append(s)
-    # Only imminent checkpoints belong in a daily brief, and only the ones that ask something
-    # of a person. A recurring monthly report is a routine; a one-shot is a decision someone
-    # deliberately parked on a date. Telling you to "decide" about a disk-space audit is noise.
-    held = list(portfolio.load().keys())
-    flags = _section("Signals", signals.build_section, held, fresh_days=FRESH_FLAG_DAYS)
-    if flags:
-        out.append(flags)
-    rows = [r for r in checkpoints.pending(datetime.now(tz=ZoneInfo("UTC")),
-                                           checkpoints.IMMINENT_DAYS) if r.get("one_shot")]
-    if rows:
-        out.append(checkpoints.build(rows, checkpoints.IMMINENT_DAYS))
     return out
 
 
@@ -198,64 +182,6 @@ def _latest(fragment: str, max_age_days: int = 8) -> str | None:
     if age > max_age_days:
         return f"⚠️ <i>Latest {fragment} report is {age:.0f} days old — the job may have stopped.</i>"
     return newest.read_text().strip()
-
-
-# Engine reports are built from '— Label (n) —' blocks holding '🔴 <b>TICKER</b>' lines.
-ENGINE_GROUP = re.compile(r"<b>— ([A-Z][A-Za-z\- ]+?)(?: ·[^(]*)?\((\d+)\) —</b>")
-ENGINE_TICKER = re.compile(r"^[🔴🟡🟢🟣⚪] <b>([A-Z0-9.\-]+)</b>", re.M)
-MLM_ROW = re.compile(r"^\s*(\d+)([*! ])\s+(\S+)\s", re.M)
-
-
-def _groups(text: str) -> list[tuple[str, int, list[str]]]:
-    """[(label, count, tickers)] per '— Label (n) —' block of an exit or entry report."""
-    parts = ENGINE_GROUP.split(text)      # preamble, label, count, body, label, count, body ...
-    out = []
-    for i in range(1, len(parts) - 2, 3):
-        out.append((parts[i].strip(), int(parts[i + 1]), ENGINE_TICKER.findall(parts[i + 2])))
-    return out
-
-
-def _report_date(path: Path) -> str:
-    return datetime.strptime(path.name[:8], "%Y%m%d").strftime("%a %d %b")
-
-
-def _engine_line(fragment: str, title: str, keep: tuple[str, ...], max_age_days: int = 9) -> str:
-    path = _latest_path(fragment)
-    if path is None:
-        return f"• {title}: ❌ nothing in the archive"
-    age = (datetime.now().timestamp() - path.stat().st_mtime) / 86400
-    if age > max_age_days:
-        return f"• {title} ({_report_date(path)}): ⚠️ {age:.0f} days old — the job may have stopped"
-    groups = [(l, n, t) for l, n, t in _groups(path.read_text()) if l.upper().startswith(keep)]
-    if not groups:
-        return f"• {title} ({_report_date(path)}): no actions"
-    bits = [f"{n} {l.lower()} — {', '.join(t[:4])}{'…' if len(t) > 4 else ''}" for l, n, t in groups]
-    return f"• {title} ({_report_date(path)}): " + " · ".join(bits)
-
-
-def _mlm_line() -> str:
-    path = _latest_path("mlm-scan")
-    if path is None:
-        return "• MLM scan: ❌ nothing in the archive"
-    age = (datetime.now().timestamp() - path.stat().st_mtime) / 86400
-    if age > 4:
-        return f"• MLM scan ({_report_date(path)}): ⚠️ {age:.0f} days old — the job may have stopped"
-    text = path.read_text()
-    cleared = re.search(r"(\d+) names cleared", text)
-    rows = MLM_ROW.findall(text)
-    top = ", ".join(t for _, _, t in rows[:3]) or "—"
-    held = ", ".join(t for _, mark, t in rows if mark == "*") or "—"
-    return (f"• MLM scan ({_report_date(path)}): {cleared.group(1) if cleared else '?'} cleared · "
-            f"top {top} · held names in the list: {held} <i>(context, not a queue)</i>")
-
-
-def engine_lines() -> str:
-    """One line per engine, read from the archive. The engines post nothing themselves
-    (WYCKOFF_SILENT), so until now their output surfaced only in the weekly."""
-    return "\n".join(["⚙️ <b>Engines</b>",
-                       _engine_line("exit-all", "Exit review", ("EXIT", "TRIM", "ADD")),
-                       _engine_line("wyckoff-entry-", "Entry funnel", ("STRONG", "MARKUP")),
-                       _mlm_line()])
 
 
 CONC_ROW = re.compile(r"^(\S+)\s+([\d.]+)%", re.M)
