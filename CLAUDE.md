@@ -207,3 +207,18 @@ The household AP was replaced. **SSID `sandy_wanda_6` → `sandy_wanda_7`**, new
   piece from `brief.analysts` in `config.yaml`) — parts Market / Your book / Check, ≤1,800 chars.
   To fit the searches the **claude-proxy ceiling is 480s** (was 300; `analysis.py` waits 490).
   Dry run: 93s, 4.4k chars. `--dry-run` does not touch the state file.
+
+## Known state (2026-10-18) — trading reports retired, Daily Brief only
+- Roy lost confidence in the trading methods (see the falsified results in
+  `wyckoff/docs/signal-validation.md`). **The only active trading job is `Wyckoff Daily Brief`
+  (`8a660bd51055`).** Paused, not deleted (`hermes cron resume <id>` restores any of them): Weekly
+  Review `d8c036a73bc2`, exit engine `wyckoff_portfolio`, entry funnel `wyckoff_weekly`, MLM scan
+  `a40817b32ccf`, fundamentals/Reddit snapshot `891d31ae50c7` (the point-in-time archive stops
+  filling), bond review `0aafa5df041a`, quarterly Strategic Holdings Review `4856f875a7e1`. The
+  five jobs paused on 2026-08-24 stay paused.
+- **Daily Brief = the web-searching read + Portfolio Value + Market snapshot + Concentration.**
+  Stops, Engines, Watchlist, Signals and Checkpoints were removed from `digest.py:daily_sections`.
+  The read's prompt (`SYSTEM_DAILY` + the evidence block) was deliberately left unchanged at Roy's
+  request, so it still mentions stops/signals that the brief no longer prints.
+- Not done, awaiting Roy: archiving the dead engines (entry, exit, MLM, research bench) and cutting
+  the wyckoff `SKILL.md` down so the agent stops offering those methods.
