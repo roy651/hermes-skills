@@ -222,3 +222,21 @@ The household AP was replaced. **SSID `sandy_wanda_6` → `sandy_wanda_7`**, new
   request, so it still mentions stops/signals that the brief no longer prints.
 - Not done, awaiting Roy: archiving the dead engines (entry, exit, MLM, research bench) and cutting
   the wyckoff `SKILL.md` down so the agent stops offering those methods.
+
+## Known state (2026-10-28) — claude-proxy on a long-lived token, Opus follows the latest
+- **Third Claude logout** (found 2026-10-28, re-logged in remotely via tmux + the printed OAuth link).
+  To end the 8h-refresh failure class, the proxy now authenticates with a **one-year
+  `claude setup-token` token** (subscription-billed, `user:inference` scope only):
+  `CLAUDE_CODE_OAUTH_TOKEN` in `_infra/claude-proxy/.env` (gitignored; pre-change backup
+  `~/claude-proxy-env.bak-presetuptoken`, outside the checkout). Verified with an empty
+  `CLAUDE_CONFIG_DIR`, so it does not lean on `~/.claude/.credentials.json`. **Expires ~2027-10-28**:
+  re-run `claude setup-token` and replace the line. Direct `claude` callers outside the proxy still
+  use the credentials file.
+- **Model follows the latest Opus.** `~/.claude/settings.json` holds the alias `opus[1m]`, which
+  resolves to the newest Opus the *installed CLI* knows — 2.1.267 still mapped it to
+  `claude-opus-5`. Updated to 2.1.312 (now `claude-opus-5-5`) and set `autoUpdates: true` in
+  `~/.claude.json` (was false; backup `.claude.json.bak-autoupd`). `switch.sh claude-model opus`
+  now writes the alias instead of pinning an ID.
+- Remote re-login recipe (no LAN needed while the Mac is reachable): `tmux new -d -s login
+  'claude auth login'`, read the URL with `tmux capture-pane -p -J`, open it on the phone, then
+  `tmux send-keys -l '<code>' Enter`. Same flow for `claude setup-token`.
