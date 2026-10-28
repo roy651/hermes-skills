@@ -57,7 +57,7 @@ case "$profile" in
     case "$tier" in
       haiku)  model_id="claude-haiku-4-5-20251001" ;;
       sonnet) model_id="claude-sonnet-4-6" ;;
-      opus)   model_id="claude-opus-5" ;;
+      opus)   model_id="opus[1m]" ;;   # alias: tracks the latest Opus the installed CLI knows
       fable)  model_id="claude-fable-5-1" ;;
       *)      echo "Unknown tier: $tier. Use haiku, sonnet, opus, or fable."; exit 1 ;;
     esac
