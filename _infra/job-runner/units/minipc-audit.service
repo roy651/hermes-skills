@@ -1,0 +1,8 @@
+[Unit]
+Description=Monthly mini-PC security and maintenance audit
+OnFailure=job-failed@%N.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=10min
+ExecStart=%h/hermes-skills/_infra/job-runner/run-job.sh /usr/bin/python3 %h/hermes-skills/minipc-audit/scripts/audit.py

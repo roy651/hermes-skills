@@ -1,0 +1,15 @@
+[Unit]
+Description=Claude Code Remote Control server
+StartLimitIntervalSec=900
+StartLimitBurst=5
+OnFailure=job-failed@%N.service
+
+[Service]
+WorkingDirectory=%h/hermes-skills
+UnsetEnvironment=CLAUDE_CODE_OAUTH_TOKEN
+ExecStart=%h/.local/bin/claude remote-control --name homeabit --permission-mode auto --spawn same-dir
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Telegram alert for failed unit %i
+
+[Service]
+Type=oneshot
+ExecStart=%h/hermes-skills/_infra/job-runner/notify-failed.sh %i

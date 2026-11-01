@@ -1,0 +1,8 @@
+[Unit]
+Description=Wyckoff Daily Brief
+OnFailure=job-failed@%N.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=20min
+ExecStart=%h/hermes-skills/_infra/job-runner/run-job.sh %h/hermes-skills/_infra/job-runner/daily-brief.sh

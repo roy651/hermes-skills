@@ -1,0 +1,9 @@
+[Unit]
+Description=Sports weekly digest
+OnFailure=job-failed@%N.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=15min
+WorkingDirectory=%h/.hermes/skills/sports-alerts
+ExecStart=%h/.hermes/skills/sports-alerts/.venv/bin/python weekly.py

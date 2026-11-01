@@ -1,0 +1,8 @@
+[Unit]
+Description=Retry Remote Control every 6 hours
+
+[Timer]
+OnCalendar=00/6:15
+
+[Install]
+WantedBy=timers.target

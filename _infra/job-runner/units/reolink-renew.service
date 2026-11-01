@@ -1,0 +1,8 @@
+[Unit]
+Description=Reolink Cloud renewal check
+OnFailure=job-failed@%N.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=5min
+ExecStart=%h/hermes-skills/_infra/job-runner/run-job.sh %h/hermes-skills/reolink-renew/scripts/scheduled-renew.sh

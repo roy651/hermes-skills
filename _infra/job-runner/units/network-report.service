@@ -1,0 +1,9 @@
+[Unit]
+Description=Monthly network root-cause report
+OnFailure=job-failed@%N.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=10min
+WorkingDirectory=%h/.hermes/skills/wifi-monitor
+ExecStart=%h/.hermes/skills/wifi-monitor/.venv/bin/python scripts/root_cause_report.py --days 31 --send
