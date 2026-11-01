@@ -486,13 +486,17 @@ def do_renew(session, token, verbose):
 # Command entry points
 # ---------------------------------------------------------------------------
 
-def cmd_login_init(check_only, force, verbose):
+def cmd_login_init(check_only, force, verbose, send_email=True):
     import requests
     email, password = get_credentials()
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    token = authenticate(session, email, password, code=None, verbose=verbose)
+    token = authenticate(session, email, password, code=None, trigger_email=send_email, verbose=verbose)
+    if token is None and not send_email:
+        print("STATUS: mfa_required")
+        print("MESSAGE: Login needs an email code — no code was sent.")
+        return
     if token is None:
         # MFA required — email code triggered (flow set to AWAITING_CODE by authenticate()).
         print("STATUS: code_sent")
@@ -568,23 +572,28 @@ def main():
                         help="Renew even if the plan is active with more than 2 days left")
     parser.add_argument("--check-only", action="store_true",
                         help="Check status only, do not renew")
+    parser.add_argument("--no-email", action="store_true",
+                        help="With --login-init: report mfa_required instead of emailing a code")
     parser.add_argument("--status", action="store_true",
                         help="Print the persisted flow state and exit (no network)")
     parser.add_argument("--verbose", action="store_true",
                         help="Print debug info to stderr")
     args = parser.parse_args()
 
-    if args.status:
-        cmd_status()
-    elif args.login_complete:
-        cmd_login_complete(args.code, args.force, args.verbose)
-    elif args.login_init:
-        cmd_login_init(args.check_only, args.force, args.verbose)
-    elif args.check_only:
-        cmd_check_only(args.verbose)
-    else:
-        # Bare invocation = start the interactive renewal (step 1).
-        cmd_login_init(check_only=False, force=args.force, verbose=args.verbose)
+    try:
+        if args.status:
+            cmd_status()
+        elif args.login_complete:
+            cmd_login_complete(args.code, args.force, args.verbose)
+        elif args.login_init:
+            cmd_login_init(args.check_only, args.force, args.verbose, send_email=not args.no_email)
+        elif args.check_only:
+            cmd_check_only(args.verbose)
+        else:
+            # Bare invocation = start the interactive renewal (step 1).
+            cmd_login_init(check_only=False, force=args.force, verbose=args.verbose)
+    except OSError as error:  # requests' timeouts and connection errors all subclass OSError
+        bail("network", f"{type(error).__name__}: {error}")
 
 
 if __name__ == "__main__":
