@@ -242,17 +242,27 @@ def check_tailscale(priv: dict | None, cfg: dict) -> None:
     status = sh("tailscale status --json")
     try:
         s = json.loads(status)
-        peers = [v.get("HostName") for v in (s.get("Peer") or {}).values()]
-        expected = set(cfg["expect"]["tailnet_nodes"])
-        unexpected = sorted(set(peers) - expected)
-        missing = sorted(expected - set(peers))
-        if unexpected:
-            record(sec, "no unexpected tailnet nodes", FAIL,
-                   f"UNKNOWN NODE(S): {', '.join(unexpected)} — someone added a device")
+        backend_state = s.get("BackendState")
+        if backend_state == "Running":
+            record(sec, "Tailscale connected", OK)
+            peers = [v.get("HostName") for v in (s.get("Peer") or {}).values()]
+            expected = set(cfg["expect"]["tailnet_nodes"])
+            unexpected = sorted(set(peers) - expected)
+            missing = sorted(expected - set(peers))
+            if unexpected:
+                record(sec, "no unexpected tailnet nodes", FAIL,
+                       f"UNKNOWN NODE(S): {', '.join(unexpected)} — someone added a device")
+            else:
+                record(sec, "no unexpected tailnet nodes", OK, f"peers: {', '.join(peers) or 'none'}")
+            if missing:
+                record(sec, "expected nodes present", WARN, f"absent: {', '.join(missing)}")
         else:
-            record(sec, "no unexpected tailnet nodes", OK, f"peers: {', '.join(peers) or 'none'}")
-        if missing:
-            record(sec, "expected nodes present", WARN, f"absent: {', '.join(missing)}")
+            # A disconnected node has no peers, so the node checks would pass
+            # with nothing measured. That hid an expired node key on 2026-11-01.
+            record(sec, "Tailscale connected", FAIL,
+                   f"state {backend_state} — remote access is down. "
+                   "`tailscale status` prints the login link")
+            record(sec, "tailnet node list", UNKNOWN, "not measurable while disconnected")
     except (json.JSONDecodeError, AttributeError):
         record(sec, "tailnet node list", UNKNOWN, "could not parse")
 
@@ -353,6 +363,23 @@ def check_permissions(cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 # G. Patch state and general health (the maintenance half)
 # ---------------------------------------------------------------------------
+def broken_packages(dpkg_status: str) -> list[str]:
+    """Packages dpkg left unfinished, from `<3-letter status> <name>` lines.
+
+    The second letter is the package state (i installed, c config-files,
+    n not installed; anything else is mid-operation). The third is the error flag.
+    """
+    broken = []
+    for line in dpkg_status.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or len(parts[0]) < 2:
+            continue
+        status, package = parts
+        if status[1] not in "icn" or status[2:3] == "R":
+            broken.append(package)
+    return broken
+
+
 def check_maintenance(priv: dict | None, cfg: dict) -> None:
     sec = "Maintenance"
 
@@ -361,6 +388,13 @@ def check_maintenance(priv: dict | None, cfg: dict) -> None:
     security = len([l for l in upgradable.splitlines() if "security" in l.lower()])
     record(sec, "no pending security updates", OK if security == 0 else FAIL,
            f"{security} security / {total} total upgradable")
+
+    # A package that failed to configure stops later updates from landing, and
+    # the pending-updates count above can still read zero while that is true.
+    broken = broken_packages(sh("dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\\n'"))
+    record(sec, "no half-configured packages", FAIL if broken else OK,
+           f"{', '.join(broken)} — see /var/log/unattended-upgrades/unattended-upgrades-dpkg.log, "
+           "then `sudo dpkg --configure -a`" if broken else "")
 
     if priv is not None:
         pending = priv.get("reboot_required", "").strip()
@@ -511,8 +545,10 @@ def main() -> int:
     check_maintenance(priv, cfg)
     check_blind_spots(cfg)
 
+    # Findings go in the report. A non-zero exit is kept for the script itself
+    # breaking, so the scheduler's "failed" label means that and nothing else.
     print(render(args.quiet))
-    return 1 if any(c.status == FAIL for c in checks) else 0
+    return 0
 
 
 if __name__ == "__main__":

@@ -240,3 +240,10 @@ The household AP was replaced. **SSID `sandy_wanda_6` → `sandy_wanda_7`**, new
 - Remote re-login recipe (no LAN needed while the Mac is reachable): `tmux new -d -s login
   'claude auth login'`, read the URL with `tmux capture-pane -p -J`, open it on the phone, then
   `tmux send-keys -l '<code>' Enter`. Same flow for `claude setup-token`.
+
+## Known state (2026-11-01) — audit fixed, Hermes frozen, retirement trial
+- **Tailscale had been logged out since 2026-10-28** (node key expired) and the audit showed it green: a disconnected node has no peers, so "no unexpected nodes" passed with nothing measured. Now re-logged in with **key expiry disabled** on this node. `audit.py` reads `BackendState` and fails if it is not `Running`.
+- **Unattended upgrades were stuck on a half-configured kernel** because the retired `aic8800` dongle driver would not build on 6.8.0-147. The DKMS module is removed, and `dpkg` is clean. The audit now fails on half-configured packages; the pending-updates count can read zero while they exist.
+- **`minipc_audit.sh` now exits 0 when the report completes**, replacing the 2026-09-04 note above. Findings go in the report; a "failed" run means the script itself broke.
+- **`actual-budget` is frozen**: unit disabled, container stopped, removed from the audit baseline. Its data is kept.
+- **Hermes is frozen for the retirement trial, 2026-11-02 to 11-16.** No upstream merges (36,570 commits behind `main`, base v0.20.5, one 4-line local patch); upstream job `hermes_upstream_sync_check` paused. Target model: Duet as brains and trigger, a CC session on the mini-PC as local executor. Remote Control needs the full-scope login, and rejects the proxy's one-year token.
