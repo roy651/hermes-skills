@@ -8,6 +8,8 @@ OnFailure=job-failed@%N.service
 WorkingDirectory=%h/hermes-skills
 UnsetEnvironment=CLAUDE_CODE_OAUTH_TOKEN
 ExecStart=%h/.local/bin/claude remote-control --name homeabit --permission-mode auto --spawn same-dir
+# stdout is a status screen redrawn about 200 lines a minute. Errors go to stderr.
+StandardOutput=null
 Restart=always
 RestartSec=60
 
