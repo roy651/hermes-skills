@@ -245,13 +245,18 @@ def run(as_section: bool = False):
         f"Day: {_fmt(total_pnl_day)}   Week: {_fmt(total_pnl_week)}   Month: {_fmt(total_pnl_month)}",
         "",
     ]
+    # A sell's day share is measured from the prior close, not from cost, so it can differ a lot
+    # from the "Realized this week" figure below. Show it, or the gap reads as an error.
+    if abs(realized["day"]) >= 0.5:
+        lines[3] += (f"  <i>(day: open {_fmt(total_pnl_day - realized['day'])} · "
+                     f"sold {_fmt(realized['day'])} vs prior close)</i>")
     if week_closes:
         parts = []
         for t, (pnl, cost_usd) in sorted(week_closes.items(), key=lambda kv: -kv[1][0]):
             pct = f" ({'+' if pnl >= 0 else ''}{pnl / cost_usd * 100:.1f}%)" if cost_usd else ""
             state = "closed" if t not in holdings_map else "trimmed"
             parts.append(f"{t} {state} {_fmt(pnl)}{pct}")
-        lines.append("✅ Realized this week: " + "  ·  ".join(parts))
+        lines.append("✅ Realized this week (vs cost): " + "  ·  ".join(parts))
 
     # Compact digest: totals header (above) + the day's key movers only (≤3 up / ≤3 down).
     def _mover(r) -> str:
