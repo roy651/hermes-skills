@@ -26,6 +26,7 @@ import fx_rate
 import israeli_fund
 import holdings as portfolio
 import notifier
+import cash
 
 BAR_WIDTH = 14
 TOP_N = 6
@@ -65,6 +66,12 @@ def collect() -> tuple[list[dict], float]:
         rows.append({"ticker": ticker, "usd": usd,
                      "strategic": bool(h.get("strategic") or portfolio.no_trailing_stop(h))})
         total += usd
+    # Cash is part of net worth: weights are shares of holdings + cash. It is not a position, so
+    # it is kept out of the effective-N and top-two figures, which measure diversification.
+    cash_ils = cash.balance_ils()
+    if cash_ils:
+        rows.append({"ticker": "CASH", "usd": cash_ils / usdils, "strategic": False, "cash": True})
+        total += cash_ils / usdils
     for r in rows:
         r["pct"] = r["usd"] / total * 100 if total else 0.0
     return sorted(rows, key=lambda r: -r["usd"]), total, unpriced
@@ -85,23 +92,27 @@ def build_section(as_section: bool = True) -> str:
         lines.append(f"{'other ' + str(len(rest)):<10}{sum(r['pct'] for r in rest):>5.1f}%")
     lines.append("</pre>")
 
-    # Effective N: 1 / sum(weight^2). Fourteen names can behave like three.
-    eff = 1 / sum((r["pct"] / 100) ** 2 for r in rows) if total else 0
-    top2 = sum(r["pct"] for r in rows[:2])
-    core = sum(r["pct"] for r in rows if r["strategic"])
-    # Cash is not represented in holdings.json, so these are shares OF INVESTED CAPITAL. Any
-    # idle balance dilutes every figure here — the same silent-omission trap as the unpriced
-    # fund, just smaller and pre-existing. Say so rather than implying it is the whole book.
-    lines.append(f"<b>{len(rows)}</b> positions, but an effective <b>{eff:.1f}</b> "
+    # Effective N: 1 / sum(weight^2) over positions only, renormalised to invested capital.
+    # Fourteen names can behave like three.
+    pos = [r for r in rows if not r.get("cash")]
+    invested = sum(r["pct"] for r in pos)
+    eff = 1 / sum((r["pct"] / invested) ** 2 for r in pos) if invested else 0
+    top2 = sum(r["pct"] for r in pos[:2]) / invested * 100 if invested else 0
+    core = sum(r["pct"] for r in pos if r["strategic"]) / invested * 100 if invested else 0
+    lines.append(f"<b>{len(pos)}</b> positions, but an effective <b>{eff:.1f}</b> "
                  f"— top two are <b>{top2:.0f}%</b> of invested capital.")
-    lines.append("<i>Cash is not tracked, so these are shares of invested capital, not net worth.</i>")
+    if len(pos) == len(rows):
+        lines.append("<i>Cash is not set (cash.py --set), so weights are shares of invested "
+                     "capital, not net worth.</i>")
+    else:
+        lines.append("<i>Weights are shares of net worth, cash included.</i>")
     if core:
-        lines.append(f"<i>{core:.0f}% is flagged strategic / no-trailing-stop — deliberate ballast, "
+        lines.append(f"<i>{core:.0f}% of invested capital is flagged strategic / no-trailing-stop — deliberate ballast, "
                      f"not drift.</i>")
     if unpriced:
         lines.append(f"⚠️ <b>{', '.join(unpriced)}</b> could not be priced and is EXCLUDED — "
                      f"every weight above is overstated until this is fixed.")
-    heavy = [r for r in rows if r["pct"] >= HEAVY_PCT and not r["strategic"]]
+    heavy = [r for r in pos if r["pct"] >= HEAVY_PCT and not r["strategic"]]
     if heavy:
         lines.append("⚠️ <b>" + ", ".join(r["ticker"] for r in heavy) +
                      f"</b> above {HEAVY_PCT:.0f}% without a strategic flag — size by intent, "

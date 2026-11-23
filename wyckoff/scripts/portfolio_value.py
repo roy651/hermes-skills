@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Daily portfolio valuation — total value, P&L from start, day/week/month."""
+"""Daily portfolio valuation — total value, P&L from start, day/week/month.
+
+P/L is unrealized (open holdings vs cost) plus realized (sells in trade_log.jsonl vs their
+recorded cost). Without the realized half a closed position's gain vanished from every line the
+moment it left holdings.json. A realized sell counts in a period at sale price minus the price
+at the period's start, or minus cost when the position was opened inside the period — the same
+rule open positions use. The total includes the broker cash balance from cash.py.
+"""
 from __future__ import annotations
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,30 +24,37 @@ import holdings as portfolio
 import israeli_fund
 import fx_rate
 import notifier
+import cash
+import trade_log
 
 TZ = ZoneInfo("Asia/Jerusalem")
 # Fallback now lives in fx_rate, which persists the last good rate.
 
 
+def _boundary(ref_date: date, period: str, session: date) -> date:
+    """First date inside the period. 'day' is the latest trading session."""
+    if period == "day":
+        return session
+    if period == "week":
+        return ref_date - timedelta(days=ref_date.weekday())
+    return ref_date.replace(day=1)
+
+
+def _close_before(df, boundary: date) -> float | None:
+    """Last close strictly before the boundary — the price the period started from. Taking the
+    first close INSIDE the period instead made Week read +$0 every Monday."""
+    before = df[df.index < boundary]
+    if not before.empty:
+        return float(before["close"].iloc[-1])
+    inside = df[df.index >= boundary]
+    return float(inside["close"].iloc[0]) if not inside.empty else None
+
+
 def _period_price(df, ref_date: date, period: str) -> float | None:
     """Return the closing price at the start of the given period ('day', 'week', 'month')."""
     if period == "day":
-        if len(df) < 2:
-            return None
-        return float(df["close"].iloc[-2])
-    elif period == "week":
-        monday = ref_date - timedelta(days=ref_date.weekday())
-        subset = df[df.index >= monday]
-        if subset.empty:
-            return None
-        return float(subset["close"].iloc[0])
-    elif period == "month":
-        month_start = ref_date.replace(day=1)
-        subset = df[df.index >= month_start]
-        if subset.empty:
-            return None
-        return float(subset["close"].iloc[0])
-    return None
+        return float(df["close"].iloc[-2]) if len(df) >= 2 else None
+    return _close_before(df, _boundary(ref_date, period, ref_date))
 
 
 def run(as_section: bool = False):
@@ -61,7 +75,12 @@ def run(as_section: bool = False):
     # fund_id / globes_id is priced from its published NAV instead — otherwise a cash-like sleeve
     # silently vanishes from the total and every concentration figure is overstated.
     fund_tickers = {t for t, h in holdings_map.items() if h.get("fund_id") or h.get("globes_id")}
-    all_fetch = [t for t in tickers if t not in fund_tickers] + ["USDILS=X"]
+    sells, _ = trade_log.replay()
+    month_start = today.replace(day=1)
+    # Tickers sold this month need a price history for the period figures; older sells only
+    # need their recorded cost.
+    sold_recent = {s["ticker"] for s in sells if s["date"] >= month_start.isoformat()} - set(tickers)
+    all_fetch = [t for t in tickers if t not in fund_tickers] + sorted(sold_recent) + ["USDILS=X"]
     raw: dict[str, market_data.TickerData] = {}
 
     with ThreadPoolExecutor(max_workers=12) as pool:
@@ -128,13 +147,8 @@ def run(as_section: bool = False):
                     prior_date = df.index[-2] if len(df) >= 2 else None
                     if prior_date is not None and open_date > prior_date:
                         ref = avg_cost_local
-                elif period == "week":
-                    monday = today - timedelta(days=today.weekday())
-                    if open_date >= monday:
-                        ref = avg_cost_local
-                elif period == "month":
-                    if open_date >= today.replace(day=1):
-                        ref = avg_cost_local
+                elif open_date >= _boundary(today, period, today):
+                    ref = avg_cost_local
             if ref is None:
                 ref = _period_price(df, today, period)
             return qty * (curr_price - ref) * to_usd if ref is not None else 0.0
@@ -164,11 +178,49 @@ def run(as_section: bool = False):
 
     rows.sort(key=lambda r: r["pnl_start_usd"], reverse=True)
 
-    total_pnl_start = total_value_usd - total_cost_usd
-    total_pnl_pct = total_pnl_start / total_cost_usd if total_cost_usd else 0.0
-    total_pnl_day = sum(r["pnl_day_usd"] for r in rows)
-    total_pnl_week = sum(r["pnl_week_usd"] for r in rows)
-    total_pnl_month = sum(r["pnl_month_usd"] for r in rows)
+    # ── Realized P/L from the trade ledger ────────────────────────────────────────────
+    us_sessions = [td.df.index[-1] for t, td in raw.items() if td.currency == "USD" and len(td.df)]
+    session = max(us_sessions) if us_sessions else today
+    realized = {"start": 0.0, "day": 0.0, "week": 0.0, "month": 0.0}
+    closed_cost_usd = 0.0
+    week_closes: dict[str, list[float]] = {}          # ticker -> [pnl_usd, cost_usd]
+    uncosted = set()
+    for s in sells:
+        if s["cost"] is None:
+            uncosted.add(s["ticker"])
+            continue
+        to_usd = (1.0 / usdils_rate) if trade_log.currency(s["ticker"]) == "ILS" else 1.0
+        q, px, cost = float(s["qty"]), float(s["price"]), float(s["cost"])
+        realized["start"] += q * (px - cost) * to_usd
+        closed_cost_usd += q * cost * to_usd
+        sdate = date.fromisoformat(s["date"])
+        td = raw.get(s["ticker"])
+        for period in ("day", "week", "month"):
+            b = _boundary(today, period, session)
+            if sdate < b:
+                continue
+            opened = s["cycle_open"] and date.fromisoformat(s["cycle_open"]) >= b
+            ref = cost if (opened or td is None) else _close_before(td.df, b)
+            if ref is None:
+                ref = cost
+            realized[period] += q * (px - ref) * to_usd
+        if sdate >= _boundary(today, "week", session):
+            acc = week_closes.setdefault(s["ticker"], [0.0, 0.0])
+            acc[0] += q * (px - cost) * to_usd
+            acc[1] += q * cost * to_usd
+    if uncosted:
+        print(f"[portfolio_value] sells without a cost basis, not counted: {sorted(uncosted)}", file=sys.stderr)
+
+    cash_ils = cash.balance_ils()
+    cash_usd = cash_ils / usdils_rate if cash_ils is not None else 0.0
+
+    unrealized = total_value_usd - total_cost_usd
+    total_pnl_start = unrealized + realized["start"]
+    deployed = total_cost_usd + closed_cost_usd
+    total_pnl_pct = total_pnl_start / deployed if deployed else 0.0
+    total_pnl_day = sum(r["pnl_day_usd"] for r in rows) + realized["day"]
+    total_pnl_week = sum(r["pnl_week_usd"] for r in rows) + realized["week"]
+    total_pnl_month = sum(r["pnl_month_usd"] for r in rows) + realized["month"]
 
     def _fmt(v: float) -> str:
         sign = "+" if v >= 0 else ""
@@ -178,13 +230,28 @@ def run(as_section: bool = False):
         sign = "+" if v >= 0 else ""
         return f"({sign}{v * 100:.1f}%)"
 
+    if cash_ils is not None:
+        total_line = (f"<b>Total: ${total_value_usd + cash_usd:,.0f}</b>  "
+                      f"(holdings ${total_value_usd:,.0f}, cost ${total_cost_usd:,.0f} · "
+                      f"cash ${cash_usd:,.0f} = ₪{cash_ils:,.0f})")
+    else:
+        total_line = (f"<b>Total: ${total_value_usd:,.0f}</b>  (cost ${total_cost_usd:,.0f}) "
+                      f"<i>· cash not set</i>")
     lines = [
         f"📊 <b>Portfolio Value — {date_str}</b>",
-        f"<b>Total: ${total_value_usd:,.0f}</b>  (cost ${total_cost_usd:,.0f})",
-        f"Since start: <b>{_fmt(total_pnl_start)}</b> {_pct(total_pnl_pct)}",
+        total_line,
+        f"Since start: <b>{_fmt(total_pnl_start)}</b> {_pct(total_pnl_pct)}  "
+        f"<i>(open {_fmt(unrealized)} · realized {_fmt(realized['start'])})</i>",
         f"Day: {_fmt(total_pnl_day)}   Week: {_fmt(total_pnl_week)}   Month: {_fmt(total_pnl_month)}",
         "",
     ]
+    if week_closes:
+        parts = []
+        for t, (pnl, cost_usd) in sorted(week_closes.items(), key=lambda kv: -kv[1][0]):
+            pct = f" ({'+' if pnl >= 0 else ''}{pnl / cost_usd * 100:.1f}%)" if cost_usd else ""
+            state = "closed" if t not in holdings_map else "trimmed"
+            parts.append(f"{t} {state} {_fmt(pnl)}{pct}")
+        lines.append("✅ Realized this week: " + "  ·  ".join(parts))
 
     # Compact digest: totals header (above) + the day's key movers only (≤3 up / ≤3 down).
     def _mover(r) -> str:

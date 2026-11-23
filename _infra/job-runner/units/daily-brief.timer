@@ -2,7 +2,9 @@
 Description=Schedule for daily-brief
 
 [Timer]
-OnCalendar=Mon..Fri 20:30:00 UTC
+# US close + 15 min, in New York time so it follows both US and Israeli DST changes.
+# A fixed UTC time ran 30 min BEFORE the close every winter.
+OnCalendar=Mon..Fri 16:15 America/New_York
 Persistent=true
 
 [Install]

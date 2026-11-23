@@ -9,7 +9,15 @@ data/ (gitignored, runtime-only — it contains positions/prices) exactly like h
 
 Usage:
   trade_log.py add --date 2026-07-11 --ticker KMB --side buy  --qty 10 --price 112.41 [--note "starter"]
+  trade_log.py add ... --side sell [--cost 108.20] [--no-cash]
   trade_log.py review [--weeks 4]        # performance-since review of trades in the window (no-LLM)
+
+Prices are in the trade currency: USD, or shekels (not agorot) for .TA tickers.
+
+A sell records its cost basis, so the daily brief can count realized P/L after the position has
+left holdings.json. Without --cost it is the ledger's own average cost, or holdings.json's when
+the ledger has no buys for the ticker — so log a sell BEFORE removing the holding. Every add also
+moves the cash balance (cash.py) by the fill's value; --no-cash skips that for backfills.
 
 `add` is how the agent records a fill the user reports in chat ("bought/sold X @ Y"); `review` is the
 periodic entry-execution check ("how did the last 4 weeks' entries do?"). Both are deterministic — no
@@ -28,6 +36,7 @@ from dotenv import load_dotenv
 load_dotenv(Path.home() / ".hermes" / ".env")
 
 import data as market_data
+import cash
 
 TZ = ZoneInfo("Asia/Jerusalem")
 LOG = Path(__file__).parent.parent / "data" / "trade_log.jsonl"
@@ -51,18 +60,82 @@ def _load() -> list[dict]:
     return out
 
 
+def currency(ticker: str) -> str:
+    return "ILS" if ticker.upper().endswith(".TA") else "USD"
+
+
+def replay(trades: list[dict] | None = None) -> tuple[list[dict], dict]:
+    """Walk the ledger per ticker on average cost. Returns (sells, open_lots).
+
+    Each sell comes back with its cost per share (the recorded one, else the running ledger
+    average, else None) and cycle_open: the date the position last went from flat to held, or
+    None when the ledger never saw it bought. open_lots maps ticker -> {qty, avg, cycle_open}.
+    Same-day buys sort ahead of sells, so a lot bought and sold on one day nets correctly."""
+    trades = _load() if trades is None else trades
+    ordered = sorted(enumerate(trades), key=lambda it: (it[1]["date"], it[1]["side"] != "buy", it[0]))
+    lots: dict[str, dict] = {}
+    sells = []
+    for _, t in ordered:
+        lot = lots.setdefault(t["ticker"], dict(qty=0.0, avg=None, cycle_open=None))
+        q, px = float(t["qty"]), float(t["price"])
+        if t["side"] == "buy":
+            if lot["qty"] <= 0:
+                lot.update(qty=0.0, avg=None, cycle_open=t["date"])
+            lot["avg"] = px if lot["avg"] is None else (lot["qty"] * lot["avg"] + q * px) / (lot["qty"] + q)
+            lot["qty"] += q
+            continue
+        cost = t.get("cost")
+        if cost is None and lot["qty"] > 0:
+            cost = lot["avg"]
+        sells.append({**t, "cost": cost, "cycle_open": lot["cycle_open"] if lot["qty"] > 0 else None})
+        lot["qty"] = max(lot["qty"] - q, 0.0)
+    return sells, {k: v for k, v in lots.items() if v["qty"] > 0}
+
+
+def _holdings_cost(ticker: str) -> float | None:
+    import holdings as portfolio
+    h = portfolio.load().get(ticker)
+    if not h:
+        return None
+    return h["avg_cost"] / 100 if currency(ticker) == "ILS" else h["avg_cost"]   # agorot -> ₪
+
+
 def cmd_add(a) -> None:
     side = a.side.lower()
     if side not in ("buy", "sell"):
         sys.exit("side must be buy or sell")
+    ticker = a.ticker.upper()
     rec = {
-        "date": a.date, "ticker": a.ticker.upper(), "side": side,
+        "date": a.date, "ticker": ticker, "side": side,
         "qty": a.qty, "price": a.price, "note": a.note or "",
         "logged_at": datetime.now(tz=TZ).isoformat(timespec="seconds"),
     }
+    if side == "sell":
+        cost = a.cost
+        if cost is None:
+            lot = replay()[1].get(ticker)
+            cost = lot["avg"] if lot else _holdings_cost(ticker)
+        if cost is None:
+            print(f"[trade_log] no cost basis for {ticker} — realized P/L will not count this sell; "
+                  f"re-log with --cost", file=sys.stderr)
+        rec["cost"] = round(cost, 6) if cost is not None else None
     _append(rec)
-    print(f"logged: {rec['date']} {side.upper()} {rec['qty']} {rec['ticker']} @ {rec['price']}"
-          f"{'  # ' + rec['note'] if rec['note'] else ''}")
+    cost_txt = f"  (cost {rec['cost']:g})" if rec.get("cost") else ""
+    note_txt = f"  # {rec['note']}" if rec["note"] else ""
+    print(f"logged: {rec['date']} {side.upper()} {rec['qty']} {ticker} @ {rec['price']}{cost_txt}{note_txt}")
+
+    if a.no_cash:
+        return
+    value = a.qty * a.price
+    if currency(ticker) == "USD":
+        import fx_rate
+        value *= fx_rate.latest()
+    delta = value if side == "sell" else -value
+    c = cash.adjust(delta, f"{side} {a.qty:g} {ticker} @ {a.price:g}")
+    if c is None:
+        print("[trade_log] cash balance not set — run cash.py --set <ILS>", file=sys.stderr)
+    else:
+        print(f"cash: {delta:+,.0f} ILS -> ₪{c['ils']:,.0f}")
 
 
 def _last_price(ticker: str) -> tuple[float | None, str]:
@@ -124,6 +197,8 @@ def main() -> None:
     pa.add_argument("--qty", required=True, type=float)
     pa.add_argument("--price", required=True, type=float)
     pa.add_argument("--note", default="")
+    pa.add_argument("--cost", type=float, help="sell only: cost per share, if not the ledger/holdings average")
+    pa.add_argument("--no-cash", action="store_true", help="do not move the cash balance (backfills)")
     pa.set_defaults(func=cmd_add)
 
     pr = sub.add_parser("review", help="performance-since review of recent fills")

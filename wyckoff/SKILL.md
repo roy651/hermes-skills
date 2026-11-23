@@ -333,6 +333,18 @@ trade_log.py review --weeks 4          # prints; add --send to also post to Tele
 shows the name fell further). Deterministic, no Claude credits. This is the source of truth for the
 "review my recent entries" question — seed it whenever a fill is mentioned.
 
+**The ledger also feeds the daily valuation.** `portfolio_value.py` adds realized P/L from logged sells
+to Since start / Day / Week / Month, so a closed position's gain doesn't vanish with the holding. Rules:
+
+- Prices are in the trade currency — USD, or **shekels (not agorot)** for `.TA`.
+- **Log a sell before removing the holding.** `add --side sell` stores the cost basis: the ledger's own
+  average, else `holdings.json`'s avg_cost. If neither exists, pass `--cost`.
+- **Every `add` moves the cash balance** (`data/cash.json`, ILS) by the fill's value; USD fills convert at
+  the day's rate. Use `--no-cash` for backfills of fills already reflected in the balance.
+- The broker converts at its own rate, so cash drifts. When the user gives the broker's figure, re-anchor:
+  `cash.py --set <ILS> --note "broker balance"`. Deposits, withdrawals, fees and cash dividends:
+  `cash.py --adjust <±ILS> --note ...`. `cash.py` alone shows the balance.
+
 ## Instrument character decides the tool — exempt bonds/rate-driven names from the trailing stop
 
 Wyckoff (and its trailing stop) is only valid for instruments that trend on **supply/demand** —
